@@ -17,25 +17,43 @@ import time
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Process a video through the GLIC CPU/Metal realtime backend."
+        description="Process a video through an explicit GLIC realtime mode."
     )
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--preset", default="default")
-    processing_mode = parser.add_mutually_exclusive_group()
-    processing_mode.add_argument(
+    parser.add_argument(
+        "--preset-semantics",
+        choices=("legacy", "original"),
+        default=None,
+        help="compat_realtime preset decoding; original_visual always uses original semantics.",
+    )
+    parser.add_argument(
+        "--processing-mode",
+        choices=("compat_realtime", "original_visual"),
+        default="compat_realtime",
+        help="Select the Metal/CPU approximation or fail-closed original-style codec core.",
+    )
+    recipe_mode = parser.add_mutually_exclusive_group()
+    recipe_mode.add_argument(
         "--canonical",
         help="Exact v1/v2 search recipe; overrides preset, strength, and effect controls.",
     )
-    processing_mode.add_argument(
+    recipe_mode.add_argument(
         "--passthrough",
         action="store_true",
         help="Copy BGRA frames unchanged to create an A/B codec baseline.",
     )
     parser.add_argument("--presets-dir", type=Path)
     parser.add_argument(
-        "--backend", choices=("auto", "cpu", "metal"), default="metal"
+        "--backend",
+        choices=("auto", "cpu", "metal"),
+        default=None,
+        help="Defaults to metal for compat_realtime and cpu for original_visual.",
     )
+    parser.add_argument("--width", type=int, help="Output/filter width in pixels.")
+    parser.add_argument("--height", type=int, help="Output/filter height in pixels.")
+    parser.add_argument("--fps", type=float, help="Output/filter frame rate.")
     parser.add_argument(
         "--strength",
         type=float,
@@ -85,6 +103,43 @@ def run_json(command: list[str]) -> dict:
     return json.loads(result.stdout)
 
 
+def parse_frame_rate(value: object) -> float:
+    """Parse ffprobe's decimal or rational frame-rate representation."""
+    try:
+        text = str(value)
+        if "/" in text:
+            numerator_text, denominator_text = text.split("/", 1)
+            denominator = float(denominator_text)
+            if denominator == 0.0:
+                return 0.0
+            rate = float(numerator_text) / denominator
+        else:
+            rate = float(text)
+    except (TypeError, ValueError):
+        return 0.0
+    return rate if math.isfinite(rate) and rate > 0.0 else 0.0
+
+
+def passes_end_to_end_average_30fps(
+    *,
+    width: int,
+    height: int,
+    frames: int,
+    elapsed_seconds: float,
+    target_fps: float,
+    output_fps: float,
+) -> bool:
+    observed_fps = frames / elapsed_seconds if elapsed_seconds > 0.0 else 0.0
+    return (
+        width >= 960
+        and height >= 540
+        and frames >= 120
+        and target_fps >= 30.0
+        and output_fps >= 30.0
+        and observed_fps >= 30.0
+    )
+
+
 def probe_video(ffprobe: str, path: Path) -> dict:
     return run_json(
         [
@@ -104,24 +159,31 @@ def probe_video(ffprobe: str, path: Path) -> dict:
     )
 
 
-def select_filter_binary(root: Path, requested: Path | None) -> Path:
+def select_filter_binary(
+    root: Path, requested: Path | None, processing_mode: str
+) -> Path:
+    binary_name = (
+        "glic_original_visual_filter"
+        if processing_mode == "original_visual"
+        else "glic_realtime_filter"
+    )
     candidates: list[Path] = []
     if requested is not None:
         candidates.append(requested)
     candidates.extend(
         [
-            root / "build" / "glic_realtime_filter",
-            Path(__file__).resolve().parent / "glic_realtime_filter",
+            root / "build" / binary_name,
+            Path(__file__).resolve().parent / binary_name,
         ]
     )
-    installed = shutil.which("glic_realtime_filter")
+    installed = shutil.which(binary_name)
     if installed is not None:
         candidates.append(Path(installed))
     for candidate in candidates:
         resolved = candidate.expanduser().resolve()
         if resolved.is_file() and os.access(resolved, os.X_OK):
             return resolved
-    raise RuntimeError("glic_realtime_filter is not built; run cmake --build build")
+    raise RuntimeError(f"{binary_name} is not built; run cmake --build build")
 
 
 def select_presets_directory(root: Path, requested: Path | None) -> Path:
@@ -163,6 +225,26 @@ def log_tail(path: Path, lines: int = 30) -> str:
 
 def main() -> int:
     args = parse_args()
+    if (args.width is None) != (args.height is None):
+        raise RuntimeError("--width and --height must be provided together")
+    if args.width is not None and (args.width <= 0 or args.height <= 0):
+        raise RuntimeError("--width and --height must be positive")
+    if args.fps is not None and (not math.isfinite(args.fps) or args.fps <= 0):
+        raise RuntimeError("--fps must be finite and positive")
+    if args.processing_mode == "original_visual":
+        if args.passthrough or args.canonical:
+            raise RuntimeError(
+                "original_visual accepts named presets only; canonical and passthrough are unavailable"
+            )
+        if args.preset_semantics not in (None, "original"):
+            raise RuntimeError("original_visual requires original preset semantics")
+        if args.backend not in (None, "auto", "cpu"):
+            raise RuntimeError("original_visual is currently a CPU lane; --backend metal is unavailable")
+        preset_semantics = "original"
+        backend_requested = "cpu"
+    else:
+        preset_semantics = args.preset_semantics or "legacy"
+        backend_requested = args.backend or "metal"
     if not math.isfinite(args.strength) or not 0.0 <= args.strength <= 2.0:
         raise RuntimeError("--strength must be between 0 and 2")
     for name, value in (
@@ -197,18 +279,51 @@ def main() -> int:
 
     ffmpeg = require_tool("ffmpeg")
     ffprobe = require_tool("ffprobe")
-    filter_binary = select_filter_binary(root, args.filter_bin)
+    filter_binary = select_filter_binary(
+        root, args.filter_bin, args.processing_mode
+    )
     encoder_name, encoder_args = select_encoder(ffmpeg)
     input_probe = probe_video(ffprobe, input_path)
     streams = input_probe.get("streams", [])
     if not streams:
         raise RuntimeError(f"No video stream found: {input_path}")
     stream = streams[0]
-    width = int(stream["width"])
-    height = int(stream["height"])
-    frame_rate = stream.get("avg_frame_rate") or stream.get("r_frame_rate")
-    if not frame_rate or frame_rate == "0/0":
+    source_width = int(stream["width"])
+    source_height = int(stream["height"])
+    source_frame_rate = stream.get("avg_frame_rate") or stream.get("r_frame_rate")
+    source_fps = parse_frame_rate(source_frame_rate)
+    if source_fps <= 0.0:
         raise RuntimeError("Input frame rate could not be determined")
+    width = args.width or source_width
+    height = args.height or source_height
+    target_fps = args.fps if args.fps is not None else source_fps
+    frame_rate = f"{target_fps:g}"
+
+    if args.processing_mode == "original_visual":
+        assert presets_dir is not None
+        preflight = subprocess.run(
+            [
+                str(filter_binary),
+                "--width",
+                str(width),
+                "--height",
+                str(height),
+                "--target-fps",
+                frame_rate,
+                "--preset",
+                args.preset,
+                "--presets-dir",
+                str(presets_dir),
+                "--check",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if preflight.returncode != 0:
+            raise RuntimeError(
+                "original_visual preset preflight failed:\n"
+                + preflight.stderr.strip()
+            )
 
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="glic-metal-video-") as temp_text:
@@ -231,12 +346,15 @@ def main() -> int:
             "-map",
             "0:v:0",
             "-an",
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "bgra",
-            "pipe:1",
         ]
+        video_filters: list[str] = []
+        if width != source_width or height != source_height:
+            video_filters.append(f"scale={width}:{height}:flags=lanczos")
+        if args.fps is not None:
+            video_filters.append(f"fps={frame_rate}")
+        if video_filters:
+            decode_command.extend(["-vf", ",".join(video_filters)])
+        decode_command.extend(["-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1"])
         filter_command = [
             str(filter_binary),
             "--width",
@@ -244,7 +362,19 @@ def main() -> int:
             "--height",
             str(height),
         ]
-        if args.passthrough:
+        if args.processing_mode == "original_visual":
+            assert presets_dir is not None
+            filter_command.extend(
+                [
+                    "--target-fps",
+                    frame_rate,
+                    "--preset",
+                    args.preset,
+                    "--presets-dir",
+                    str(presets_dir),
+                ]
+            )
+        elif args.passthrough:
             filter_command.append("--passthrough")
         elif args.canonical:
             filter_command.extend(
@@ -252,7 +382,7 @@ def main() -> int:
                     "--canonical",
                     args.canonical,
                     "--backend",
-                    args.backend,
+                    backend_requested,
                     "--seed",
                     str(args.seed),
                 ]
@@ -265,8 +395,10 @@ def main() -> int:
                     args.preset,
                     "--presets-dir",
                     str(presets_dir),
+                    "--preset-semantics",
+                    preset_semantics,
                     "--backend",
-                    args.backend,
+                    backend_requested,
                     "--strength",
                     str(args.strength),
                     "--effect-family",
@@ -378,31 +510,72 @@ def main() -> int:
         filter_report = json.loads(filter_stats.read_text())
 
     output_probe = probe_video(ffprobe, output_path)
+    output_streams = output_probe.get("streams", [])
+    output_frame_rate = (
+        output_streams[0].get("avg_frame_rate") if output_streams else None
+    )
+    output_fps = parse_frame_rate(output_frame_rate)
     elapsed = time.monotonic() - started
     duration = float(
         stream.get("duration") or input_probe.get("format", {}).get("duration", 0.0)
     )
+    processed_frames = int(filter_report.get("frames", 0))
+    end_to_end_observed_fps = processed_frames / elapsed if elapsed else 0.0
     report = {
         "schema": "glic-video-process-v1",
         "input": str(input_path),
         "output": str(output_path),
         "preset": filter_report.get("preset", "passthrough"),
+        "preset_semantics": filter_report.get("preset_semantics", "legacy"),
+        "processing_mode": filter_report.get(
+            "processing_mode", "compat_realtime"
+        ),
+        "preset_mapping_fidelity": filter_report.get(
+            "preset_mapping_fidelity", "not-applicable"
+        ),
+        "preset_mapping_reasons": filter_report.get(
+            "preset_mapping_reasons", []
+        ),
         "recipe_source": filter_report.get("recipe_source", "passthrough"),
         "canonical": args.canonical,
         "canonical_version": filter_report.get("canonical_version"),
-        "strength": filter_report.get("strength", 0.0),
-        "effect_family": filter_report.get("effect_family", "passthrough"),
-        "effect_amount": filter_report.get("effect_amount", 0.0),
-        "effect_scale": filter_report.get("effect_scale", 0.0),
-        "effect_rate": filter_report.get("effect_rate", 0.0),
-        "seed": filter_report.get("seed", 0),
-        "backend_requested": "passthrough" if args.passthrough else args.backend,
+        "fidelity_claim": filter_report.get("fidelity_claim"),
+        "processing_pixel_exact": filter_report.get("processing_pixel_exact"),
+        "unsupported_policy": filter_report.get("unsupported_policy"),
+        "known_deviations": filter_report.get("known_deviations", []),
+        "strength": filter_report.get("strength"),
+        "effect_family": filter_report.get("effect_family"),
+        "effect_amount": filter_report.get("effect_amount"),
+        "effect_scale": filter_report.get("effect_scale"),
+        "effect_rate": filter_report.get("effect_rate"),
+        "seed": filter_report.get("seed"),
+        "backend_requested": "passthrough" if args.passthrough else backend_requested,
+        "target_width": width,
+        "target_height": height,
+        "target_frame_rate": frame_rate,
+        "target_fps": round(target_fps, 6),
+        "output_fps": round(output_fps, 6),
         "encoder": encoder_name,
         "elapsed_seconds": round(elapsed, 3),
         "source_duration_seconds": duration,
         "end_to_end_realtime_factor": round(duration / elapsed, 3)
         if elapsed
         else 0.0,
+        "end_to_end_observed_fps": round(end_to_end_observed_fps, 3),
+        "end_to_end_average_30fps_passed": passes_end_to_end_average_30fps(
+            width=width,
+            height=height,
+            frames=processed_frames,
+            elapsed_seconds=elapsed,
+            target_fps=target_fps,
+            output_fps=output_fps,
+        ),
+        "filter_stream_realtime_30fps_passed": filter_report.get(
+            "realtime_30fps_passed"
+        ),
+        "filter_kernel_realtime_30fps_passed": filter_report.get(
+            "kernel_realtime_30fps_passed"
+        ),
         "filter": filter_report,
         "input_probe": input_probe,
         "output_probe": output_probe,
@@ -410,7 +583,8 @@ def main() -> int:
     report_path.write_text(json.dumps(report, indent=2) + "\n")
     print(
         f"output={output_path} frames={filter_report['frames']} "
-        f"processing_fps={filter_report['processing_fps']:.3f} "
+        f"kernel_fps={filter_report['processing_fps']:.3f} "
+        f"stream_fps={filter_report.get('stream_observed_fps', filter_report['processing_fps']):.3f} "
         f"elapsed={elapsed:.3f}s report={report_path}"
     )
     return 0

@@ -23,6 +23,7 @@ set(CORE_SOURCES
     src/realtime.cpp
     src/realtime_certification.cpp
     src/realtime_cpu.cpp
+    src/original_realtime.cpp
 )
 
 # Header files
@@ -44,6 +45,7 @@ set(HEADERS
     src/realtime_internal.hpp
     src/realtime_cpu.hpp
     src/realtime_metal.hpp
+    src/original_realtime.hpp
 )
 
 add_library(glic_core STATIC ${CORE_SOURCES} ${HEADERS})
@@ -103,8 +105,15 @@ target_link_libraries(glic PRIVATE glic_core)
 add_executable(glic_realtime_bench benchmarks/realtime_benchmark.cpp)
 target_link_libraries(glic_realtime_bench PRIVATE glic_core)
 
+add_executable(glic_original_realtime_bench
+               benchmarks/original_realtime_benchmark.cpp)
+target_link_libraries(glic_original_realtime_bench PRIVATE glic_core)
+
 add_executable(glic_realtime_filter tools/realtime_filter.cpp)
 target_link_libraries(glic_realtime_filter PRIVATE glic_core)
+
+add_executable(glic_original_visual_filter tools/original_visual_filter.cpp)
+target_link_libraries(glic_original_visual_filter PRIVATE glic_core)
 
 add_executable(glic_realtime_search tools/realtime_search.cpp)
 target_link_libraries(glic_realtime_search PRIVATE glic_core)
@@ -136,6 +145,20 @@ if(BUILD_TESTING)
                          --selftest)
         add_test(NAME glic_search_ranking
                  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/test_search_ranking.py")
+        add_test(NAME glic_original_visual_stream_filter
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${CMAKE_SOURCE_DIR}/tests/test_original_visual_filter.py"
+                         --filter "$<TARGET_FILE:glic_original_visual_filter>"
+                         --presets "${CMAKE_SOURCE_DIR}/presets")
+        add_test(NAME glic_original_preset_catalog
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${CMAKE_SOURCE_DIR}/tests/test_original_preset_catalog.py")
+        add_test(NAME glic_original_visual_tier_analysis
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${CMAKE_SOURCE_DIR}/tests/test_analyze_original_visual_tier.py")
+        add_test(NAME glic_process_video_helpers
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${CMAKE_SOURCE_DIR}/tests/test_process_video_helpers.py")
     endif()
 
     add_executable(glic_realtime_tests tests/realtime_tests.cpp)
@@ -144,6 +167,22 @@ if(BUILD_TESTING)
         "GLIC_TEST_PRESETS_DIR=\"${CMAKE_SOURCE_DIR}/presets\""
     )
     add_test(NAME glic_realtime_all_presets COMMAND glic_realtime_tests)
+
+    add_executable(glic_preset_loader_tests tests/preset_loader_tests.cpp)
+    target_link_libraries(glic_preset_loader_tests PRIVATE glic_core)
+    target_compile_definitions(glic_preset_loader_tests PRIVATE
+        "GLIC_TEST_PRESETS_DIR=\"${CMAKE_SOURCE_DIR}/presets\""
+    )
+    add_test(NAME glic_preset_loader_golden COMMAND glic_preset_loader_tests)
+
+    add_executable(glic_original_realtime_tests
+                   tests/original_realtime_tests.cpp)
+    target_link_libraries(glic_original_realtime_tests PRIVATE glic_core)
+    target_compile_definitions(glic_original_realtime_tests PRIVATE
+        "GLIC_TEST_PRESETS_DIR=\"${CMAKE_SOURCE_DIR}/presets\""
+    )
+    add_test(NAME glic_original_realtime_cpu_reference
+             COMMAND glic_original_realtime_tests)
 
     if(APPLE)
         add_executable(glic_realtime_metal_interop_tests tests/realtime_metal_interop_tests.mm)
@@ -158,7 +197,9 @@ endif()
 
 # Installation
 install(TARGETS glic glic_realtime_bench glic_realtime_filter
-                glic_realtime_search glic_realtime_certify
+                glic_original_visual_filter glic_original_realtime_bench
+                glic_realtime_search
+                glic_realtime_certify
         RUNTIME DESTINATION bin)
 install(PROGRAMS scripts/process_video.py
         DESTINATION bin
@@ -167,9 +208,13 @@ install(PROGRAMS scripts/run_search_supervisor.sh scripts/build_search_catalog.p
         scripts/analyze_search_images.py scripts/perceptual_image_features.py
         scripts/rank_search_results.py scripts/build_ranked_catalog.sh
         scripts/run_ranking_watcher.sh scripts/certify_search_performance.py
+        scripts/build_original_preset_catalog.py
+        scripts/analyze_original_visual_tier.py
         DESTINATION bin)
 install(DIRECTORY presets/
         DESTINATION share/glic-metal/presets)
+install(FILES presets.upstream.sha256
+        DESTINATION share/glic-metal)
 if(APPLE)
     install(FILES "${GLIC_METALLIB}" DESTINATION lib/glic)
 endif()

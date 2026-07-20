@@ -22,6 +22,7 @@ struct Options {
   std::string input;
   std::string preset = "default";
   std::string presetsDirectory = "presets";
+  std::string presetSemantics = "legacy";
   std::string backend = "auto";
   std::string outputImage;
   std::string jsonReport;
@@ -42,6 +43,8 @@ struct Result {
   double framesPerSecond = 0.0;
   bool processPassed = false;
   bool performancePassed = false;
+  std::string presetMappingFidelity = "legacy";
+  std::vector<std::string> presetMappingReasons;
   std::string error;
 };
 
@@ -51,6 +54,9 @@ void printUsage(const char *program) {
       << "  --preset <name>          Preset to benchmark (default: default)\n"
       << "  --all-presets            Benchmark every preset\n"
       << "  --presets-dir <path>     Preset directory (default: presets)\n"
+      << "  --preset-semantics <legacy|original>\n"
+      << "                            Decode historical C++ values or upstream "
+         "GUI.pde semantics (default: legacy)\n"
       << "  --backend <auto|cpu|metal>\n"
       << "  --frames <count>         Measured frames (default: 120)\n"
       << "  --warmup <count>         Warm-up frames (default: 10)\n"
@@ -94,6 +100,15 @@ bool parseOptions(int argc, char **argv, Options &options) {
       if (!value)
         return false;
       options.presetsDirectory = value;
+    } else if (argument == "--preset-semantics") {
+      const char *value = takeValue();
+      if (!value)
+        return false;
+      options.presetSemantics = value;
+      if (options.presetSemantics != "legacy" &&
+          options.presetSemantics != "original") {
+        return false;
+      }
     } else if (argument == "--backend") {
       const char *value = takeValue();
       if (!value)
@@ -116,7 +131,7 @@ bool parseOptions(int argc, char **argv, Options &options) {
       } catch (...) {
         return false;
       }
-      if (options.requiredFps <= 0.0)
+      if (!std::isfinite(options.requiredFps) || options.requiredFps <= 0.0)
         return false;
     } else if (argument == "--strength") {
       const char *value = takeValue();
@@ -180,7 +195,14 @@ std::string jsonEscape(std::string_view value) {
       result += "\\t";
       break;
     default:
-      result += character;
+      if (const auto code = static_cast<unsigned char>(character); code < 0x20) {
+        static constexpr char digits[] = "0123456789abcdef";
+        result += "\\u00";
+        result += digits[(code >> 4) & 0x0f];
+        result += digits[code & 0x0f];
+      } else {
+        result += character;
+      }
       break;
     }
   }
@@ -206,6 +228,9 @@ void writeJsonReport(const Options &options, int width, int height,
          << "  \"warmup_frames\": " << options.warmupFrames << ",\n"
          << "  \"required_fps\": " << options.requiredFps << ",\n"
          << "  \"strength\": " << options.strength << ",\n"
+         << "  \"preset_semantics\": \""
+         << jsonEscape(options.presetSemantics) << "\",\n"
+         << "  \"processing_mode\": \"compat_realtime\",\n"
          << "  \"results\": [\n";
   for (size_t i = 0; i < results.size(); ++i) {
     const auto &result = results[i];
@@ -219,7 +244,18 @@ void writeJsonReport(const Options &options, int width, int height,
            << ", \"process_passed\": "
            << (result.processPassed ? "true" : "false")
            << ", \"performance_passed\": "
-           << (result.performancePassed ? "true" : "false") << ", \"error\": \""
+           << (result.performancePassed ? "true" : "false")
+           << ", \"preset_mapping_fidelity\": \""
+           << jsonEscape(result.presetMappingFidelity)
+           << "\", \"preset_mapping_reasons\": [";
+    for (size_t reasonIndex = 0;
+         reasonIndex < result.presetMappingReasons.size(); ++reasonIndex) {
+      if (reasonIndex != 0)
+        output << ", ";
+      output << '"' << jsonEscape(result.presetMappingReasons[reasonIndex])
+             << '"';
+    }
+    output << "], \"error\": \""
            << jsonEscape(result.error) << "\"}";
     if (i + 1 != results.size())
       output << ',';
@@ -269,7 +305,8 @@ int main(int argc, char **argv) {
             << " backend=" << backend->name() << " presets=" << presets.size()
             << " frames=" << options.frames
             << " warmup=" << options.warmupFrames
-            << " strength=" << options.strength << '\n';
+            << " strength=" << options.strength
+            << " preset_semantics=" << options.presetSemantics << '\n';
   std::cout << "preset\tbackend\tmedian_ms\tp95_ms\tmean_ms\tmedian_gpu_"
                "ms\tfps\tpass\n";
 
@@ -284,8 +321,23 @@ int main(int argc, char **argv) {
     result.backend = backend->name();
 
     glic::CodecConfig config;
-    if (!glic::PresetLoader::loadPresetByName(options.presetsDirectory, preset,
-                                              config)) {
+    bool presetLoaded = false;
+    if (options.presetSemantics == "original") {
+      result.presetMappingFidelity = "load-failed";
+      result.presetMappingReasons = {"original_preset_load_failed"};
+      glic::PresetMappingInfo mapping;
+      presetLoaded = glic::PresetLoader::loadOriginalPresetByName(
+          options.presetsDirectory, preset, config, &mapping);
+      if (presetLoaded) {
+        result.presetMappingFidelity =
+            glic::presetMappingFidelityName(mapping.fidelity);
+        result.presetMappingReasons = std::move(mapping.reasons);
+      }
+    } else {
+      presetLoaded = glic::PresetLoader::loadPresetByName(
+          options.presetsDirectory, preset, config);
+    }
+    if (!presetLoaded) {
       result.error = "preset load failed";
       results.push_back(result);
       allPassed = false;

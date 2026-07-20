@@ -27,6 +27,7 @@ struct Options {
   int height = 0;
   std::string preset = "default";
   std::string presetsDirectory = "presets";
+  std::string presetSemantics = "legacy";
   std::string backend = "auto";
   std::string statsJson;
   std::string canonical;
@@ -55,6 +56,8 @@ void printUsage(const char *program) {
       << "  --canonical <recipe>     Strict v1/v2 canonical recipe; bypasses "
          "the named preset\n"
       << "  --presets-dir <path>     Preset directory (default: presets)\n"
+      << "  --preset-semantics <legacy|original>\n"
+      << "                            Preset field decoding (default: legacy)\n"
       << "  --backend <auto|cpu|metal>\n"
       << "  --strength <0..2>        Glitch intensity (default: 1)\n"
       << "  --effect-family <name>   legacy_block, line_tear, "
@@ -378,6 +381,14 @@ bool parseOptions(int argc, char **argv, Options &options) {
       if (value == nullptr)
         return false;
       options.presetsDirectory = value;
+    } else if (argument == "--preset-semantics") {
+      const char *value = takeValue();
+      if (value == nullptr)
+        return false;
+      options.presetSemantics = value;
+      if (options.presetSemantics != "legacy" &&
+          options.presetSemantics != "original")
+        return false;
     } else if (argument == "--backend") {
       const char *value = takeValue();
       if (value == nullptr)
@@ -429,9 +440,47 @@ bool parseOptions(int argc, char **argv, Options &options) {
           options.backend == "metal");
 }
 
+std::string jsonEscape(std::string_view value) {
+  std::string output;
+  output.reserve(value.size() + 8);
+  for (const char character : value) {
+    switch (character) {
+    case '\\':
+      output += "\\\\";
+      break;
+    case '"':
+      output += "\\\"";
+      break;
+    case '\n':
+      output += "\\n";
+      break;
+    case '\r':
+      output += "\\r";
+      break;
+    case '\t':
+      output += "\\t";
+      break;
+    default:
+      if (const auto code = static_cast<unsigned char>(character); code < 0x20) {
+        static constexpr char digits[] = "0123456789abcdef";
+        output += "\\u00";
+        output += digits[(code >> 4) & 0x0f];
+        output += digits[code & 0x0f];
+      } else {
+        output += character;
+      }
+      break;
+    }
+  }
+  return output;
+}
+
 void writeStats(const Options &options, const std::string &preset,
                 std::string_view recipeSource,
-                std::string_view canonicalVersion, const char *backend,
+                std::string_view canonicalVersion,
+                std::string_view mappingFidelity,
+                const std::vector<std::string> &mappingReasons,
+                const char *backend,
                 uint64_t frames, double totalMilliseconds,
                 double maximumMilliseconds, double totalGpuMilliseconds) {
   if (options.statsJson.empty())
@@ -451,23 +500,38 @@ void writeStats(const Options &options, const std::string &preset,
       totalMilliseconds <= 0.0
           ? 0.0
           : static_cast<double>(frames) * 1000.0 / totalMilliseconds;
+  const std::string_view reportedSemantics =
+      recipeSource == "preset" ? std::string_view(options.presetSemantics)
+                               : std::string_view("not-applicable");
 
   output << std::fixed << std::setprecision(3) << "{\n"
          << "  \"schema\": \"glic-realtime-filter-v1\",\n"
          << "  \"width\": " << options.width << ",\n"
          << "  \"height\": " << options.height << ",\n"
-         << "  \"preset\": \"" << preset << "\",\n"
-         << "  \"recipe_source\": \"" << recipeSource << "\",\n"
+         << "  \"preset\": \"" << jsonEscape(preset) << "\",\n"
+         << "  \"preset_semantics\": \"" << jsonEscape(reportedSemantics)
+         << "\",\n"
+         << "  \"processing_mode\": \"compat_realtime\",\n"
+         << "  \"preset_mapping_fidelity\": \"" << jsonEscape(mappingFidelity)
+         << "\",\n"
+         << "  \"preset_mapping_reasons\": [";
+  for (size_t index = 0; index < mappingReasons.size(); ++index) {
+    if (index != 0)
+      output << ", ";
+    output << '"' << jsonEscape(mappingReasons[index]) << '"';
+  }
+  output << "],\n"
+         << "  \"recipe_source\": \"" << jsonEscape(recipeSource) << "\",\n"
          << "  \"canonical_version\": ";
   if (canonicalVersion.empty())
     output << "null,\n";
   else
-    output << '"' << canonicalVersion << "\",\n";
+    output << '"' << jsonEscape(canonicalVersion) << "\",\n";
   output
-         << "  \"backend\": \"" << backend << "\",\n"
+         << "  \"backend\": \"" << jsonEscape(backend) << "\",\n"
          << "  \"strength\": " << options.strength << ",\n"
          << "  \"seed\": " << options.seed << ",\n"
-         << "  \"effect_family\": \"" << options.effectFamily << "\",\n"
+         << "  \"effect_family\": \"" << jsonEscape(options.effectFamily) << "\",\n"
          << "  \"effect_amount\": " << options.effectAmount << ",\n"
          << "  \"effect_scale\": " << options.effectScale << ",\n"
          << "  \"effect_rate\": " << options.effectRate << ",\n"
@@ -503,6 +567,8 @@ int main(int argc, char **argv) {
   std::unique_ptr<glic::RealtimeBackend> backend;
   std::string backendName = "passthrough";
   std::string presetName = "passthrough";
+  std::string mappingFidelity = "not-applicable";
+  std::vector<std::string> mappingReasons;
   const std::string recipeSource =
       options.passthrough
           ? "passthrough"
@@ -533,14 +599,28 @@ int main(int argc, char **argv) {
     options.effectAmount = effect.amount;
     options.effectScale = effect.scale;
     options.effectRate = effect.rate;
+    mappingFidelity = "canonical";
   }
 
   if (!options.passthrough) {
-    if (options.canonical.empty() &&
-        !glic::PresetLoader::loadPresetByName(options.presetsDirectory,
-                                              options.preset, config)) {
-      std::cerr << "Failed to load preset: " << options.preset << '\n';
-      return 3;
+    if (options.canonical.empty()) {
+      bool loaded = false;
+      if (options.presetSemantics == "original") {
+        glic::PresetMappingInfo mapping;
+        loaded = glic::PresetLoader::loadOriginalPresetByName(
+            options.presetsDirectory, options.preset, config, &mapping);
+        mappingFidelity =
+            glic::presetMappingFidelityName(mapping.fidelity);
+        mappingReasons = std::move(mapping.reasons);
+      } else {
+        loaded = glic::PresetLoader::loadPresetByName(
+            options.presetsDirectory, options.preset, config);
+        mappingFidelity = "legacy";
+      }
+      if (!loaded) {
+        std::cerr << "Failed to load preset: " << options.preset << '\n';
+        return 3;
+      }
     }
 
     backend = glic::createRealtimeBackend(
@@ -635,7 +715,8 @@ int main(int argc, char **argv) {
   }
 
   writeStats(options, presetName, recipeSource, canonicalVersion,
-             backendName.c_str(), frameIndex, totalMilliseconds,
+             mappingFidelity, mappingReasons, backendName.c_str(), frameIndex,
+             totalMilliseconds,
              maximumMilliseconds, totalGpuMilliseconds);
   const double fps =
       totalMilliseconds <= 0.0
@@ -644,6 +725,8 @@ int main(int argc, char **argv) {
   std::cerr << "frames=" << frameIndex << " backend=" << backendName
             << " preset=" << presetName << " strength=" << options.strength
             << " effect_family=" << options.effectFamily
+            << " preset_semantics=" << options.presetSemantics
+            << " preset_mapping_fidelity=" << mappingFidelity
             << " recipe_source=" << recipeSource
             << " canonical_version="
             << (canonicalVersion.empty() ? "none" : canonicalVersion)

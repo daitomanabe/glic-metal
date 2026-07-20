@@ -16,15 +16,15 @@ C++20とMetal ComputeによるGLIC (GLitch Image Codec) のリアルタイム映
 - **ドキュメント**: [GLIC Documentation](https://docs.google.com/document/d/1cdJvEmSKNAkzkU0dFUa-kb_QJB2ISQg-QfCqpHLFlck/edit) - GlitchCodec/GLICより
 - **C++ポート**: このリポジトリ
 
-オリジナルのProcessing版から完全にポートし、さらに新しいグリッチ効果を追加しています。
+オリジナルのパラメータ意味、ファイルcodec、リアルタイム近似、原作スタイル再構成を、互換性レベルを明示して段階的に移植しています。リアルタイム合格をProcessing版とのピクセル完全一致とは扱いません。
 
 ### 特徴
 
-- Processing版の全機能をC++20で再実装
+- C++20によるファイルcodecと、CPU / Metalリアルタイム処理
 - モダンC++機能を活用（`std::ranges`, `std::span`, `std::bit_cast`, `[[likely]]`属性など）
 - クロスプラットフォーム対応 (macOS, Linux, Windows)
 - コマンドラインインターフェース
-- **144種類のプリセット対応** (オリジナルGLICのプリセットファイルを読み込み)
+- **上流144プリセットを意味変換・互換性分類**（SHA-256固定コーパス）
 - 24種類の予測アルゴリズム（8種類追加）
 - 6種類のエンコーディング方式（3種類追加）
 - 6種類のポストプロセッシングエフェクト（新機能）
@@ -62,13 +62,20 @@ cmake --build .
 # Metalで960×540を120フレーム計測し、30fpsの平均+p95ゲートを確認
 ./build/glic_realtime_bench input-960x540.png \
   --preset bi0g4n1c --backend metal \
+  --preset-semantics original \
   --strength 1.0 \
   --frames 120 --warmup 10 --require-fps 30 \
   --output realtime-output.png --json realtime-report.json
 
 # 全144 presetを検証
-./build/glic_realtime_bench input-1920x1080.png \
-  --all-presets --backend metal --frames 20 --warmup 3
+./build/glic_realtime_bench input-960x540.png \
+  --all-presets --backend metal --preset-semantics original \
+  --frames 120 --warmup 10 --require-fps 30
+
+# 原作スタイルの再構成を、対応する37 presetだけfail-closedで検証
+./build/glic_original_realtime_bench input-960x540.png \
+  --all-supported --presets-dir presets --require-fps 30 \
+  --json original-visual-report.json
 
 # 3本の永続workerを使うCPU fallback
 ./build/glic_realtime_bench input-1920x1080.png \
@@ -76,6 +83,8 @@ cmake --build .
 ```
 
 リアルタイムAPIは [src/realtime.hpp](src/realtime.hpp) にあります。CPU backendは3チャンネルを永続workerで並列処理し、解像度変更時以外はworkspaceを再利用します。Metal backendはCPU配列を扱う同期APIに加え、`MTLTexture`を直接渡すゼロコピーAPIと、呼び出し側の`MTLCommandBuffer`へ処理を追加する非同期APIを提供します。
+
+互換性レベル、上流GLICの20fps UI設定との違い、対応37 preset（CPU `original_visual`で通常画像3回のintersectionは35 PASS、uniform-noise stressまで含む保守的intersectionは34 PASS）の境界は [docs/ORIGINAL_PRESET_REALTIME.md](docs/ORIGINAL_PRESET_REALTIME.md) にあります。この35/34件はCPU忠実度レーンの結果であり、Metal合格数ではありません。Metalで全144名を通す経路は明示的に別の視覚近似です。
 
 リアルタイム経路には、従来のブロック破損に加えて、走査線ティア、RGBチャンネルシア、アナログ同期崩れ、ミラーフォールド、輪郭エコー、ビットプレーン・ディザ、波形ワープ、ポスタライズ／ソラリゼーションの9機構があります。いずれも1 passのCPU/Metal実装で、フレームごとの確保を行いません。`--strength` は `0`（無加工）から `2`（最大）で、`--effect-amount`、`--effect-scale`、`--effect-rate` で機構固有の形状を制御します。
 
@@ -89,7 +98,14 @@ macOSでMetal shaderをビルドする際はFull Xcodeが必要です。CMakeは
 python3 scripts/process_video.py input.mov output.mp4 \
   --backend metal --effect-family line_tear \
   --effect-amount 0.9 --effect-scale 0.55 --effect-rate 0.4
+
+# 原作スタイル対応presetを、明示的なoriginal_visualレーンで960x540/30fps処理
+python3 scripts/process_video.py input.mov output-original.mp4 \
+  --processing-mode original_visual --preset burn \
+  --width 960 --height 540 --fps 30 --overwrite
 ```
+
+`original_visual` は `compat_realtime` と別の、CPUによる原作スタイル再構成レーンです。対応するCDF97 FWT/WPTを実行し、それ以外のwaveletやpredictor探索を必要とするpresetは事前検査でfail-closedします。未対応presetを近似処理へ自動フォールバックしません。JSONの30fps判定は最初の10フレームを除いた最低120フレームについて、1フレームの入力開始から出力完了までのstream wall時間（pipeの待機・backpressureを含む平均とp95）を対象とします。カーネル単体は `kernel_realtime_30fps_passed`、FFmpegのdecode・scale・encode・muxまで含む動画全体は `end_to_end_realtime_factor` で別に確認できます。
 
 探索結果の `ready_to_run_args` に含まれる `--canonical 'v2|...' --seed ...` を渡すと、preset名への変換を挟まず、評価した強度・機構・形状を動画上へ完全に再現できます。
 
@@ -361,15 +377,15 @@ A real-time GLIC (GLitch Image Codec) implementation using C++20 and Metal Compu
 - **Documentation**: [GLIC Documentation](https://docs.google.com/document/d/1cdJvEmSKNAkzkU0dFUa-kb_QJB2ISQg-QfCqpHLFlck/edit) - From GlitchCodec/GLIC
 - **C++ Port**: This repository
 
-This is a complete port from the original Processing version with additional glitch effects.
+The port keeps the file codec, original parameter semantics, realtime visual approximation, and original-style reconstruction as explicitly separate compatibility levels. A realtime pass is not presented as Processing pixel equivalence.
 
 ### Features
 
-- Full reimplementation of Processing version in C++20
+- C++20 file codec plus CPU / Metal realtime processing
 - Modern C++ features (`std::ranges`, `std::span`, `std::bit_cast`, `[[likely]]` attributes, etc.)
 - Cross-platform support (macOS, Linux, Windows)
 - Command-line interface
-- **144 presets supported** (loads original GLIC preset files)
+- **All 144 upstream presets decoded and compatibility-classified** from a SHA-256-pinned corpus
 - 24 prediction algorithms (+8 new)
 - 6 encoding methods (+3 new)
 - 6 post-processing effects (new feature)
@@ -412,8 +428,14 @@ cmake --build .
   --output realtime-output.png --json realtime-report.json
 
 # Validate all 144 presets
-./build/glic_realtime_bench input-1920x1080.png \
-  --all-presets --backend metal --frames 20 --warmup 3
+./build/glic_realtime_bench input-960x540.png \
+  --all-presets --backend metal --preset-semantics original \
+  --frames 120 --warmup 10 --require-fps 30
+
+# Fail-closed original-style reconstruction for the supported 37 presets
+./build/glic_original_realtime_bench input-960x540.png \
+  --all-supported --presets-dir presets --require-fps 30 \
+  --json original-visual-report.json
 
 # CPU fallback with three persistent channel workers
 ./build/glic_realtime_bench input-1920x1080.png \
@@ -421,6 +443,8 @@ cmake --build .
 ```
 
 The realtime API is declared in [src/realtime.hpp](src/realtime.hpp). The CPU backend reuses resolution-sized workspaces after preparation. The Metal backend provides a synchronous CPU-buffer API, an opaque zero-copy `MTLTexture` API, and a non-blocking API that appends work to the caller's `MTLCommandBuffer`.
+
+See [docs/ORIGINAL_PRESET_REALTIME.md](docs/ORIGINAL_PRESET_REALTIME.md) for compatibility levels, why upstream's 20 fps setting is a UI rate rather than codec throughput, and the current 37-preset original-style CPU boundary (35 pass the intersection of three normal-image runs; 34 pass the conservative normal-plus-uniform-noise intersection). Those 35/34 counts are CPU fidelity-lane results, not Metal results; the all-144 Metal path is the separately labelled visual approximation.
 
 The realtime path has nine explicit glitch mechanisms. `legacy_block` preserves the preset-derived codec damage path; the other eight are independent RGB mechanisms so selecting a legacy preset cannot collapse them back into the same block topology.
 
@@ -449,7 +473,14 @@ python3 scripts/process_video.py input.mov output.mp4 \
   --preset default --backend metal --strength 1.25 \
   --effect-family line_tear --effect-amount 0.9 \
   --effect-scale 0.35 --effect-rate 0.65 --seed 0x13579bdf
+
+# Process a supported original-style preset at 960x540/30 fps
+python3 scripts/process_video.py input.mov output-original.mp4 \
+  --processing-mode original_visual --preset burn \
+  --width 960 --height 540 --fps 30 --overwrite
 ```
+
+`original_visual` is a dedicated CPU original-style reconstruction lane, separate from `compat_realtime`. Supported CDF97 FWT/WPT presets run that transform; other wavelets and predictor-search modes fail during preflight instead of silently falling back to an approximation. The JSON 30 fps gate covers wall time from frame-read start through completed frame write, including pipe wait and backpressure: 10 warm-up frames followed by at least 120 measured frames, with both mean and p95 inside the frame budget. Kernel-only status remains explicit as `kernel_realtime_30fps_passed`; check `end_to_end_realtime_factor` separately for decode, scale, encode, and mux performance.
 
 Pass the exact `--canonical 'v2|...' --seed ...` values from a ranked row's
 `ready_to_run_args` to reproduce the evaluated mechanism and controls without
