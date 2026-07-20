@@ -89,6 +89,24 @@ python3 scripts/process_video.py input.mov output.mp4 \
 
 入力・出力動画をローカルに保持する場合は、Git対象外の `test-videos/` を使用できます。
 
+### グリッチ差分QA
+
+動画が正常に再生できることと、グリッチが十分に見えることは別々に検証します。`--passthrough` で同じBGRA・H.264経路の無加工対照を作り、`evaluate_effect_difference.py` で対応フレームの画素差、DeltaE76、SSIM、エッジ差を測定します。
+
+```bash
+python3 scripts/process_video.py input.mov control.mp4 \
+  --passthrough --overwrite
+
+python3 tools/evaluate_effect_difference.py input.mov \
+  --control control.mp4 \
+  --candidate glitch=output.mp4 \
+  --output-json effect-difference.json \
+  --output-md effect-difference.md \
+  --heatmap effect-difference.png
+```
+
+評価ツールには `requirements-qa.txt` のNumPyとOpenCVが必要です。`VISIBLE` または `STRONG` のみを、視覚的に意味のあるグリッチとして合格にします。
+
 ### プリセットオプション
 
 | オプション | 説明 |
@@ -379,6 +397,24 @@ python3 scripts/process_video.py input.mov output.mp4 \
 ```
 
 Use the Git-ignored `test-videos/` directory for local input and preview files.
+
+### Glitch difference QA
+
+A technically valid video and a visibly glitched video are separate validation targets. Create an unchanged control through the same BGRA and H.264 path with `--passthrough`, then use `evaluate_effect_difference.py` to measure aligned-frame pixel differences, DeltaE76, SSIM, and edge disagreement.
+
+```bash
+python3 scripts/process_video.py input.mov control.mp4 \
+  --passthrough --overwrite
+
+python3 tools/evaluate_effect_difference.py input.mov \
+  --control control.mp4 \
+  --candidate glitch=output.mp4 \
+  --output-json effect-difference.json \
+  --output-md effect-difference.md \
+  --heatmap effect-difference.png
+```
+
+The evaluator requires NumPy and OpenCV from `requirements-qa.txt`. Only `VISIBLE` and `STRONG` pass the meaningful-glitch gate.
 
 ### Preset Options
 

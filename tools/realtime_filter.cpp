@@ -26,6 +26,7 @@ struct Options {
   std::string presetsDirectory = "presets";
   std::string backend = "auto";
   std::string statsJson;
+  bool passthrough = false;
 };
 
 void printUsage(const char *program) {
@@ -37,6 +38,8 @@ void printUsage(const char *program) {
       << "  --preset <name>          Preset name (default: default)\n"
       << "  --presets-dir <path>     Preset directory (default: presets)\n"
       << "  --backend <auto|cpu|metal>\n"
+      << "  --passthrough             Copy frames unchanged for A/B "
+         "calibration\n"
       << "  --stats-json <path>      Write processing statistics\n";
 }
 
@@ -87,6 +90,8 @@ bool parseOptions(int argc, char **argv, Options &options) {
       if (value == nullptr)
         return false;
       options.statsJson = value;
+    } else if (argument == "--passthrough") {
+      options.passthrough = true;
     } else if (argument == "--help" || argument == "-h") {
       return false;
     } else {
@@ -100,9 +105,9 @@ bool parseOptions(int argc, char **argv, Options &options) {
           options.backend == "metal");
 }
 
-void writeStats(const Options &options, const char *backend, uint64_t frames,
-                double totalMilliseconds, double maximumMilliseconds,
-                double totalGpuMilliseconds) {
+void writeStats(const Options &options, const std::string &preset,
+                const char *backend, uint64_t frames, double totalMilliseconds,
+                double maximumMilliseconds, double totalGpuMilliseconds) {
   if (options.statsJson.empty())
     return;
 
@@ -125,7 +130,7 @@ void writeStats(const Options &options, const char *backend, uint64_t frames,
          << "  \"schema\": \"glic-realtime-filter-v1\",\n"
          << "  \"width\": " << options.width << ",\n"
          << "  \"height\": " << options.height << ",\n"
-         << "  \"preset\": \"" << options.preset << "\",\n"
+         << "  \"preset\": \"" << preset << "\",\n"
          << "  \"backend\": \"" << backend << "\",\n"
          << "  \"frames\": " << frames << ",\n"
          << "  \"mean_process_ms\": " << meanMilliseconds << ",\n"
@@ -151,28 +156,35 @@ int main(int argc, char **argv) {
   std::ios::sync_with_stdio(false);
   std::cin.tie(nullptr);
 
-  glic::CodecConfig config;
-  if (!glic::PresetLoader::loadPresetByName(options.presetsDirectory,
-                                            options.preset, config)) {
-    std::cerr << "Failed to load preset: " << options.preset << '\n';
-    return 3;
-  }
-
   std::string error;
-  auto backend = glic::createRealtimeBackend(
-      glic::realtimeBackendKindFromName(options.backend), error);
-  if (!backend) {
-    std::cerr << "Failed to create realtime backend: " << error << '\n';
-    return 4;
-  }
+  std::unique_ptr<glic::RealtimeBackend> backend;
+  std::string backendName = "passthrough";
+  std::string presetName = "passthrough";
+  if (!options.passthrough) {
+    glic::CodecConfig config;
+    if (!glic::PresetLoader::loadPresetByName(options.presetsDirectory,
+                                              options.preset, config)) {
+      std::cerr << "Failed to load preset: " << options.preset << '\n';
+      return 3;
+    }
 
-  glic::RealtimePrepareOptions prepareOptions{.width = options.width,
-                                              .height = options.height,
-                                              .config = config,
-                                              .seed = 0x474C4943u};
-  if (!backend->prepare(prepareOptions, error)) {
-    std::cerr << "Failed to prepare realtime backend: " << error << '\n';
-    return 4;
+    backend = glic::createRealtimeBackend(
+        glic::realtimeBackendKindFromName(options.backend), error);
+    if (!backend) {
+      std::cerr << "Failed to create realtime backend: " << error << '\n';
+      return 4;
+    }
+
+    glic::RealtimePrepareOptions prepareOptions{.width = options.width,
+                                                .height = options.height,
+                                                .config = config,
+                                                .seed = 0x474C4943u};
+    if (!backend->prepare(prepareOptions, error)) {
+      std::cerr << "Failed to prepare realtime backend: " << error << '\n';
+      return 4;
+    }
+    backendName = backend->name();
+    presetName = options.preset;
   }
 
   const size_t width = static_cast<size_t>(options.width);
@@ -213,16 +225,21 @@ int main(int argc, char **argv) {
     }
 
     const auto start = std::chrono::steady_clock::now();
-    if (!backend->process(input, output, frameIndex, error)) {
-      std::cerr << "Frame " << frameIndex << " failed: " << error << '\n';
-      return 5;
+    if (options.passthrough) {
+      std::copy(input.begin(), input.end(), output.begin());
+    } else {
+      if (!backend->process(input, output, frameIndex, error)) {
+        std::cerr << "Frame " << frameIndex << " failed: " << error << '\n';
+        return 5;
+      }
     }
     const auto finish = std::chrono::steady_clock::now();
     const double milliseconds =
         std::chrono::duration<double, std::milli>(finish - start).count();
     totalMilliseconds += milliseconds;
     maximumMilliseconds = std::max(maximumMilliseconds, milliseconds);
-    totalGpuMilliseconds += backend->lastFrameStats().gpuMilliseconds;
+    if (backend)
+      totalGpuMilliseconds += backend->lastFrameStats().gpuMilliseconds;
 
     std::cout.write(reinterpret_cast<const char *>(output.data()),
                     static_cast<std::streamsize>(frameBytes));
@@ -233,14 +250,14 @@ int main(int argc, char **argv) {
     ++frameIndex;
   }
 
-  writeStats(options, backend->name(), frameIndex, totalMilliseconds,
-             maximumMilliseconds, totalGpuMilliseconds);
+  writeStats(options, presetName, backendName.c_str(), frameIndex,
+             totalMilliseconds, maximumMilliseconds, totalGpuMilliseconds);
   const double fps =
       totalMilliseconds <= 0.0
           ? 0.0
           : static_cast<double>(frameIndex) * 1000.0 / totalMilliseconds;
-  std::cerr << "frames=" << frameIndex << " backend=" << backend->name()
-            << " preset=" << options.preset << " processing_fps=" << std::fixed
+  std::cerr << "frames=" << frameIndex << " backend=" << backendName
+            << " preset=" << presetName << " processing_fps=" << std::fixed
             << std::setprecision(3) << fps << '\n';
   return frameIndex == 0 ? 5 : 0;
 }

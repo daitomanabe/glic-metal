@@ -21,6 +21,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--preset", default="default")
+    parser.add_argument(
+        "--passthrough",
+        action="store_true",
+        help="Copy BGRA frames unchanged to create an A/B codec baseline.",
+    )
     parser.add_argument("--presets-dir", type=Path)
     parser.add_argument(
         "--backend", choices=("auto", "cpu", "metal"), default="metal"
@@ -186,15 +191,21 @@ def main() -> int:
             str(width),
             "--height",
             str(height),
-            "--preset",
-            args.preset,
-            "--presets-dir",
-            str(presets_dir),
-            "--backend",
-            args.backend,
-            "--stats-json",
-            str(filter_stats),
         ]
+        if args.passthrough:
+            filter_command.append("--passthrough")
+        else:
+            filter_command.extend(
+                [
+                    "--preset",
+                    args.preset,
+                    "--presets-dir",
+                    str(presets_dir),
+                    "--backend",
+                    args.backend,
+                ]
+            )
+        filter_command.extend(["--stats-json", str(filter_stats)])
         encode_command = [
             ffmpeg,
             "-nostdin",
@@ -299,8 +310,8 @@ def main() -> int:
         "schema": "glic-video-process-v1",
         "input": str(input_path),
         "output": str(output_path),
-        "preset": args.preset,
-        "backend_requested": args.backend,
+        "preset": "passthrough" if args.passthrough else args.preset,
+        "backend_requested": "passthrough" if args.passthrough else args.backend,
         "encoder": encoder_name,
         "elapsed_seconds": round(elapsed, 3),
         "source_duration_seconds": duration,
