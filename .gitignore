@@ -16,6 +16,7 @@ cmake-build-*/
 
 # Output files
 output/
+search-runs/
 *.glic
 examples/output/
 test-videos/

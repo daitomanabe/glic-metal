@@ -110,6 +110,32 @@ python3 tools/evaluate_effect_difference.py input.mov \
 
 評価ツールには `requirements-qa.txt` のNumPyとOpenCVが必要です。`VISIBLE` または `STRONG` のみを、視覚的に意味のあるグリッチとして合格にします。
 
+### 無人preset探索
+
+`glic_realtime_search` は外部APIやLLMを呼ばず、決定的なMAP-Elites探索で技術的に異なるpreset候補を収集します。128候補のランダム初期集団後はarchive内のeliteを変異させ、複数入力・2 seed・8 frame phaseでMetal出力を評価します。無変化、過剰破壊、クリッピング、入力非依存ノイズ、15fps未満を除外し、81個のbehavior cellへ各4候補まで保存します。レシピだけでなく全評価frameと代表PNGもhash化するため、異なる設定から生じる同一出力がarchive枠を消費しません。
+
+これは美的な「最適」を保証する評価器ではなく、画像統計と再現性に基づく技術的多様性のpilotです。最終選抜には生成された静的catalogの目視評価を加えます。Full HDを線形1/4へ縮小済みの480×270入力では、追加縮小を避けるため `--scale 1` を指定します。
+
+```bash
+./build/glic_realtime_search \
+  --input test-videos/search-inputs/video_00.png \
+  --input test-videos/search-inputs/video_01.png \
+  --output-dir search-runs/pilot \
+  --duration-seconds 18000 --backend metal --scale 1
+
+python3 scripts/build_search_catalog.py search-runs/pilot
+```
+
+5時間の無人実行は、API credentialを子プロセスへ渡さず、`caffeinate`、空き容量監視、二重起動防止、signal checkpointを行うsupervisorから起動できます。`status.json`、`supervisor-status.json`、`archive.json`、`candidates.ndjson` が進捗と復旧元です。同一入力・seed・backendだけが `--resume` でき、内容不一致は拒否されます。
+
+```bash
+SEARCH_BIN="$PWD/build/glic_realtime_search" \
+SEARCH_OUTPUT_DIR="$PWD/search-runs/unattended" \
+SEARCH_DURATION_SECONDS=18000 SEARCH_BACKEND=metal MIN_FREE_GIB=45 \
+SEARCH_INPUT_ARGS='--input test-videos/search-inputs/video_00.png --input test-videos/search-inputs/video_01.png --scale 1' \
+scripts/run_search_supervisor.sh
+```
+
 ### プリセットオプション
 
 | オプション | 説明 |
@@ -421,6 +447,32 @@ python3 tools/evaluate_effect_difference.py input.mov \
 ```
 
 The evaluator requires NumPy and OpenCV from `requirements-qa.txt`. Only `VISIBLE` and `STRONG` pass the meaningful-glitch gate.
+
+### Unattended preset search
+
+`glic_realtime_search` is a deterministic, API-free MAP-Elites search for technically diverse preset candidates. It evaluates multiple inputs across two fixed seeds and eight frame phases, rejects no-ops, destructive collapse, clipping, input-independent noise, and sub-15fps candidates, then keeps up to four elites in each of 81 behavior cells. Full evaluation-output hashes and representative-image hashes prevent visually identical recipes from consuming archive slots.
+
+This is a technical-diversity pilot, not a model of aesthetic quality. Use the generated static catalog for the final visual selection. Inputs already reduced from Full HD to 480×270 should use `--scale 1`.
+
+```bash
+./build/glic_realtime_search \
+  --input test-videos/search-inputs/video_00.png \
+  --input test-videos/search-inputs/video_01.png \
+  --output-dir search-runs/pilot \
+  --duration-seconds 18000 --backend metal --scale 1
+
+python3 scripts/build_search_catalog.py search-runs/pilot
+```
+
+For a five-hour unattended run, `run_search_supervisor.sh` adds `caffeinate`, disk-space checks, an atomic lock, credential-free child environment, logs, and graceful checkpoints. Resume is refused when the input content, seed, scale, or resolved backend differs from `run-config.json`.
+
+```bash
+SEARCH_BIN="$PWD/build/glic_realtime_search" \
+SEARCH_OUTPUT_DIR="$PWD/search-runs/unattended" \
+SEARCH_DURATION_SECONDS=18000 SEARCH_BACKEND=metal MIN_FREE_GIB=45 \
+SEARCH_INPUT_ARGS='--input test-videos/search-inputs/video_00.png --input test-videos/search-inputs/video_01.png --scale 1' \
+scripts/run_search_supervisor.sh
+```
 
 ### Preset Options
 

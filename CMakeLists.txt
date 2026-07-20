@@ -104,11 +104,16 @@ target_link_libraries(glic_realtime_bench PRIVATE glic_core)
 add_executable(glic_realtime_filter tools/realtime_filter.cpp)
 target_link_libraries(glic_realtime_filter PRIVATE glic_core)
 
+add_executable(glic_realtime_search tools/realtime_search.cpp)
+target_link_libraries(glic_realtime_search PRIVATE glic_core)
+
 # Compiler warnings
 if(MSVC)
     target_compile_options(glic_core PRIVATE /W4)
+    target_compile_options(glic_realtime_search PRIVATE /W4)
 else()
     target_compile_options(glic_core PRIVATE -Wall -Wextra -O3)
+    target_compile_options(glic_realtime_search PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 include(CTest)
@@ -133,10 +138,13 @@ endif()
 
 # Installation
 install(TARGETS glic glic_realtime_bench glic_realtime_filter
+                glic_realtime_search
         RUNTIME DESTINATION bin)
 install(PROGRAMS scripts/process_video.py
         DESTINATION bin
         RENAME glic_process_video)
+install(PROGRAMS scripts/run_search_supervisor.sh scripts/build_search_catalog.py
+        DESTINATION bin)
 install(DIRECTORY presets/
         DESTINATION share/glic-metal/presets)
 if(APPLE)

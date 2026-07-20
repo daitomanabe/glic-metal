@@ -135,6 +135,8 @@ makeMetalPresetUniform(const RealtimePrepareOptions &options) {
         static_cast<uint32_t>(normalizeBlockSize(source.minBlockSize));
     destination.maxBlockSize =
         static_cast<uint32_t>(normalizeBlockSize(source.maxBlockSize));
+    if (destination.minBlockSize > destination.maxBlockSize)
+      std::swap(destination.minBlockSize, destination.maxBlockSize);
     destination.predictionMethod =
         static_cast<int32_t>(source.predictionMethod);
     destination.quantizationValue =

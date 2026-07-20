@@ -367,10 +367,10 @@ private:
             (predictionCode + static_cast<int>(config.encodingMethod)) % 6);
     const uint64_t heldFrame = frameIndex_ / holdFrames;
     const auto &anchorConfig = options_.config.channels[0];
-    const int anchorMin =
-        realtime::normalizeBlockSize(anchorConfig.minBlockSize);
-    const int anchorMax =
-        realtime::normalizeBlockSize(anchorConfig.maxBlockSize);
+    int anchorMin = realtime::normalizeBlockSize(anchorConfig.minBlockSize);
+    int anchorMax = realtime::normalizeBlockSize(anchorConfig.maxBlockSize);
+    if (anchorMin > anchorMax)
+      std::swap(anchorMin, anchorMax);
     const int effectBlock = std::clamp(
         std::max(anchorMin * 8, std::min(anchorMax * 2, 64)), 16, 64);
 

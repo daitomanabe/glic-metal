@@ -169,6 +169,34 @@ bool runBackend(glic::RealtimeBackendKind kind,
     }
   }
 
+  // Search candidates are canonicalized, but the public API must still treat
+  // an inverted block-size range consistently across CPU and Metal.
+  glic::CodecConfig invertedConfig;
+  for (auto &channel : invertedConfig.channels) {
+    channel.minBlockSize = 128;
+    channel.maxBlockSize = 4;
+  }
+  glic::RealtimePrepareOptions invertedOptions{
+      .width = width,
+      .height = height,
+      .config = invertedConfig,
+      .seed = 12345,
+  };
+  if (!backend->prepare(invertedOptions, error) ||
+      !backend->process(input, first, 13, error)) {
+    std::cerr << backend->name()
+              << " inverted block range test failed: " << error << '\n';
+    return false;
+  }
+  for (auto &channel : invertedOptions.config.channels)
+    std::swap(channel.minBlockSize, channel.maxBlockSize);
+  if (!backend->prepare(invertedOptions, error) ||
+      !backend->process(input, second, 13, error) || first != second) {
+    std::cerr << backend->name()
+              << " block range normalization is inconsistent\n";
+    return false;
+  }
+
   glic::CodecConfig offConfig;
   if (!glic::PresetLoader::loadPresetByName(GLIC_TEST_PRESETS_DIR,
                                             presets.front(), offConfig)) {
