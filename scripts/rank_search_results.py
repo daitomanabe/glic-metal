@@ -19,8 +19,18 @@ from typing import Any, Iterable, Sequence
 from urllib.parse import quote
 
 
-SCHEMA = "glic-search-ranking-v1"
-POLICY_VERSION = "pareto-perceptual-mmr-v1"
+SCHEMA = "glic-search-ranking-v2"
+POLICY_VERSION = "pareto-perceptual-mmr-v2"
+PERFORMANCE_CERTIFICATION_SCHEMA = "glic-search-performance-certifications-v1"
+PERFORMANCE_POLICY_VERSION = "metal-960x540-p95-30fps-v1"
+PERFORMANCE_BACKEND = "metal"
+PERFORMANCE_WIDTH = 960
+PERFORMANCE_HEIGHT = 540
+PERFORMANCE_MIN_WARMUP_FRAMES = 10
+PERFORMANCE_MIN_MEASURED_FRAMES = 120
+PERFORMANCE_REQUIRED_FPS = 30.0
+PERFORMANCE_MAX_P95_MS = 1000.0 / PERFORMANCE_REQUIRED_FPS
+RECIPE_SHA256_METHOD = "sha256-utf8-canonical-json-v1"
 REQUIRED_METRICS = (
     "mae",
     "changed_ratio",
@@ -102,6 +112,46 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+class CertificationValidationError(ValueError):
+    """The certification sidecar cannot be trusted as a complete snapshot."""
+
+
+def reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise CertificationValidationError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def reject_nonfinite_json_constant(value: str) -> None:
+    raise CertificationValidationError(f"non-finite JSON constant: {value}")
+
+
+def load_strict_json(path: Path) -> Any:
+    return json.loads(
+        path.read_text(encoding="utf-8"),
+        object_pairs_hook=reject_duplicate_json_keys,
+        parse_constant=reject_nonfinite_json_constant,
+    )
+
+
+def canonical_recipe_json(recipe: dict[str, Any]) -> str:
+    """Canonical recipe identity: sorted UTF-8 JSON with no insignificant whitespace."""
+    return json.dumps(
+        recipe,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def canonical_recipe_sha256(recipe: dict[str, Any]) -> str:
+    return hashlib.sha256(canonical_recipe_json(recipe).encode("utf-8")).hexdigest()
+
+
 def finite(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
@@ -110,6 +160,29 @@ def finite(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def identity_text(value: Any) -> str:
+    """Preserve valid zero-valued numeric IDs while rejecting empty identities."""
+    if value is None or value == "" or isinstance(value, bool):
+        return ""
+    return str(value)
+
+
+def first_identity(*values: Any) -> str:
+    for value in values:
+        text = identity_text(value)
+        if text:
+            return text
+    return ""
+
+
+def valid_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -232,8 +305,8 @@ def hard_gate_reasons(metrics: dict[str, Any]) -> list[str]:
             values[name] = value
     if reasons:
         return reasons
-    if values["mean_process_ms"] > 1000.0 / 15.0:
-        reasons.append("below_15_fps")
+    if values["mean_process_ms"] > 1000.0 / 30.0:
+        reasons.append("below_30_fps_lowres_prefilter")
     if values["mean_process_ms"] <= 0.0:
         reasons.append("invalid_process_time")
     if (
@@ -257,11 +330,166 @@ def hard_gate_reasons(metrics: dict[str, Any]) -> list[str]:
     return reasons
 
 
+def performance_gate_reasons(certification: dict[str, Any] | None) -> list[str]:
+    if not isinstance(certification, dict):
+        return ["missing_960x540_performance_certification"]
+
+    reasons: list[str] = []
+    status = certification.get("status")
+    if status != "passed":
+        reasons.append(f"performance_certification_status:{status or 'missing'}")
+    if certification.get("backend") != PERFORMANCE_BACKEND:
+        reasons.append("performance_backend_mismatch")
+
+    width = finite(certification.get("width"))
+    height = finite(certification.get("height"))
+    if width != PERFORMANCE_WIDTH or height != PERFORMANCE_HEIGHT:
+        reasons.append("performance_resolution_mismatch")
+
+    warmup_frames = finite(certification.get("warmup_frames"))
+    measured_frames = finite(certification.get("frames_measured"))
+    if warmup_frames is None or warmup_frames < PERFORMANCE_MIN_WARMUP_FRAMES:
+        reasons.append("insufficient_performance_warmup_frames")
+    if measured_frames is None or measured_frames < PERFORMANCE_MIN_MEASURED_FRAMES:
+        reasons.append("insufficient_performance_measured_frames")
+    if certification.get("process_passed") is not True:
+        reasons.append("performance_process_failed")
+    if certification.get("performance_passed") is not True:
+        reasons.append("performance_gate_failed")
+
+    mean_ms = finite(certification.get("mean_ms"))
+    p95_ms = finite(certification.get("p95_ms"))
+    if mean_ms is None or mean_ms <= 0.0 or p95_ms is None or p95_ms <= 0.0:
+        reasons.append("invalid_performance_measurement")
+    elif mean_ms > PERFORMANCE_MAX_P95_MS or p95_ms > PERFORMANCE_MAX_P95_MS:
+        reasons.append("below_30_fps_p95_at_960x540")
+
+    p95_fps = finite(certification.get("p95_fps"))
+    expected_p95_fps = None if p95_ms is None or p95_ms <= 0.0 else 1000.0 / p95_ms
+    if (
+        p95_fps is None
+        or p95_fps <= 0.0
+        or expected_p95_fps is None
+        or not math.isclose(p95_fps, expected_p95_fps, rel_tol=1e-4, abs_tol=1e-3)
+    ):
+        reasons.append("invalid_certified_p95_fps")
+    return reasons
+
+
+def _certification_records(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw_records = payload.get("records")
+    indexed: dict[str, dict[str, Any]] = {}
+    if isinstance(raw_records, dict):
+        source = raw_records.items()
+    elif isinstance(raw_records, list):
+        source = ((str(record.get("recipe_hash") or ""), record) for record in raw_records if isinstance(record, dict))
+        if any(not isinstance(record, dict) for record in raw_records):
+            raise CertificationValidationError("performance certification records must be objects")
+    else:
+        raise CertificationValidationError("performance certification records are missing")
+
+    for raw_key, record in source:
+        key = str(raw_key)
+        if not key or not isinstance(record, dict):
+            raise CertificationValidationError("performance certification record is invalid")
+        if key in indexed:
+            raise CertificationValidationError(f"duplicate performance certification row: {key}")
+        if str(record.get("recipe_hash") or "") != key:
+            raise CertificationValidationError(f"performance certification key mismatch: {key}")
+        indexed[key] = record
+    return indexed
+
+
+def validate_performance_certifications(
+    payload: Any, candidates: list[dict[str, Any]], expected_archive_sha256: str
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(payload, dict) or payload.get("schema") != PERFORMANCE_CERTIFICATION_SCHEMA:
+        raise CertificationValidationError("performance certification schema is not supported")
+
+    source = payload.get("source")
+    archive_sha256 = source.get("archive_sha256") if isinstance(source, dict) else None
+    if archive_sha256 != expected_archive_sha256:
+        raise CertificationValidationError("performance certification archive snapshot does not match")
+    if not isinstance(source, dict):
+        raise CertificationValidationError("performance certification source is missing")
+    for name in ("input_sha256", "binary_sha256", "metallib_sha256"):
+        if not valid_sha256(source.get(name)):
+            raise CertificationValidationError(
+                f"performance certification source identity is invalid: {name}"
+            )
+    hardware = source.get("hardware")
+    if not isinstance(hardware, dict) or not valid_sha256(hardware.get("fingerprint")):
+        raise CertificationValidationError(
+            "performance certification hardware identity is invalid"
+        )
+
+    policy = payload.get("policy")
+    if not isinstance(policy, dict):
+        raise CertificationValidationError("performance certification policy is missing")
+    if policy.get("version") != PERFORMANCE_POLICY_VERSION:
+        raise CertificationValidationError("performance certification policy version is not supported")
+    if policy.get("recipe_sha256_method") != RECIPE_SHA256_METHOD:
+        raise CertificationValidationError("performance certification recipe identity method is not supported")
+    expected_policy_numbers = {
+        "width": float(PERFORMANCE_WIDTH),
+        "height": float(PERFORMANCE_HEIGHT),
+        "warmup_frames": float(PERFORMANCE_MIN_WARMUP_FRAMES),
+        "measured_frames": float(PERFORMANCE_MIN_MEASURED_FRAMES),
+        "required_fps": PERFORMANCE_REQUIRED_FPS,
+        "max_p95_ms": PERFORMANCE_MAX_P95_MS,
+    }
+    if policy.get("backend") != PERFORMANCE_BACKEND:
+        raise CertificationValidationError("performance certification policy backend is not Metal")
+    for name, expected in expected_policy_numbers.items():
+        value = finite(policy.get(name))
+        if value is None or not math.isclose(value, expected, rel_tol=0.0, abs_tol=1e-9):
+            raise CertificationValidationError(f"performance certification policy mismatch: {name}")
+
+    expected: dict[str, tuple[str, str]] = {}
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            raise CertificationValidationError("catalog candidate is not an object")
+        record = candidate.get("record") if isinstance(candidate.get("record"), dict) else {}
+        recipe_hash = first_identity(candidate.get("recipe_hash"), record.get("recipe_hash"))
+        candidate_id = first_identity(candidate.get("candidate_id"), record.get("candidate_id"))
+        recipe = record.get("recipe") if isinstance(record.get("recipe"), dict) else None
+        if not recipe_hash or not candidate_id or recipe is None:
+            raise CertificationValidationError("catalog candidate lacks performance identity")
+        if recipe_hash in expected:
+            raise CertificationValidationError(f"duplicate catalog recipe hash: {recipe_hash}")
+        try:
+            recipe_sha256 = canonical_recipe_sha256(recipe)
+        except (TypeError, ValueError) as error:
+            raise CertificationValidationError(
+                f"catalog recipe is not canonicalizable: {recipe_hash}: {error}"
+            ) from error
+        expected[recipe_hash] = (candidate_id, recipe_sha256)
+
+    indexed = _certification_records(payload)
+    missing = sorted(set(expected) - set(indexed))
+    extra = sorted(set(indexed) - set(expected))
+    if missing or extra:
+        raise CertificationValidationError(
+            f"performance certification row set mismatch: missing={missing[:3]} extra={extra[:3]}"
+        )
+    for recipe_hash, (candidate_id, recipe_sha256) in expected.items():
+        certification = indexed[recipe_hash]
+        if identity_text(certification.get("candidate_id")) != candidate_id:
+            raise CertificationValidationError(
+                f"performance certification candidate identity mismatch: {recipe_hash}"
+            )
+        if certification.get("recipe_sha256") != recipe_sha256:
+            raise CertificationValidationError(
+                f"performance certification recipe identity mismatch: {recipe_hash}"
+            )
+    return indexed
+
+
 def get_analysis(
     candidate: dict[str, Any], by_recipe: dict[str, dict[str, Any]], by_candidate: dict[str, dict[str, Any]]
 ) -> dict[str, Any] | None:
-    recipe_hash = str(candidate.get("recipe_hash") or "")
-    candidate_id = str(candidate.get("candidate_id") or "")
+    recipe_hash = identity_text(candidate.get("recipe_hash"))
+    candidate_id = identity_text(candidate.get("candidate_id"))
     return by_recipe.get(recipe_hash) or by_candidate.get(candidate_id)
 
 
@@ -292,7 +520,10 @@ def recipe_family(recipe: dict[str, Any]) -> str:
 
 
 def prepare_items(
-    candidates: list[dict[str, Any]], image_analysis: dict[str, Any], run_dir: Path
+    candidates: list[dict[str, Any]],
+    image_analysis: dict[str, Any],
+    certifications_by_recipe: dict[str, dict[str, Any]],
+    run_dir: Path,
 ) -> list[dict[str, Any]]:
     records = image_analysis.get("records", []) if isinstance(image_analysis, dict) else []
     by_recipe = {
@@ -308,9 +539,19 @@ def prepare_items(
     items: list[dict[str, Any]] = []
     for candidate in sorted(
         candidates,
-        key=lambda row: (str(row.get("recipe_hash") or ""), str(row.get("candidate_id") or "")),
+        key=lambda row: (
+            identity_text(row.get("recipe_hash")),
+            identity_text(row.get("candidate_id")),
+        ),
     ):
         record = candidate.get("record") if isinstance(candidate.get("record"), dict) else {}
+        recipe_hash = first_identity(candidate.get("recipe_hash"), record.get("recipe_hash"))
+        recipe = record.get("recipe") if isinstance(record.get("recipe"), dict) else {}
+        certification = certifications_by_recipe.get(recipe_hash)
+        performance_reasons = performance_gate_reasons(certification)
+        certification_report = dict(certification) if isinstance(certification, dict) else {}
+        certification_report["certified"] = not performance_reasons
+        certification_report["gate_reasons"] = performance_reasons
         metrics = raw_metrics(candidate)
         analysis = get_analysis(candidate, by_recipe, by_candidate)
         preview_path = str(
@@ -319,8 +560,8 @@ def prepare_items(
             or record.get("preview")
             or ""
         )
-        reasons = hard_gate_reasons(metrics)
-        if not str(candidate.get("recipe_hash") or record.get("recipe_hash") or ""):
+        reasons = hard_gate_reasons(metrics) + performance_reasons
+        if not recipe_hash:
             reasons.append("missing_recipe_hash")
         if not preview_path:
             reasons.append("missing_preview_path")
@@ -350,12 +591,17 @@ def prepare_items(
                 reasons.append("incomplete_liveliness:" + ",".join(missing_liveliness))
             if missing_perceptual:
                 reasons.append("incomplete_perceptual:" + ",".join(missing_perceptual))
-        recipe = record.get("recipe") if isinstance(record.get("recipe"), dict) else {}
         mean_ms = finite(metrics.get("mean_process_ms"))
+        certified_p95_fps = finite(certification_report.get("p95_fps"))
         changed = finite(metrics.get("changed_ratio"))
         minimum_changed = finite(metrics.get("min_input_changed_ratio"))
         derived = {
             "mean_fps": None if mean_ms is None or mean_ms <= 0 else 1000.0 / mean_ms,
+            "search_mean_fps": None if mean_ms is None or mean_ms <= 0 else 1000.0 / mean_ms,
+            "certified_p95_fps": certified_p95_fps,
+            "certified_headroom_ratio": None
+            if certified_p95_fps is None
+            else certified_p95_fps / PERFORMANCE_REQUIRED_FPS,
             "input_consistency": None
             if changed is None or changed <= 0 or minimum_changed is None
             else clamp(minimum_changed / changed),
@@ -367,8 +613,10 @@ def prepare_items(
             else 1.0 - float(metrics["clipping_ratio"]),
         }
         item = {
-            "candidate_id": str(candidate.get("candidate_id") or ""),
-            "recipe_hash": str(candidate.get("recipe_hash") or record.get("recipe_hash") or ""),
+            "candidate_id": first_identity(
+                candidate.get("candidate_id"), record.get("candidate_id")
+            ),
+            "recipe_hash": recipe_hash,
             "preview_hash": str(record.get("preview_hash") or ""),
             "evaluation_hash": str(record.get("evaluation_hash") or ""),
             "archive_cell": str(candidate.get("archive_cell") or record.get("cell") or ""),
@@ -378,6 +626,7 @@ def prepare_items(
             "color_space": recipe.get("color_space"),
             "eligible": not reasons,
             "hard_gate": {"passed": not reasons, "reasons": reasons},
+            "performance_certification": certification_report,
             "raw_metrics": {name: finite(metrics.get(name)) for name in REQUIRED_METRICS},
             "liveliness": {name: finite(liveliness.get(name)) for name in LIVELINESS_METRICS},
             "perceptual": perceptual,
@@ -420,7 +669,12 @@ def raw_calibration(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         calibration[name] = summarize((item["liveliness"].get(name) for item in eligible), len(eligible))
     for name in PERCEPTUAL_SCALARS:
         calibration[name] = summarize((item["perceptual"].get(name) for item in eligible), len(eligible))
-    calibration["mean_fps"] = summarize((item["derived_metrics"].get("mean_fps") for item in eligible), len(eligible))
+    calibration["search_mean_fps"] = summarize(
+        (item["derived_metrics"].get("search_mean_fps") for item in eligible), len(eligible)
+    )
+    calibration["certified_p95_fps"] = summarize(
+        (item["derived_metrics"].get("certified_p95_fps") for item in eligible), len(eligible)
+    )
     return calibration
 
 
@@ -429,7 +683,7 @@ def score_families(item: dict[str, Any], calibration: dict[str, dict[str, Any]])
     live = item["liveliness"]
     visual = item["perceptual"]
     consistency = item["derived_metrics"]["input_consistency"]
-    fps = item["derived_metrics"]["mean_fps"]
+    fps = item["derived_metrics"]["certified_p95_fps"]
     controlled = geometric_mean(
         (
             plateau(metric["mae"], 8.0, 25.0, 55.0, 75.0),
@@ -457,7 +711,7 @@ def score_families(item: dict[str, Any], calibration: dict[str, dict[str, Any]])
         )
     )
     temporal = plateau(metric["temporal_residual_delta"], 0.04, 0.08, 0.18, 0.24)
-    performance = ramp_up(fps, 15.0, 60.0)
+    performance = ramp_up(fps, PERFORMANCE_REQUIRED_FPS, 60.0)
     presence = geometric_mean(
         (
             calibrated_plateau(live["lum_mean"], calibration["lum_mean"]),
@@ -1009,6 +1263,13 @@ def rank_items(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[
         else selected_median / legacy_median - 1.0
     )
     exclusive_counts = Counter(item["tier"] for item in items)
+    certification_status_counts = Counter(
+        str(item.get("performance_certification", {}).get("status") or "missing")
+        for item in items
+    )
+    performance_certified = sum(
+        item.get("performance_certification", {}).get("certified") is True for item in items
+    )
     selected_count = len(selected)
     metadata = {
         "raw_metrics": calibration,
@@ -1019,6 +1280,9 @@ def rank_items(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[
             "input": len(items),
             "eligible": len(eligible),
             "excluded": len(items) - len(eligible),
+            "performance_certified": performance_certified,
+            "performance_excluded": len(items) - performance_certified,
+            "performance_status": dict(sorted(certification_status_counts.items())),
             "clusters": len({item["cluster_id"] for item in eligible}),
             "finalist": min(12, selected_count),
             "shortlist": min(32, selected_count),
@@ -1068,12 +1332,25 @@ def build_html(payload: dict[str, Any], output_dir: Path, media_root: Path) -> s
             f'<i><b style="width:{clamp(score) * 100:.1f}%"></b></i><em>{score:.2f}</em></div>'
             for name, score in item["family_scores"].items()
         )
+        certification = item.get("performance_certification", {})
+        p95_ms = finite(certification.get("p95_ms"))
+        p95_fps = finite(certification.get("p95_fps"))
+        measured_frames = finite(certification.get("frames_measured"))
+        certification_text = (
+            f'{html.escape(str(certification.get("backend") or "unknown"))} · '
+            f'{html.escape(str(certification.get("width") or "?"))}×'
+            f'{html.escape(str(certification.get("height") or "?"))} · '
+            f'p95 {"—" if p95_ms is None else f"{p95_ms:.3f} ms"} · '
+            f'{"—" if p95_fps is None else f"{p95_fps:.1f} fps"} · '
+            f'{"—" if measured_frames is None else f"{int(measured_frames)} frames"}'
+        )
         cards.append(
             f'''<article class="card tier-{html.escape(item["tier"])}">
               {image}<div class="body">
               <div class="eyebrow">#{item["rank"]} · {html.escape(item["tier"])} · Pareto {item["pareto_front"]}</div>
               <h2>{html.escape(item["recipe_hash"])}</h2>
               <p>{html.escape(item["archive_cell"])} · {html.escape(item["recipe_family"])} · {html.escape(item["cluster_id"])}</p>
+              <div class="certification">CERTIFIED · {certification_text}</div>
               <div class="utility">balanced utility <strong>{item["core_utility"]:.3f}</strong></div>
               <div class="metrics">{family_rows}</div>
               </div></article>'''
@@ -1088,9 +1365,9 @@ def build_html(payload: dict[str, Any], output_dir: Path, media_root: Path) -> s
 <style>
 :root{{color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}*{{box-sizing:border-box}}
 body{{margin:0;background:#070707;color:#eee}}header{{position:sticky;top:0;z-index:2;padding:18px 26px;background:#090909ef;border-bottom:1px solid #292929}}h1{{margin:0 0 5px;font-size:23px}}header p,.body p{{margin:0;color:#999}}
-main{{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:16px;padding:20px}}.card{{overflow:hidden;background:#111;border:1px solid #292929;border-radius:11px}}.tier-finalist{{border-color:#69ea8b}}.media{{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#030303}}.media.empty{{display:grid;place-items:center;color:#555}}.body{{padding:15px}}.eyebrow{{color:#78ef96;font:12px ui-monospace,monospace;text-transform:uppercase}}h2{{margin:7px 0;font:600 15px ui-monospace,monospace}}.utility{{margin:13px 0 9px;color:#aaa}}.utility strong{{float:right;color:#fff}}.metric{{display:grid;grid-template-columns:125px 1fr 35px;gap:7px;align-items:center;margin:5px 0;font-size:11px;color:#aaa}}.metric i{{height:5px;background:#282828;border-radius:5px;overflow:hidden}}.metric b{{display:block;height:100%;background:#71d98b}}.metric em{{font-style:normal;text-align:right;font-family:ui-monospace,monospace}}
+main{{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:16px;padding:20px}}.card{{overflow:hidden;background:#111;border:1px solid #292929;border-radius:11px}}.tier-finalist{{border-color:#69ea8b}}.media{{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#030303}}.media.empty{{display:grid;place-items:center;color:#555}}.body{{padding:15px}}.eyebrow{{color:#78ef96;font:12px ui-monospace,monospace;text-transform:uppercase}}h2{{margin:7px 0;font:600 15px ui-monospace,monospace}}.certification{{margin-top:10px;padding:7px 8px;border:1px solid #28643a;border-radius:6px;color:#7bf09a;background:#102417;font:11px ui-monospace,monospace;text-transform:uppercase}}.utility{{margin:13px 0 9px;color:#aaa}}.utility strong{{float:right;color:#fff}}.metric{{display:grid;grid-template-columns:125px 1fr 35px;gap:7px;align-items:center;margin:5px 0;font-size:11px;color:#aaa}}.metric i{{height:5px;background:#282828;border-radius:5px;overflow:hidden}}.metric b{{display:block;height:100%;background:#71d98b}}.metric em{{font-style:normal;text-align:right;font-family:ui-monospace,monospace}}
 </style></head><body><header><h1>GLIC Metal ranked presets</h1>
-<p>{metadata["counts"]["input"]}候補 → {metadata["counts"]["clusters"]}知覚クラスタ → Top 12 / 32 / 64 · Top 12 median diversity {improvement_text} vs legacy quality順 · inactive: {html.escape(", ".join(inactive) or "none")} · {html.escape(metadata["generated_at"])}</p></header>
+<p>{metadata["counts"]["input"]}候補 / {metadata["counts"]["performance_certified"]}件 960×540 Metal 30fps認証 / {metadata["counts"]["performance_excluded"]}件 性能除外 → {metadata["counts"]["clusters"]}知覚クラスタ → Top 12 / 32 / 64 · p95 ≤ {PERFORMANCE_MAX_P95_MS:.3f} ms · Top 12 median diversity {improvement_text} vs legacy quality順 · inactive: {html.escape(", ".join(inactive) or "none")} · {html.escape(metadata["generated_at"])}</p></header>
 <main>{''.join(cards) or '<p>No eligible candidates.</p>'}</main></body></html>'''
 
 
@@ -1108,6 +1385,19 @@ def write_csv(path: Path, candidates: list[dict[str, Any]]) -> None:
         *FAMILY_WEIGHTS.keys(),
         "knn_novelty",
         "preview_path",
+        "certified",
+        "certification_status",
+        "cert_backend",
+        "cert_width",
+        "cert_height",
+        "cert_warmup_frames",
+        "cert_frames",
+        "cert_mean_ms",
+        "cert_median_ms",
+        "cert_p95_ms",
+        "cert_p95_fps",
+        "cert_p99_ms",
+        "cert_max_ms",
         "eligible",
         "exclusion_reasons",
     ]
@@ -1122,6 +1412,23 @@ def write_csv(path: Path, candidates: list[dict[str, Any]]) -> None:
                 row = {name: item.get(name, "") for name in fields}
                 for name in FAMILY_WEIGHTS:
                     row[name] = item.get("family_scores", {}).get(name, "")
+                certification = item.get("performance_certification", {})
+                certification_fields = {
+                    "certified": certification.get("certified", False),
+                    "certification_status": certification.get("status", "missing"),
+                    "cert_backend": certification.get("backend", ""),
+                    "cert_width": certification.get("width", ""),
+                    "cert_height": certification.get("height", ""),
+                    "cert_warmup_frames": certification.get("warmup_frames", ""),
+                    "cert_frames": certification.get("frames_measured", ""),
+                    "cert_mean_ms": certification.get("mean_ms", ""),
+                    "cert_median_ms": certification.get("median_ms", ""),
+                    "cert_p95_ms": certification.get("p95_ms", ""),
+                    "cert_p95_fps": certification.get("p95_fps", ""),
+                    "cert_p99_ms": certification.get("p99_ms", ""),
+                    "cert_max_ms": certification.get("max_ms", ""),
+                }
+                row.update(certification_fields)
                 row["exclusion_reasons"] = ";".join(item["hard_gate"]["reasons"])
                 writer.writerow(row)
             handle.flush()
@@ -1146,6 +1453,7 @@ def sanitized_item(item: dict[str, Any]) -> dict[str, Any]:
         "color_space",
         "eligible",
         "hard_gate",
+        "performance_certification",
         "raw_metrics",
         "liveliness",
         "perceptual",
@@ -1174,6 +1482,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--catalog", type=Path)
     parser.add_argument("--image-analysis", type=Path)
+    parser.add_argument("--performance-certifications", type=Path)
     parser.add_argument("--output-dir", type=Path)
     return parser.parse_args()
 
@@ -1183,12 +1492,19 @@ def main() -> int:
     run_dir = args.run_dir.expanduser().resolve()
     catalog_path = (args.catalog or run_dir / "catalog.json").expanduser().resolve()
     analysis_path = (args.image_analysis or run_dir / "image-analysis.json").expanduser().resolve()
+    certifications_path = (
+        args.performance_certifications or run_dir / "performance-certifications.json"
+    ).expanduser().resolve()
     output_dir = (args.output_dir or run_dir).expanduser().resolve()
     try:
         catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
         image_analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+        performance_certifications = load_strict_json(certifications_path)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         print(f"ranking input is not readable: {error}", file=sys.stderr)
+        return 2
+    except CertificationValidationError as error:
+        print(f"performance certification input is invalid: {error}", file=sys.stderr)
         return 2
     candidates = catalog.get("candidates") if isinstance(catalog, dict) else None
     if not isinstance(candidates, list):
@@ -1212,7 +1528,15 @@ def main() -> int:
         print("catalog and image analysis came from different archive snapshots", file=sys.stderr)
         return 3
 
-    items = prepare_items(candidates, image_analysis, run_dir)
+    try:
+        certifications_by_recipe = validate_performance_certifications(
+            performance_certifications, candidates, analysis_archive_sha
+        )
+    except CertificationValidationError as error:
+        print(f"performance certification validation failed: {error}", file=sys.stderr)
+        return 3
+
+    items = prepare_items(candidates, image_analysis, certifications_by_recipe, run_dir)
     ranked, ranking_metadata = rank_items(items)
     generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     metadata = {
@@ -1224,6 +1548,8 @@ def main() -> int:
             "catalog_generated_at": catalog.get("metadata", {}).get("generated_at"),
             "image_analysis": str(analysis_path),
             "image_analysis_generated_at": image_analysis.get("generated_at"),
+            "performance_certifications": str(certifications_path),
+            "performance_certifications_generated_at": performance_certifications.get("generated_at"),
             "archive_sha256": image_analysis.get("source", {}).get("archive_sha256"),
             "backend": catalog.get("metadata", {}).get("backend"),
             "width": catalog.get("metadata", {}).get("render_width"),
@@ -1231,6 +1557,12 @@ def main() -> int:
             "render_scale": catalog.get("metadata", {}).get("render_scale"),
         },
         "counts": ranking_metadata["counts"],
+        "performance_certification": {
+            "schema": performance_certifications.get("schema"),
+            "policy": performance_certifications.get("policy"),
+            "source": performance_certifications.get("source"),
+            "recipe_sha256_method": RECIPE_SHA256_METHOD,
+        },
         "calibration": {
             "raw_metrics": ranking_metadata["raw_metrics"],
             "families": ranking_metadata["families"],
@@ -1243,6 +1575,7 @@ def main() -> int:
         "warnings": [
             "temporal_residual_delta is a frame-residual activity metric, not optical flow",
             "presence and shape metrics come from one representative still per preset",
+            "performance certification covers synchronous effect processing on the recorded host, not decode, display, or encode",
             "ranking is deterministic technical/perceptual triage, not a learned aesthetic judgment",
         ],
     }

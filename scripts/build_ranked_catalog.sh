@@ -10,6 +10,8 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 run_dir="${1:-}"
 python_bin="${RANKING_PYTHON:-/usr/bin/python3}"
 liveliness_runner="${VISUAL_LIVELINESS_RUNNER:-${HOME}/.codex/skills/visual-liveliness/scripts/run.sh}"
+certification_runner="${PERFORMANCE_CERTIFICATION_RUNNER:-${script_dir}/certify_search_performance.py}"
+certifier_bin="${GLIC_REALTIME_CERTIFIER:-}"
 
 if [ -z "$run_dir" ]; then
   /bin/echo "Usage: $0 SEARCH_RUN_DIR" >&2
@@ -25,6 +27,26 @@ if [ ! -x "$python_bin" ]; then
 fi
 if [ ! -f "$liveliness_runner" ]; then
   /bin/echo "visual-liveliness runner was not found: ${liveliness_runner}" >&2
+  exit 2
+fi
+if [ ! -f "$certification_runner" ]; then
+  /bin/echo "Performance certification runner was not found: ${certification_runner}" >&2
+  exit 2
+fi
+
+if [ -z "$certifier_bin" ]; then
+  for candidate in \
+    "${script_dir}/glic_realtime_certify" \
+    "${script_dir}/../build-rhizoma/glic_realtime_certify" \
+    "${script_dir}/../build/glic_realtime_certify"; do
+    if [ -x "$candidate" ]; then
+      certifier_bin="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$certifier_bin" ] || [ ! -x "$certifier_bin" ]; then
+  /bin/echo "glic_realtime_certify is not executable; build it or set GLIC_REALTIME_CERTIFIER" >&2
   exit 2
 fi
 
@@ -94,6 +116,12 @@ fi
 if ! run_stage "$python_bin" "$script_dir/build_search_catalog.py" "$run_dir" \
     --archive "$run_dir/ranking-archive.json"; then
   /bin/echo "Base catalog build failed" >&2
+  exit 1
+fi
+if ! run_stage "$python_bin" "$certification_runner" "$run_dir" \
+    --archive "$run_dir/ranking-archive.json" \
+    --binary "$certifier_bin"; then
+  /bin/echo "960x540 Metal 30fps certification failed; no uncertified ranking was published" >&2
   exit 1
 fi
 if ! run_stage "$python_bin" "$script_dir/rank_search_results.py" "$run_dir"; then

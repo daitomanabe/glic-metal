@@ -21,6 +21,7 @@ set(CORE_SOURCES
     src/effects.cpp
     src/preset_loader.cpp
     src/realtime.cpp
+    src/realtime_certification.cpp
     src/realtime_cpu.cpp
 )
 
@@ -39,6 +40,7 @@ set(HEADERS
     src/effects.hpp
     src/preset_loader.hpp
     src/realtime.hpp
+    src/realtime_certification.hpp
     src/realtime_internal.hpp
     src/realtime_cpu.hpp
     src/realtime_metal.hpp
@@ -107,19 +109,31 @@ target_link_libraries(glic_realtime_filter PRIVATE glic_core)
 add_executable(glic_realtime_search tools/realtime_search.cpp)
 target_link_libraries(glic_realtime_search PRIVATE glic_core)
 
+add_executable(glic_realtime_certify tools/realtime_certify.cpp)
+target_link_libraries(glic_realtime_certify PRIVATE glic_core)
+
 # Compiler warnings
 if(MSVC)
     target_compile_options(glic_core PRIVATE /W4)
     target_compile_options(glic_realtime_search PRIVATE /W4)
+    target_compile_options(glic_realtime_certify PRIVATE /W4)
 else()
     target_compile_options(glic_core PRIVATE -Wall -Wextra -O3)
     target_compile_options(glic_realtime_search PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(glic_realtime_certify PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 include(CTest)
 if(BUILD_TESTING)
+    add_test(NAME glic_realtime_certifier_selftest
+             COMMAND glic_realtime_certify --selftest)
+
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME glic_performance_certification_adapter_selftest
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${CMAKE_SOURCE_DIR}/scripts/certify_search_performance.py"
+                         --selftest)
         add_test(NAME glic_search_ranking
                  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/test_search_ranking.py")
     endif()
@@ -144,7 +158,7 @@ endif()
 
 # Installation
 install(TARGETS glic glic_realtime_bench glic_realtime_filter
-                glic_realtime_search
+                glic_realtime_search glic_realtime_certify
         RUNTIME DESTINATION bin)
 install(PROGRAMS scripts/process_video.py
         DESTINATION bin
@@ -152,7 +166,7 @@ install(PROGRAMS scripts/process_video.py
 install(PROGRAMS scripts/run_search_supervisor.sh scripts/build_search_catalog.py
         scripts/analyze_search_images.py scripts/perceptual_image_features.py
         scripts/rank_search_results.py scripts/build_ranked_catalog.sh
-        scripts/run_ranking_watcher.sh
+        scripts/run_ranking_watcher.sh scripts/certify_search_performance.py
         DESTINATION bin)
 install(DIRECTORY presets/
         DESTINATION share/glic-metal/presets)

@@ -1,5 +1,6 @@
 #include "glic.hpp"
 #include "realtime.hpp"
+#include "realtime_certification.hpp"
 
 #include <algorithm>
 #include <array>
@@ -88,6 +89,7 @@ struct Elite {
   std::string canonical;
   Recipe recipe;
   Metrics metrics;
+  glic::RealtimeCertificationResult realtimeGate;
   std::string cell;
   std::string previewPath;
   double quality = 0.0;
@@ -1207,8 +1209,16 @@ uint64_t configurationFingerprint(const Options &options,
       addByte(value);
     addByte(0xffu);
   };
-  addText("glic-search-config-v4");
+  addText("glic-search-config-v5");
   addText(backend);
+  addText("metal");
+  addText(std::to_string(glic::kRealtimeCertificationWidth));
+  addText(std::to_string(glic::kRealtimeCertificationHeight));
+  addText(std::to_string(glic::kRealtimeCertificationWarmupFrames));
+  addText(std::to_string(glic::kRealtimeCertificationMeasuredFrames));
+  addText(std::to_string(glic::kRealtimeCertificationTargetFps));
+  addText("ceil-n-minus-one-percentile-v1");
+  addText("synchronous-buffer-roundtrip-v1");
   addText(std::to_string(options.seed));
   addText(std::to_string(options.renderScale));
   addText(std::to_string(width));
@@ -1231,14 +1241,27 @@ std::string runConfigurationJson(const Options &options,
                                  std::string_view backend, int width,
                                  int height, uint64_t fingerprint) {
   std::ostringstream output;
-  output << "{\n  \"schema\": \"glic-realtime-search-run-config-v1\",\n"
-         << "  \"algorithm\": \"map-elites-diversity-mutation-v4\",\n"
+  output << std::fixed << std::setprecision(8)
+         << "{\n  \"schema\": \"glic-realtime-search-run-config-v2\",\n"
+         << "  \"algorithm\": \"map-elites-diversity-mutation-v5\",\n"
          << "  \"fingerprint\": \"" << hexHash(fingerprint) << "\",\n"
          << "  \"backend\": \"" << jsonEscape(backend) << "\",\n"
          << "  \"seed\": " << options.seed << ",\n"
          << "  \"render_scale\": " << options.renderScale << ",\n"
          << "  \"width\": " << width << ",\n"
-         << "  \"height\": " << height << "\n}\n";
+         << "  \"height\": " << height << ",\n"
+         << "  \"realtime_gate\": {\"backend\":\"metal\",\"width\":"
+         << glic::kRealtimeCertificationWidth << ",\"height\":"
+         << glic::kRealtimeCertificationHeight << ",\"target_fps\":"
+         << glic::kRealtimeCertificationTargetFps
+         << ",\"frame_budget_ms\":"
+         << glic::kRealtimeCertificationFrameBudgetMilliseconds
+         << ",\"warmup_frames\":"
+         << glic::kRealtimeCertificationWarmupFrames
+         << ",\"measured_frames\":"
+         << glic::kRealtimeCertificationMeasuredFrames
+         << ",\"percentile\":\"ceil-n-minus-one-v1\","
+            "\"measurement_path\":\"synchronous-buffer-roundtrip-v1\"}\n}\n";
   return output.str();
 }
 
@@ -1248,8 +1271,8 @@ std::optional<std::string> hardRejectReason(const Metrics &metrics) {
       !std::isfinite(metrics.temporalResidualDelta) ||
       !std::isfinite(metrics.meanProcessMilliseconds))
     return "non_finite_metrics";
-  if (metrics.meanProcessMilliseconds > 1000.0 / 15.0)
-    return "below_15_fps";
+  if (metrics.meanProcessMilliseconds > 1000.0 / 30.0)
+    return "below_30_fps_lowres_prefilter";
   if (metrics.mae < 8.0 || metrics.changedRatio < 0.20 ||
       metrics.minimumInputChangedRatio < 0.15)
     return "no_op";
@@ -1302,17 +1325,38 @@ double qualityScore(const Metrics &metrics) {
 
 class Archive {
 public:
-  struct ConsiderResult {
+  struct Removal {
+    std::string cell;
+    uint64_t recipeHash = 0;
+
+    bool operator==(const Removal &) const = default;
+  };
+
+  struct AdmissionPlan {
+    bool admitted = false;
+    uint64_t candidateRecipeHash = 0;
+    std::vector<Removal> removals;
+  };
+
+  struct CommitResult {
     bool admitted = false;
     std::vector<std::string> removedPreviewPaths;
   };
 
-  ConsiderResult consider(Elite elite) {
-    ConsiderResult result;
+  AdmissionPlan planAdmission(const Elite &elite) const {
+    AdmissionPlan plan;
+    plan.candidateRecipeHash = elite.recipeHash;
+
+    for (const auto &[cellName, cell] : cells_) {
+      (void)cellName;
+      if (std::any_of(cell.begin(), cell.end(), [&](const Elite &existing) {
+            return existing.recipeHash == elite.recipeHash;
+          }))
+        return plan;
+    }
+
     if (elite.previewHash != 0) {
-      for (auto cellIterator = cells_.begin();
-           cellIterator != cells_.end(); ++cellIterator) {
-        auto &existingCell = cellIterator->second;
+      for (const auto &[cellName, existingCell] : cells_) {
         const auto visualDuplicate = std::find_if(
             existingCell.begin(), existingCell.end(), [&](const Elite &existing) {
               return existing.previewHash == elite.previewHash;
@@ -1320,40 +1364,82 @@ public:
         if (visualDuplicate == existingCell.end())
           continue;
         if (visualDuplicate->quality >= elite.quality)
-          return result;
-        if (!visualDuplicate->previewPath.empty())
-          result.removedPreviewPaths.push_back(visualDuplicate->previewPath);
-        existingCell.erase(visualDuplicate);
-        if (existingCell.empty())
-          cells_.erase(cellIterator);
+          return plan;
+        plan.removals.push_back(
+            {.cell = cellName, .recipeHash = visualDuplicate->recipeHash});
         break;
       }
     }
 
-    auto &cell = cells_[elite.cell];
-    const auto duplicate =
-        std::find_if(cell.begin(), cell.end(), [&](const Elite &existing) {
-          return existing.recipeHash == elite.recipeHash;
-        });
-    if (duplicate != cell.end())
-      return {};
-    const uint64_t candidateHash = elite.recipeHash;
-    cell.push_back(std::move(elite));
-    std::sort(cell.begin(), cell.end(), [](const Elite &left, const Elite &right) {
-      if (left.quality != right.quality)
-        return left.quality > right.quality;
-      return left.recipeHash < right.recipeHash;
-    });
-
-    while (cell.size() > 4) {
-      if (!cell.back().previewPath.empty())
-        result.removedPreviewPaths.push_back(cell.back().previewPath);
-      cell.pop_back();
+    const auto target = cells_.find(elite.cell);
+    size_t effectiveSize = 0;
+    const Elite *worst = nullptr;
+    if (target != cells_.end()) {
+      for (const auto &existing : target->second) {
+        const bool alreadyRemoved =
+            std::any_of(plan.removals.begin(), plan.removals.end(),
+                        [&](const Removal &removal) {
+                          return removal.cell == elite.cell &&
+                                 removal.recipeHash == existing.recipeHash;
+                        });
+        if (alreadyRemoved)
+          continue;
+        ++effectiveSize;
+        if (worst == nullptr || ranksBefore(*worst, existing))
+          worst = &existing;
+      }
     }
-    result.admitted =
-        std::any_of(cell.begin(), cell.end(), [&](const Elite &existing) {
-          return existing.recipeHash == candidateHash;
-        });
+
+    if (effectiveSize > 4)
+      return plan;
+    if (effectiveSize == 4) {
+      if (worst == nullptr || !ranksBefore(elite, *worst))
+        return plan;
+      plan.removals.push_back(
+          {.cell = elite.cell, .recipeHash = worst->recipeHash});
+    }
+
+    plan.admitted = true;
+    return plan;
+  }
+
+  CommitResult commitAdmission(Elite elite, const AdmissionPlan &plan) {
+    CommitResult result;
+    if (!plan.admitted || plan.candidateRecipeHash != elite.recipeHash ||
+        !elite.realtimeGate.performed || !elite.realtimeGate.processPassed ||
+        !elite.realtimeGate.passed)
+      return result;
+
+    const AdmissionPlan currentPlan = planAdmission(elite);
+    if (!currentPlan.admitted || currentPlan.removals != plan.removals)
+      return result;
+
+    auto nextCells = cells_;
+    for (const auto &removal : plan.removals) {
+      auto cell = nextCells.find(removal.cell);
+      if (cell == nextCells.end())
+        return result;
+      auto existing = std::find_if(
+          cell->second.begin(), cell->second.end(), [&](const Elite &candidate) {
+            return candidate.recipeHash == removal.recipeHash;
+          });
+      if (existing == cell->second.end())
+        return result;
+      if (!existing->previewPath.empty())
+        result.removedPreviewPaths.push_back(existing->previewPath);
+      cell->second.erase(existing);
+      if (cell->second.empty())
+        nextCells.erase(cell);
+    }
+
+    auto &target = nextCells[elite.cell];
+    target.push_back(std::move(elite));
+    std::sort(target.begin(), target.end(), ranksBefore);
+    if (target.size() > 4)
+      return {};
+
+    cells_.swap(nextCells);
+    result.admitted = true;
     return result;
   }
 
@@ -1397,6 +1483,12 @@ public:
   }
 
 private:
+  static bool ranksBefore(const Elite &left, const Elite &right) {
+    if (left.quality != right.quality)
+      return left.quality > right.quality;
+    return left.recipeHash < right.recipeHash;
+  }
+
   std::map<std::string, std::vector<Elite>> cells_;
 };
 
@@ -1419,18 +1511,46 @@ std::string metricsJson(const Metrics &metrics) {
   return output.str();
 }
 
+std::string realtimeGateJson(
+    const glic::RealtimeCertificationResult &result) {
+  std::ostringstream output;
+  output << std::fixed << std::setprecision(8)
+         << "{\"performed\":" << (result.performed ? "true" : "false")
+         << ",\"process_passed\":"
+         << (result.processPassed ? "true" : "false")
+         << ",\"passed\":" << (result.passed ? "true" : "false")
+         << ",\"backend\":\"metal\""
+         << ",\"width\":" << result.width << ",\"height\":" << result.height
+         << ",\"target_fps\":" << result.targetFps
+         << ",\"frame_budget_ms\":" << result.frameBudgetMilliseconds
+         << ",\"warmup_frames\":" << result.warmupFrames
+         << ",\"measured_frames\":" << result.measuredFrames
+         << ",\"completed_frames\":" << result.completedFrames
+         << ",\"mean_wall_ms\":" << result.meanWallMilliseconds
+         << ",\"median_wall_ms\":" << result.medianWallMilliseconds
+         << ",\"p95_wall_ms\":" << result.p95WallMilliseconds
+         << ",\"p99_wall_ms\":" << result.p99WallMilliseconds
+         << ",\"max_wall_ms\":" << result.maxWallMilliseconds
+         << ",\"mean_gpu_ms\":" << result.meanGpuMilliseconds
+         << ",\"p95_gpu_ms\":" << result.p95GpuMilliseconds
+         << ",\"error\":\"" << jsonEscape(result.error) << "\"}";
+  return output.str();
+}
+
 std::string candidateJson(uint64_t candidateId, uint64_t hash,
                           std::string_view previewHash,
                           std::string_view evaluationHash,
                           std::string_view canonical, const Recipe &recipe,
-                          const Metrics &metrics, bool accepted,
+                          const Metrics &metrics,
+                          const glic::RealtimeCertificationResult &realtimeGate,
+                          bool accepted,
                           bool admitted, std::string_view rejectReason,
                           std::string_view cell, double quality,
                           std::string_view generation,
                           std::string_view parentHash) {
   std::ostringstream output;
   output << std::fixed << std::setprecision(8)
-         << "{\"schema\":\"glic-realtime-search-candidate-v1\""
+         << "{\"schema\":\"glic-realtime-search-candidate-v2\""
          << ",\"timestamp\":\"" << utcTimestamp() << "\""
          << ",\"candidate_id\":" << candidateId
          << ",\"recipe_hash\":\"" << hexHash(hash) << "\""
@@ -1445,7 +1565,9 @@ std::string candidateJson(uint64_t candidateId, uint64_t hash,
          << ",\"reject_reason\":\"" << jsonEscape(rejectReason) << "\""
          << ",\"cell\":\"" << jsonEscape(cell) << "\""
          << ",\"quality\":" << quality << ",\"metrics\":"
-         << metricsJson(metrics) << ",\"recipe\":" << recipeJson(recipe)
+         << metricsJson(metrics) << ",\"realtime_gate\":"
+         << realtimeGateJson(realtimeGate) << ",\"recipe\":"
+         << recipeJson(recipe)
          << '}';
   return output.str();
 }
@@ -1554,6 +1676,74 @@ bool parseMetrics(std::string_view json, Metrics &metrics) {
          take("mean_process_ms", metrics.meanProcessMilliseconds);
 }
 
+bool parsePassingRealtimeGate(
+    std::string_view json, glic::RealtimeCertificationResult &result) {
+  const auto performed = extractBoolean(json, "performed");
+  const auto processPassed = extractBoolean(json, "process_passed");
+  const auto passed = extractBoolean(json, "passed");
+  const auto backend = extractString(json, "backend");
+  const auto error = extractString(json, "error");
+  if (!performed || !processPassed || !passed || !backend || !error ||
+      !*performed || !*processPassed || !*passed || *backend != "metal")
+    return false;
+
+  auto take = [&](std::string_view key, double &destination) {
+    const auto value = extractNumber(json, key);
+    if (!value || !std::isfinite(*value))
+      return false;
+    destination = *value;
+    return true;
+  };
+  double width = 0.0;
+  double height = 0.0;
+  double warmupFrames = 0.0;
+  double measuredFrames = 0.0;
+  double completedFrames = 0.0;
+  if (!take("width", width) || !take("height", height) ||
+      !take("target_fps", result.targetFps) ||
+      !take("frame_budget_ms", result.frameBudgetMilliseconds) ||
+      !take("warmup_frames", warmupFrames) ||
+      !take("measured_frames", measuredFrames) ||
+      !take("completed_frames", completedFrames) ||
+      !take("mean_wall_ms", result.meanWallMilliseconds) ||
+      !take("median_wall_ms", result.medianWallMilliseconds) ||
+      !take("p95_wall_ms", result.p95WallMilliseconds) ||
+      !take("p99_wall_ms", result.p99WallMilliseconds) ||
+      !take("max_wall_ms", result.maxWallMilliseconds) ||
+      !take("mean_gpu_ms", result.meanGpuMilliseconds) ||
+      !take("p95_gpu_ms", result.p95GpuMilliseconds))
+    return false;
+
+  if (width != glic::kRealtimeCertificationWidth ||
+      height != glic::kRealtimeCertificationHeight ||
+      warmupFrames != glic::kRealtimeCertificationWarmupFrames ||
+      measuredFrames != glic::kRealtimeCertificationMeasuredFrames ||
+      completedFrames != glic::kRealtimeCertificationMeasuredFrames ||
+      std::abs(result.targetFps - glic::kRealtimeCertificationTargetFps) >
+          1.0e-8 ||
+      std::abs(result.frameBudgetMilliseconds -
+               glic::kRealtimeCertificationFrameBudgetMilliseconds) >
+          1.0e-6 ||
+      result.meanWallMilliseconds < 0.0 ||
+      result.p95WallMilliseconds < 0.0 ||
+      result.meanWallMilliseconds >
+          glic::kRealtimeCertificationFrameBudgetMilliseconds ||
+      result.p95WallMilliseconds >
+          glic::kRealtimeCertificationFrameBudgetMilliseconds)
+    return false;
+
+  result.performed = true;
+  result.processPassed = true;
+  result.passed = true;
+  result.width = static_cast<int>(width);
+  result.height = static_cast<int>(height);
+  result.warmupFrames = static_cast<uint32_t>(warmupFrames);
+  result.measuredFrames = static_cast<uint32_t>(measuredFrames);
+  result.completedFrames = static_cast<uint32_t>(completedFrames);
+  result.error = *error;
+  return true;
+}
+
 struct ResumeState {
   uint64_t nextCandidateId = 0;
   SearchCounters counters;
@@ -1575,17 +1765,21 @@ bool replayCandidateLog(const fs::path &path, ResumeState &state,
   uint64_t lineNumber = 0;
   while (std::getline(input, line)) {
     ++lineNumber;
+    const auto schema = extractString(line, "schema");
     const auto idNumber = extractNumber(line, "candidate_id");
     const auto hashText = extractString(line, "recipe_hash");
     const auto previewHashText = extractString(line, "preview_hash");
     const auto evaluationHashText = extractString(line, "evaluation_hash");
     const auto canonical = extractString(line, "canonical");
     const auto accepted = extractBoolean(line, "accepted");
+    const auto admitted = extractBoolean(line, "admitted");
     const auto rejectReason = extractString(line, "reject_reason");
-    if (!idNumber || !hashText || !canonical || !accepted || !rejectReason) {
-      std::cerr << "Ignoring malformed candidate record at line " << lineNumber
-                << '\n';
-      continue;
+    if (!schema || *schema != "glic-realtime-search-candidate-v2" ||
+        !idNumber || !hashText || !canonical || !accepted || !admitted ||
+        !rejectReason) {
+      error = "incompatible or malformed candidate record at line " +
+              std::to_string(lineNumber);
+      return false;
     }
     const uint64_t candidateId = static_cast<uint64_t>(*idNumber);
     uint64_t hash = 0;
@@ -1632,21 +1826,28 @@ bool replayCandidateLog(const fs::path &path, ResumeState &state,
     }
     ++state.counters.evaluated;
     if (!*accepted) {
+      if (*admitted) {
+        error = "rejected candidate is marked admitted at line " +
+                std::to_string(lineNumber);
+        return false;
+      }
       ++state.counters.rejected;
       continue;
     }
-    ++state.counters.accepted;
 
     const auto cell = extractString(line, "cell");
     const auto quality = extractNumber(line, "quality");
     Recipe recipe;
     Metrics metrics;
-    if (!cell || !quality || !decodeCanonical(*canonical, recipe) ||
-        !parseMetrics(line, metrics)) {
-      error = "accepted candidate cannot be replayed at line " +
+    glic::RealtimeCertificationResult realtimeGate;
+    if (!*admitted || !cell || !quality ||
+        !decodeCanonical(*canonical, recipe) || !parseMetrics(line, metrics) ||
+        !parsePassingRealtimeGate(line, realtimeGate)) {
+      error = "accepted candidate lacks a passing 960x540 Metal gate at line " +
               std::to_string(lineNumber);
       return false;
     }
+    ++state.counters.accepted;
     Elite elite;
     elite.candidateId = candidateId;
     elite.recipeHash = hash;
@@ -1655,10 +1856,17 @@ bool replayCandidateLog(const fs::path &path, ResumeState &state,
     elite.canonical = *canonical;
     elite.recipe = recipe;
     elite.metrics = metrics;
+    elite.realtimeGate = realtimeGate;
     elite.cell = *cell;
     elite.quality = *quality;
     elite.previewPath = "elites/" + *hashText + ".png";
-    state.archive.consider(std::move(elite));
+    const auto plan = state.archive.planAdmission(elite);
+    const auto result = state.archive.commitAdmission(std::move(elite), plan);
+    if (!result.admitted) {
+      error = "accepted candidate cannot be transactionally replayed at line " +
+              std::to_string(lineNumber);
+      return false;
+    }
   }
   return true;
 }
@@ -1669,16 +1877,26 @@ std::string archiveJson(const Options &options, std::string_view backend,
                         std::string_view stopReason) {
   std::ostringstream output;
   output << std::fixed << std::setprecision(8)
-         << "{\n  \"schema\": \"glic-realtime-search-archive-v1\",\n"
+         << "{\n  \"schema\": \"glic-realtime-search-archive-v2\",\n"
          << "  \"updated_at\": \"" << utcTimestamp() << "\",\n"
          << "  \"running\": " << (running ? "true" : "false") << ",\n"
          << "  \"stop_reason\": \"" << jsonEscape(stopReason) << "\",\n"
          << "  \"seed\": " << options.seed << ",\n"
-         << "  \"algorithm\": \"map-elites-diversity-mutation-v4\",\n"
+         << "  \"algorithm\": \"map-elites-diversity-mutation-v5\",\n"
          << "  \"backend\": \"" << jsonEscape(backend) << "\",\n"
          << "  \"render_scale\": " << options.renderScale << ",\n"
          << "  \"width\": " << width << ",\n"
          << "  \"height\": " << height << ",\n"
+         << "  \"realtime_gate\": {\"backend\":\"metal\",\"width\":"
+         << glic::kRealtimeCertificationWidth << ",\"height\":"
+         << glic::kRealtimeCertificationHeight << ",\"target_fps\":"
+         << glic::kRealtimeCertificationTargetFps
+         << ",\"frame_budget_ms\":"
+         << glic::kRealtimeCertificationFrameBudgetMilliseconds
+         << ",\"warmup_frames\":"
+         << glic::kRealtimeCertificationWarmupFrames
+         << ",\"measured_frames\":"
+         << glic::kRealtimeCertificationMeasuredFrames << "},\n"
          << "  \"frame_phases\": [";
   for (size_t index = 0; index < kFramePhases.size(); ++index) {
     if (index != 0)
@@ -1718,6 +1936,8 @@ std::string archiveJson(const Options &options, std::string_view backend,
              << "\",\"quality\":" << elite.quality
              << ",\"preview\":\"" << jsonEscape(elite.previewPath)
              << "\",\"metrics\":" << metricsJson(elite.metrics)
+             << ",\"realtime_gate\":"
+             << realtimeGateJson(elite.realtimeGate)
              << ",\"recipe\":" << recipeJson(elite.recipe) << '}';
       if (index + 1 != elites.size())
         output << ',';
@@ -1739,12 +1959,17 @@ std::string statusJson(const Options &options, std::string_view backend,
                        std::string_view reason) {
   std::ostringstream output;
   output << std::fixed << std::setprecision(3)
-         << "{\n  \"schema\": \"glic-realtime-search-status-v1\",\n"
+         << "{\n  \"schema\": \"glic-realtime-search-status-v2\",\n"
          << "  \"heartbeat_at\": \"" << utcTimestamp() << "\",\n"
          << "  \"running\": " << (running ? "true" : "false") << ",\n"
          << "  \"reason\": \"" << jsonEscape(reason) << "\",\n"
          << "  \"backend\": \"" << jsonEscape(backend) << "\",\n"
          << "  \"width\": " << width << ", \"height\": " << height
+         << ",\n  \"required_realtime\": {\"backend\":\"metal\","
+            "\"width\":"
+         << glic::kRealtimeCertificationWidth << ",\"height\":"
+         << glic::kRealtimeCertificationHeight << ",\"target_fps\":"
+         << glic::kRealtimeCertificationTargetFps << "}"
          << ",\n  \"seed\": " << options.seed
          << ",\n  \"elapsed_seconds\": " << elapsedSeconds
          << ",\n  \"duration_seconds\": " << options.durationSeconds
@@ -1852,6 +2077,21 @@ int main(int argc, char **argv) {
     return 4;
   }
   const std::string backendName = backend->name();
+  if (backendName != "metal" || !backend->isHardwareAccelerated()) {
+    std::cerr << "Realtime search certification requires the resolved Metal "
+                 "backend; got "
+              << backendName << '\n';
+    return 4;
+  }
+  auto certificationBackend = glic::createRealtimeBackend(
+      glic::RealtimeBackendKind::METAL, error);
+  if (!certificationBackend ||
+      std::string_view(certificationBackend->name()) != "metal" ||
+      !certificationBackend->isHardwareAccelerated()) {
+    std::cerr << "Failed to create dedicated Metal certification backend: "
+              << error << '\n';
+    return 4;
+  }
   const uint64_t fingerprint =
       configurationFingerprint(options, backendName, width, height, inputs);
   const fs::path runConfigPath = options.outputDirectory / "run-config.json";
@@ -1892,6 +2132,13 @@ int main(int argc, char **argv) {
   std::vector<std::vector<glic::Color>> representatives(
       inputs.size(), std::vector<glic::Color>(pixelCount));
   MetricAccumulator accumulator(inputs.size());
+  const std::vector<glic::Color> certificationInput = resizeImage(
+      inputs.front().pixels, width, height,
+      glic::kRealtimeCertificationWidth,
+      glic::kRealtimeCertificationHeight);
+  std::vector<glic::Color> certificationOutput(
+      static_cast<size_t>(glic::kRealtimeCertificationWidth) *
+      static_cast<size_t>(glic::kRealtimeCertificationHeight));
 
   std::signal(SIGTERM, handleSignal);
   std::signal(SIGINT, handleSignal);
@@ -1903,6 +2150,9 @@ int main(int argc, char **argv) {
 
   std::cout << "glic realtime search: backend=" << backendName
             << " resolution=" << width << 'x' << height
+            << " required_realtime=" << glic::kRealtimeCertificationWidth
+            << 'x' << glic::kRealtimeCertificationHeight << '@'
+            << glic::kRealtimeCertificationTargetFps << "fps"
             << " inputs=" << inputs.size()
             << " resume_at=" << state.nextCandidateId
             << " duration_seconds=" << options.durationSeconds << '\n';
@@ -1950,6 +2200,7 @@ int main(int argc, char **argv) {
     std::string previewHashText;
     std::string evaluationHashText;
     Metrics metrics;
+    glic::RealtimeCertificationResult realtimeGate;
     bool accepted = false;
     bool admitted = false;
     std::string rejectReason;
@@ -2027,8 +2278,6 @@ int main(int argc, char **argv) {
           if (hardReject) {
             rejectReason = *hardReject;
           } else {
-            accepted = true;
-            ++state.counters.accepted;
             cell = behaviorCell(metrics);
             quality = qualityScore(metrics);
             Elite elite;
@@ -2042,17 +2291,50 @@ int main(int argc, char **argv) {
             elite.cell = cell;
             elite.quality = quality;
             elite.previewPath = "elites/" + hexHash(hash) + ".png";
-            auto result = state.archive.consider(std::move(elite));
-            admitted = result.admitted;
-            removedPreviews = std::move(result.removedPreviewPaths);
-            if (admitted) {
-              const fs::path preview = options.outputDirectory / "elites" /
-                                       (hexHash(hash) + ".png");
-              if (!glic::saveImage(preview.string(), representatives.front(),
-                                   width, height)) {
-                std::cerr << "Failed to save admitted elite preview: "
-                          << preview << '\n';
-                return 5;
+            const auto admissionPlan = state.archive.planAdmission(elite);
+            if (!admissionPlan.admitted) {
+              rejectReason = "not_archive_competitive";
+            } else {
+              const glic::RealtimeCertificationRequest certificationRequest{
+                  .config = recipe.config,
+                  .seed = kEvaluationSeeds.front(),
+                  .effectStrength = recipe.strength,
+                  .frameIndexBase =
+                      candidateId *
+                      (static_cast<uint64_t>(
+                           glic::kRealtimeCertificationWarmupFrames) +
+                       static_cast<uint64_t>(
+                           glic::kRealtimeCertificationMeasuredFrames) +
+                       1u)};
+              realtimeGate = glic::certifyRealtimePreset(
+                  *certificationBackend, certificationInput,
+                  certificationOutput, certificationRequest);
+              if (!realtimeGate.passed) {
+                rejectReason = realtimeGate.error.empty()
+                                   ? "realtime_gate_failed"
+                                   : realtimeGate.error;
+              } else {
+                elite.realtimeGate = realtimeGate;
+                auto result = state.archive.commitAdmission(
+                    std::move(elite), admissionPlan);
+                if (!result.admitted) {
+                  std::cerr << "Transactional archive admission changed "
+                               "between planning and commit for candidate "
+                            << candidateId << '\n';
+                  return 5;
+                }
+                admitted = true;
+                accepted = true;
+                ++state.counters.accepted;
+                removedPreviews = std::move(result.removedPreviewPaths);
+                const fs::path preview = options.outputDirectory / "elites" /
+                                         (hexHash(hash) + ".png");
+                if (!glic::saveImage(preview.string(),
+                                     representatives.front(), width, height)) {
+                  std::cerr << "Failed to save admitted elite preview: "
+                            << preview << '\n';
+                  return 5;
+                }
               }
             }
           }
@@ -2064,8 +2346,8 @@ int main(int argc, char **argv) {
 
     const std::string record = candidateJson(
         candidateId, hash, previewHashText, evaluationHashText, canonical,
-        recipe, metrics, accepted, admitted, rejectReason, cell, quality,
-        generation, parentHash);
+        recipe, metrics, realtimeGate, accepted, admitted, rejectReason, cell,
+        quality, generation, parentHash);
     if (!appendDurableLine(candidateLog, record, error)) {
       std::cerr << "Candidate log checkpoint failed: " << error << '\n';
       return 5;

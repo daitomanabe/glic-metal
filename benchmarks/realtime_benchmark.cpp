@@ -27,7 +27,7 @@ struct Options {
   std::string jsonReport;
   int frames = 120;
   int warmupFrames = 10;
-  double requiredFps = 15.0;
+  double requiredFps = 30.0;
   float strength = 1.0f;
   bool allPresets = false;
 };
@@ -54,7 +54,7 @@ void printUsage(const char *program) {
       << "  --backend <auto|cpu|metal>\n"
       << "  --frames <count>         Measured frames (default: 120)\n"
       << "  --warmup <count>         Warm-up frames (default: 10)\n"
-      << "  --require-fps <value>    p95 performance gate (default: 15)\n"
+      << "  --require-fps <value>    mean+p95 performance gate (default: 30)\n"
       << "  --strength <0..2>        Glitch intensity (default: 1)\n"
       << "  --output <png>           Save the final processed frame\n"
       << "  --json <path>            Write a machine-readable report\n";
@@ -346,6 +346,7 @@ int main(int argc, char **argv) {
       result.medianGpuMilliseconds = percentile(gpuTimes, 0.5);
       result.framesPerSecond = 1000.0 / result.medianMilliseconds;
       result.performancePassed =
+          result.meanMilliseconds <= (1000.0 / options.requiredFps) &&
           result.p95Milliseconds <= (1000.0 / options.requiredFps);
     } else {
       result.error = error;
