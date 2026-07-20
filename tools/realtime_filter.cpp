@@ -2,6 +2,7 @@
 #include "realtime.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -9,6 +10,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -27,8 +29,20 @@ struct Options {
   std::string presetsDirectory = "presets";
   std::string backend = "auto";
   std::string statsJson;
+  std::string canonical;
+  std::string effectFamily = "legacy_block";
+  uint32_t seed = 0x474C4943u;
   float strength = 1.0f;
+  float effectAmount = 0.7f;
+  float effectScale = 0.5f;
+  float effectRate = 0.5f;
   bool passthrough = false;
+};
+
+struct CanonicalRecipe {
+  glic::CodecConfig config;
+  glic::RealtimeEffectConfig effect{};
+  float strength = 1.0f;
 };
 
 void printUsage(const char *program) {
@@ -38,9 +52,20 @@ void printUsage(const char *program) {
       << "Reads packed BGRA8 frames from stdin and writes packed BGRA8 frames "
          "to stdout.\n"
       << "  --preset <name>          Preset name (default: default)\n"
+      << "  --canonical <recipe>     Strict v1/v2 canonical recipe; bypasses "
+         "the named preset\n"
       << "  --presets-dir <path>     Preset directory (default: presets)\n"
       << "  --backend <auto|cpu|metal>\n"
       << "  --strength <0..2>        Glitch intensity (default: 1)\n"
+      << "  --effect-family <name>   legacy_block, line_tear, "
+         "channel_shear, analog_sync, mirror_fold, edge_echo, "
+         "bitplane_dither, wave_warp, or poster_solar\n"
+      << "  --effect-amount <0..1>   Family-specific amount (default: 0.7)\n"
+      << "  --effect-scale <0..1>    Family-specific spatial scale (default: 0.5)\n"
+      << "  --effect-rate <0..1>     Family-specific animation rate (default: 0.5)\n"
+      << "  --seed <u32>             Pattern seed, decimal or 0x-prefixed\n"
+      << "Canonical recipe values override --strength and all --effect-* "
+         "options; --seed remains independent. Quote recipes in the shell.\n"
       << "  --passthrough             Copy frames unchanged for A/B "
          "calibration\n"
       << "  --stats-json <path>      Write processing statistics\n";
@@ -70,6 +95,259 @@ bool parseStrength(std::string_view text, float &value) {
   }
 }
 
+bool parseUnitFloat(std::string_view text, float &value) {
+  try {
+    const float parsed = std::stof(std::string(text));
+    if (!std::isfinite(parsed) || parsed < 0.0f || parsed > 1.0f)
+      return false;
+    value = parsed;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+bool parseSeed(std::string_view text, uint32_t &value) {
+  try {
+    size_t consumed = 0;
+    const auto parsed = std::stoull(std::string(text), &consumed, 0);
+    if (consumed != text.size() || parsed > std::numeric_limits<uint32_t>::max())
+      return false;
+    value = static_cast<uint32_t>(parsed);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+bool parseEffectFamily(std::string_view name,
+                       glic::RealtimeEffectFamily &family) {
+  if (name == "legacy_block")
+    family = glic::RealtimeEffectFamily::LEGACY_BLOCK;
+  else if (name == "line_tear")
+    family = glic::RealtimeEffectFamily::LINE_TEAR;
+  else if (name == "channel_shear")
+    family = glic::RealtimeEffectFamily::CHANNEL_SHEAR;
+  else if (name == "analog_sync")
+    family = glic::RealtimeEffectFamily::ANALOG_SYNC;
+  else if (name == "mirror_fold")
+    family = glic::RealtimeEffectFamily::MIRROR_FOLD;
+  else if (name == "edge_echo")
+    family = glic::RealtimeEffectFamily::EDGE_ECHO;
+  else if (name == "bitplane_dither")
+    family = glic::RealtimeEffectFamily::BITPLANE_DITHER;
+  else if (name == "wave_warp")
+    family = glic::RealtimeEffectFamily::WAVE_WARP;
+  else if (name == "poster_solar")
+    family = glic::RealtimeEffectFamily::POSTER_SOLAR;
+  else
+    return false;
+  return true;
+}
+
+const char *effectFamilyName(glic::RealtimeEffectFamily family) noexcept {
+  switch (family) {
+  case glic::RealtimeEffectFamily::LEGACY_BLOCK:
+    return "legacy_block";
+  case glic::RealtimeEffectFamily::LINE_TEAR:
+    return "line_tear";
+  case glic::RealtimeEffectFamily::CHANNEL_SHEAR:
+    return "channel_shear";
+  case glic::RealtimeEffectFamily::ANALOG_SYNC:
+    return "analog_sync";
+  case glic::RealtimeEffectFamily::MIRROR_FOLD:
+    return "mirror_fold";
+  case glic::RealtimeEffectFamily::EDGE_ECHO:
+    return "edge_echo";
+  case glic::RealtimeEffectFamily::BITPLANE_DITHER:
+    return "bitplane_dither";
+  case glic::RealtimeEffectFamily::WAVE_WARP:
+    return "wave_warp";
+  case glic::RealtimeEffectFamily::POSTER_SOLAR:
+    return "poster_solar";
+  case glic::RealtimeEffectFamily::COUNT:
+    break;
+  }
+  return "legacy_block";
+}
+
+glic::WaveletType canonicalWavelet(glic::WaveletType type) {
+  const int value = static_cast<int>(type);
+  if (type == glic::WaveletType::NONE)
+    return glic::WaveletType::NONE;
+  if (type == glic::WaveletType::HAAR_ORTHOGONAL ||
+      type == glic::WaveletType::HAAR)
+    return glic::WaveletType::HAAR_ORTHOGONAL;
+  if (value >= static_cast<int>(glic::WaveletType::COIFLET1) &&
+      value <= static_cast<int>(glic::WaveletType::COIFLET5))
+    return glic::WaveletType::COIFLET1;
+  if (value >= static_cast<int>(glic::WaveletType::SYMLET2) &&
+      value <= static_cast<int>(glic::WaveletType::SYMLET4))
+    return glic::WaveletType::SYMLET2;
+  return glic::WaveletType::BIORTHOGONAL11;
+}
+
+int normalizeBlockSize(int value) {
+  value = std::clamp(value, 1, 256);
+  int result = 1;
+  while (result < value && result < 256)
+    result <<= 1;
+  return result;
+}
+
+float normalizedEffectParameter(float value) {
+  return std::round(std::clamp(value, 0.0f, 1.0f) * 1000.0f) / 1000.0f;
+}
+
+void normalizeEffect(glic::RealtimeEffectConfig &effect) {
+  const int family = std::clamp(
+      static_cast<int>(effect.family),
+      static_cast<int>(glic::RealtimeEffectFamily::LEGACY_BLOCK),
+      static_cast<int>(glic::RealtimeEffectFamily::COUNT) - 1);
+  effect.family = static_cast<glic::RealtimeEffectFamily>(family);
+  if (effect.family == glic::RealtimeEffectFamily::LEGACY_BLOCK) {
+    effect.amount = 0.7f;
+    effect.scale = 0.5f;
+    effect.rate = 0.5f;
+    return;
+  }
+  effect.amount = normalizedEffectParameter(effect.amount);
+  effect.scale = normalizedEffectParameter(effect.scale);
+  effect.rate = normalizedEffectParameter(effect.rate);
+}
+
+void normalizeRecipe(CanonicalRecipe &recipe) {
+  recipe.config.colorSpace = static_cast<glic::ColorSpace>(std::clamp(
+      static_cast<int>(recipe.config.colorSpace), 0,
+      static_cast<int>(glic::ColorSpace::COUNT) - 1));
+  recipe.strength =
+      std::round(std::clamp(recipe.strength, 0.0f, 2.0f) * 1000.0f) /
+      1000.0f;
+  normalizeEffect(recipe.effect);
+  for (auto &channel : recipe.config.channels) {
+    channel.minBlockSize = normalizeBlockSize(channel.minBlockSize);
+    channel.maxBlockSize = normalizeBlockSize(channel.maxBlockSize);
+    if (channel.minBlockSize > channel.maxBlockSize)
+      std::swap(channel.minBlockSize, channel.maxBlockSize);
+    channel.segmentationPrecision =
+        std::round(std::clamp(channel.segmentationPrecision, 0.0f, 128.0f) *
+                   1000.0f) /
+        1000.0f;
+    channel.quantizationValue =
+        std::clamp(channel.quantizationValue, 0, 255);
+    channel.waveletType = canonicalWavelet(channel.waveletType);
+    channel.transformCompress =
+        std::round(std::clamp(channel.transformCompress, 0.0f, 255.0f) *
+                   1000.0f) /
+        1000.0f;
+    channel.transformScale = std::abs(channel.transformScale);
+    if (channel.waveletType == glic::WaveletType::NONE) {
+      channel.transformType = glic::TransformType::FWT;
+      channel.transformCompress = 0.0f;
+      channel.transformScale = 20;
+    }
+  }
+}
+
+void appendCanonicalCodec(std::ostringstream &output,
+                          const CanonicalRecipe &recipe) {
+  output << static_cast<int>(recipe.config.colorSpace) << '|'
+         << static_cast<int>(recipe.config.borderColorR) << '|'
+         << static_cast<int>(recipe.config.borderColorG) << '|'
+         << static_cast<int>(recipe.config.borderColorB) << '|'
+         << std::lround(recipe.strength * 1000.0f) << '|';
+  for (const auto &channel : recipe.config.channels) {
+    output << channel.minBlockSize << ',' << channel.maxBlockSize << ','
+           << std::lround(channel.segmentationPrecision * 1000.0f) << ','
+           << static_cast<int>(channel.predictionMethod) << ','
+           << channel.quantizationValue << ','
+           << static_cast<int>(channel.clampMethod) << ','
+           << static_cast<int>(channel.transformType) << ','
+           << static_cast<int>(channel.waveletType) << ','
+           << std::lround(channel.transformCompress * 1000.0f) << ','
+           << channel.transformScale << ','
+           << static_cast<int>(channel.encodingMethod) << ';';
+  }
+}
+
+std::string canonicalRecipeV1(const CanonicalRecipe &recipe) {
+  std::ostringstream output;
+  output << "v1|";
+  appendCanonicalCodec(output, recipe);
+  return output.str();
+}
+
+std::string canonicalRecipeV2(const CanonicalRecipe &recipe) {
+  std::ostringstream output;
+  output << "v2|";
+  appendCanonicalCodec(output, recipe);
+  output << '|' << static_cast<int>(recipe.effect.family) << ','
+         << std::lround(recipe.effect.amount * 1000.0f) << ','
+         << std::lround(recipe.effect.scale * 1000.0f) << ','
+         << std::lround(recipe.effect.rate * 1000.0f);
+  return output.str();
+}
+
+bool decodeCanonical(std::string text, CanonicalRecipe &recipe,
+                     std::string &version) {
+  const std::string original = text;
+  for (char &character : text) {
+    if (character == '|' || character == ',' || character == ';')
+      character = ' ';
+  }
+  std::istringstream input(text);
+  std::array<long long, 42> values{};
+  if (!(input >> version) || (version != "v1" && version != "v2"))
+    return false;
+  const size_t valueCount = version == "v1" ? 38 : values.size();
+  for (size_t index = 0; index < valueCount; ++index) {
+    if (!(input >> values[index]) ||
+        values[index] <
+            static_cast<long long>(std::numeric_limits<int>::min()) ||
+        values[index] >
+            static_cast<long long>(std::numeric_limits<int>::max()))
+      return false;
+  }
+  std::string extra;
+  if (input >> extra)
+    return false;
+
+  size_t position = 0;
+  const auto take = [&]() { return static_cast<int>(values[position++]); };
+  recipe.config.colorSpace = static_cast<glic::ColorSpace>(take());
+  recipe.config.borderColorR = static_cast<uint8_t>(take());
+  recipe.config.borderColorG = static_cast<uint8_t>(take());
+  recipe.config.borderColorB = static_cast<uint8_t>(take());
+  recipe.strength = static_cast<float>(take()) / 1000.0f;
+  for (auto &channel : recipe.config.channels) {
+    channel.minBlockSize = take();
+    channel.maxBlockSize = take();
+    channel.segmentationPrecision = static_cast<float>(take()) / 1000.0f;
+    channel.predictionMethod = static_cast<glic::PredictionMethod>(take());
+    channel.quantizationValue = take();
+    channel.clampMethod = static_cast<glic::ClampMethod>(take());
+    channel.transformType = static_cast<glic::TransformType>(take());
+    channel.waveletType = static_cast<glic::WaveletType>(take());
+    channel.transformCompress = static_cast<float>(take()) / 1000.0f;
+    channel.transformScale = take();
+    channel.encodingMethod = static_cast<glic::EncodingMethod>(take());
+  }
+  if (version == "v2") {
+    recipe.effect.family = static_cast<glic::RealtimeEffectFamily>(take());
+    recipe.effect.amount = static_cast<float>(take()) / 1000.0f;
+    recipe.effect.scale = static_cast<float>(take()) / 1000.0f;
+    recipe.effect.rate = static_cast<float>(take()) / 1000.0f;
+  } else {
+    recipe.effect.family = glic::RealtimeEffectFamily::LEGACY_BLOCK;
+    recipe.effect.amount = 0.7f;
+    recipe.effect.scale = 0.5f;
+    recipe.effect.rate = 0.5f;
+  }
+  normalizeRecipe(recipe);
+  return (version == "v1" ? canonicalRecipeV1(recipe)
+                           : canonicalRecipeV2(recipe)) == original;
+}
+
 bool parseOptions(int argc, char **argv, Options &options) {
   for (int index = 1; index < argc; ++index) {
     const std::string_view argument = argv[index];
@@ -90,6 +368,11 @@ bool parseOptions(int argc, char **argv, Options &options) {
       if (value == nullptr)
         return false;
       options.preset = value;
+    } else if (argument == "--canonical") {
+      const char *value = takeValue();
+      if (value == nullptr || value[0] == '\0')
+        return false;
+      options.canonical = value;
     } else if (argument == "--presets-dir") {
       const char *value = takeValue();
       if (value == nullptr)
@@ -103,6 +386,28 @@ bool parseOptions(int argc, char **argv, Options &options) {
     } else if (argument == "--strength") {
       const char *value = takeValue();
       if (value == nullptr || !parseStrength(value, options.strength))
+        return false;
+    } else if (argument == "--effect-family") {
+      const char *value = takeValue();
+      glic::RealtimeEffectFamily parsed{};
+      if (value == nullptr || !parseEffectFamily(value, parsed))
+        return false;
+      options.effectFamily = value;
+    } else if (argument == "--effect-amount") {
+      const char *value = takeValue();
+      if (value == nullptr || !parseUnitFloat(value, options.effectAmount))
+        return false;
+    } else if (argument == "--effect-scale") {
+      const char *value = takeValue();
+      if (value == nullptr || !parseUnitFloat(value, options.effectScale))
+        return false;
+    } else if (argument == "--effect-rate") {
+      const char *value = takeValue();
+      if (value == nullptr || !parseUnitFloat(value, options.effectRate))
+        return false;
+    } else if (argument == "--seed") {
+      const char *value = takeValue();
+      if (value == nullptr || !parseSeed(value, options.seed))
         return false;
     } else if (argument == "--stats-json") {
       const char *value = takeValue();
@@ -125,7 +430,9 @@ bool parseOptions(int argc, char **argv, Options &options) {
 }
 
 void writeStats(const Options &options, const std::string &preset,
-                const char *backend, uint64_t frames, double totalMilliseconds,
+                std::string_view recipeSource,
+                std::string_view canonicalVersion, const char *backend,
+                uint64_t frames, double totalMilliseconds,
                 double maximumMilliseconds, double totalGpuMilliseconds) {
   if (options.statsJson.empty())
     return;
@@ -150,8 +457,20 @@ void writeStats(const Options &options, const std::string &preset,
          << "  \"width\": " << options.width << ",\n"
          << "  \"height\": " << options.height << ",\n"
          << "  \"preset\": \"" << preset << "\",\n"
+         << "  \"recipe_source\": \"" << recipeSource << "\",\n"
+         << "  \"canonical_version\": ";
+  if (canonicalVersion.empty())
+    output << "null,\n";
+  else
+    output << '"' << canonicalVersion << "\",\n";
+  output
          << "  \"backend\": \"" << backend << "\",\n"
          << "  \"strength\": " << options.strength << ",\n"
+         << "  \"seed\": " << options.seed << ",\n"
+         << "  \"effect_family\": \"" << options.effectFamily << "\",\n"
+         << "  \"effect_amount\": " << options.effectAmount << ",\n"
+         << "  \"effect_scale\": " << options.effectScale << ",\n"
+         << "  \"effect_rate\": " << options.effectRate << ",\n"
          << "  \"frames\": " << frames << ",\n"
          << "  \"mean_process_ms\": " << meanMilliseconds << ",\n"
          << "  \"max_process_ms\": " << maximumMilliseconds << ",\n"
@@ -168,6 +487,10 @@ int main(int argc, char **argv) {
     printUsage(argv[0]);
     return 2;
   }
+  if (options.passthrough && !options.canonical.empty()) {
+    std::cerr << "--passthrough and --canonical are mutually exclusive\n";
+    return 2;
+  }
 
 #if defined(_WIN32)
   _setmode(_fileno(stdin), _O_BINARY);
@@ -180,9 +503,41 @@ int main(int argc, char **argv) {
   std::unique_ptr<glic::RealtimeBackend> backend;
   std::string backendName = "passthrough";
   std::string presetName = "passthrough";
+  const std::string recipeSource =
+      options.passthrough
+          ? "passthrough"
+          : (options.canonical.empty() ? "preset" : "canonical");
+  std::string canonicalVersion;
+  glic::CodecConfig config;
+  glic::RealtimeEffectFamily effectFamily{};
+  if (!parseEffectFamily(options.effectFamily, effectFamily)) {
+    std::cerr << "Invalid effect family: " << options.effectFamily << '\n';
+    return 2;
+  }
+  glic::RealtimeEffectConfig effect{.family = effectFamily,
+                                    .amount = options.effectAmount,
+                                    .scale = options.effectScale,
+                                    .rate = options.effectRate};
+
+  if (!options.canonical.empty()) {
+    CanonicalRecipe recipe;
+    if (!decodeCanonical(options.canonical, recipe, canonicalVersion)) {
+      std::cerr << "Invalid canonical recipe: expected the exact canonical "
+                   "v1 form with 38 integers or v2 form with 42 integers\n";
+      return 3;
+    }
+    config = recipe.config;
+    effect = recipe.effect;
+    options.strength = recipe.strength;
+    options.effectFamily = effectFamilyName(effect.family);
+    options.effectAmount = effect.amount;
+    options.effectScale = effect.scale;
+    options.effectRate = effect.rate;
+  }
+
   if (!options.passthrough) {
-    glic::CodecConfig config;
-    if (!glic::PresetLoader::loadPresetByName(options.presetsDirectory,
+    if (options.canonical.empty() &&
+        !glic::PresetLoader::loadPresetByName(options.presetsDirectory,
                                               options.preset, config)) {
       std::cerr << "Failed to load preset: " << options.preset << '\n';
       return 3;
@@ -198,15 +553,22 @@ int main(int argc, char **argv) {
     glic::RealtimePrepareOptions prepareOptions{.width = options.width,
                                                 .height = options.height,
                                                 .config = config,
-                                                .seed = 0x474C4943u,
-                                                .effectStrength =
-                                                    options.strength};
+                                                .seed = options.seed,
+                                                .effectStrength = options.strength,
+                                                .effect = effect};
     if (!backend->prepare(prepareOptions, error)) {
       std::cerr << "Failed to prepare realtime backend: " << error << '\n';
       return 4;
     }
     backendName = backend->name();
-    presetName = options.preset;
+    presetName = options.canonical.empty() ? options.preset : "canonical";
+  } else {
+    options.strength = 0.0f;
+    options.effectFamily = "passthrough";
+    options.effectAmount = 0.0f;
+    options.effectScale = 0.0f;
+    options.effectRate = 0.0f;
+    options.seed = 0;
   }
 
   const size_t width = static_cast<size_t>(options.width);
@@ -272,14 +634,20 @@ int main(int argc, char **argv) {
     ++frameIndex;
   }
 
-  writeStats(options, presetName, backendName.c_str(), frameIndex,
-             totalMilliseconds, maximumMilliseconds, totalGpuMilliseconds);
+  writeStats(options, presetName, recipeSource, canonicalVersion,
+             backendName.c_str(), frameIndex, totalMilliseconds,
+             maximumMilliseconds, totalGpuMilliseconds);
   const double fps =
       totalMilliseconds <= 0.0
           ? 0.0
           : static_cast<double>(frameIndex) * 1000.0 / totalMilliseconds;
   std::cerr << "frames=" << frameIndex << " backend=" << backendName
             << " preset=" << presetName << " strength=" << options.strength
+            << " effect_family=" << options.effectFamily
+            << " recipe_source=" << recipeSource
+            << " canonical_version="
+            << (canonicalVersion.empty() ? "none" : canonicalVersion)
+            << " seed=" << options.seed
             << " processing_fps=" << std::fixed << std::setprecision(3) << fps
             << '\n';
   return frameIndex == 0 ? 5 : 0;

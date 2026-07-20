@@ -9,6 +9,7 @@
 #include <iostream>
 #include <new>
 #include <span>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -86,6 +87,182 @@ double changedPixelRatio(const std::vector<glic::Color> &input,
       ++changed;
   }
   return static_cast<double>(changed) / static_cast<double>(input.size());
+}
+
+uint64_t hashPixels(const std::vector<glic::Color> &pixels) {
+  uint64_t hash = 1469598103934665603ULL;
+  for (const glic::Color pixel : pixels) {
+    hash ^= pixel;
+    hash *= 1099511628211ULL;
+  }
+  return hash;
+}
+
+bool runEffectFamilies(glic::RealtimeBackend &backend,
+                       const std::vector<glic::Color> &input, int width,
+                       int height) {
+  constexpr std::array families = {
+      glic::RealtimeEffectFamily::LINE_TEAR,
+      glic::RealtimeEffectFamily::CHANNEL_SHEAR,
+      glic::RealtimeEffectFamily::ANALOG_SYNC,
+      glic::RealtimeEffectFamily::MIRROR_FOLD,
+      glic::RealtimeEffectFamily::EDGE_ECHO,
+      glic::RealtimeEffectFamily::BITPLANE_DITHER,
+      glic::RealtimeEffectFamily::WAVE_WARP,
+      glic::RealtimeEffectFamily::POSTER_SOLAR,
+  };
+
+  glic::CodecConfig config;
+  // Explicit effect families are RGB mechanisms even when a legacy preset
+  // carries another colour space. Exercise that contract on each backend.
+  config.colorSpace = glic::ColorSpace::HWB;
+  std::vector<glic::Color> first(input.size());
+  std::vector<glic::Color> second(input.size());
+  std::set<uint64_t> outputHashes;
+  std::string error;
+
+  for (const auto family : families) {
+    glic::RealtimePrepareOptions options{
+        .width = width,
+        .height = height,
+        .config = config,
+        .seed = 0x12345678u,
+        .effectStrength = 1.0f,
+        .effect = {.family = family,
+                   .amount = 0.78f,
+                   .scale = 0.43f,
+                   .rate = 1.0f},
+    };
+    if (!backend.prepare(options, error) ||
+        !backend.process(input, first, 0, error) ||
+        !backend.process(input, second, 0, error)) {
+      std::cerr << backend.name() << " family processing failed for "
+                << static_cast<uint32_t>(family) << ": " << error << '\n';
+      return false;
+    }
+    if (first != second) {
+      std::cerr << backend.name() << " family output is not deterministic for "
+                << static_cast<uint32_t>(family) << '\n';
+      return false;
+    }
+    if (changedPixelRatio(input, first, 1) < 0.01) {
+      std::cerr << backend.name() << " family is effectively unchanged for "
+                << static_cast<uint32_t>(family) << '\n';
+      return false;
+    }
+    if (!outputHashes.insert(hashPixels(first)).second) {
+      std::cerr << backend.name() << " family topology hash is duplicated for "
+                << static_cast<uint32_t>(family) << '\n';
+      return false;
+    }
+    if (!backend.process(input, second, 17, error) || first == second) {
+      std::cerr << backend.name() << " family has no rate-driven variation for "
+                << static_cast<uint32_t>(family) << '\n';
+      return false;
+    }
+
+    options.effectStrength = 0.0f;
+    if (!backend.prepare(options, error) ||
+        !backend.process(input, second, 17, error) || second != input) {
+      std::cerr << backend.name()
+                << " family strength-zero path is not exact passthrough for "
+                << static_cast<uint32_t>(family) << '\n';
+      return false;
+    }
+  }
+  return true;
+}
+
+bool runEffectFamilyParity(const std::vector<glic::Color> &input, int width,
+                           int height) {
+  std::string error;
+  auto cpu =
+      glic::createRealtimeBackend(glic::RealtimeBackendKind::CPU, error);
+  auto metal =
+      glic::createRealtimeBackend(glic::RealtimeBackendKind::METAL, error);
+  if (!cpu || !metal) {
+    std::cout << "SKIP family parity: " << error << '\n';
+    return true;
+  }
+
+  constexpr std::array families = {
+      glic::RealtimeEffectFamily::LINE_TEAR,
+      glic::RealtimeEffectFamily::CHANNEL_SHEAR,
+      glic::RealtimeEffectFamily::ANALOG_SYNC,
+      glic::RealtimeEffectFamily::MIRROR_FOLD,
+      glic::RealtimeEffectFamily::EDGE_ECHO,
+      glic::RealtimeEffectFamily::BITPLANE_DITHER,
+      glic::RealtimeEffectFamily::WAVE_WARP,
+      glic::RealtimeEffectFamily::POSTER_SOLAR,
+  };
+  glic::CodecConfig config;
+  // A grayscale preset would expose any accidental colour-space conversion in
+  // either backend; direct-RGB family outputs must still match byte-for-byte.
+  config.colorSpace = glic::ColorSpace::GS;
+  struct ParityControls {
+    float amount;
+    float scale;
+    float rate;
+    float strength;
+  };
+  constexpr std::array<ParityControls, 3> controls = {{
+      {.amount = 0.78f, .scale = 0.43f, .rate = 1.0f, .strength = 1.0f},
+      {.amount = 0.50f, .scale = 0.50f, .rate = 0.0f, .strength = 1.7f},
+      {.amount = 1.0f, .scale = 1.0f, .rate = 1.0f, .strength = 2.0f},
+  }};
+  std::vector<glic::Color> cpuOutput(input.size());
+  std::vector<glic::Color> metalOutput(input.size());
+  for (const auto family : families) {
+    for (size_t controlIndex = 0; controlIndex < controls.size();
+         ++controlIndex) {
+      const auto &control = controls[controlIndex];
+      glic::RealtimePrepareOptions options{
+          .width = width,
+          .height = height,
+          .config = config,
+          .seed = 0x12345678u,
+          .effectStrength = control.strength,
+          .effect = {.family = family,
+                     .amount = control.amount,
+                     .scale = control.scale,
+                     .rate = control.rate},
+      };
+      if (!cpu->prepare(options, error) || !metal->prepare(options, error)) {
+        std::cerr << "Family parity prepare failed for "
+                  << static_cast<uint32_t>(family) << " controls "
+                  << controlIndex << ": " << error << '\n';
+        return false;
+      }
+      for (const uint64_t frame : {0u, 17u, 63u}) {
+        if (!cpu->process(input, cpuOutput, frame, error) ||
+            !metal->process(input, metalOutput, frame, error)) {
+          std::cerr << "Family parity process failed for "
+                    << static_cast<uint32_t>(family) << " controls "
+                    << controlIndex << ": " << error << '\n';
+          return false;
+        }
+        for (size_t index = 0; index < input.size(); ++index) {
+          const int maximumDifference = std::max(
+              {std::abs(static_cast<int>(glic::getR(cpuOutput[index])) -
+                        static_cast<int>(glic::getR(metalOutput[index]))),
+               std::abs(static_cast<int>(glic::getG(cpuOutput[index])) -
+                        static_cast<int>(glic::getG(metalOutput[index]))),
+               std::abs(static_cast<int>(glic::getB(cpuOutput[index])) -
+                        static_cast<int>(glic::getB(metalOutput[index])))});
+          if (maximumDifference > 1 ||
+              glic::getA(cpuOutput[index]) != glic::getA(metalOutput[index])) {
+            std::cerr << "CPU/Metal family parity exceeded one byte for family "
+                      << static_cast<uint32_t>(family) << " controls "
+                      << controlIndex << " frame " << frame << " pixel "
+                      << index << " difference " << maximumDifference << '\n';
+            return false;
+          }
+        }
+      }
+    }
+  }
+  std::cout << "PASS CPU/Metal effect family parity\n";
+  return true;
 }
 
 bool runBackend(glic::RealtimeBackendKind kind,
@@ -213,6 +390,8 @@ bool runBackend(glic::RealtimeBackendKind kind,
     std::cerr << backend->name() << " strength zero is not exact passthrough\n";
     return false;
   }
+  if (!runEffectFamilies(*backend, input, width, height))
+    return false;
   std::cout << "PASS backend=" << backend->name()
             << " presets=" << presets.size() << '\n';
   return true;
@@ -235,6 +414,11 @@ int main() {
 #if defined(__APPLE__)
   if (!runBackend(glic::RealtimeBackendKind::METAL, presets, input, width,
                   height, false))
+    return 1;
+  constexpr int parityWidth = 65;
+  constexpr int parityHeight = 49;
+  const auto parityInput = makeFixture(parityWidth, parityHeight);
+  if (!runEffectFamilyParity(parityInput, parityWidth, parityHeight))
     return 1;
 #endif
   return 0;

@@ -20,7 +20,7 @@ from urllib.parse import quote
 
 
 SCHEMA = "glic-search-ranking-v2"
-POLICY_VERSION = "pareto-perceptual-mmr-v2"
+POLICY_VERSION = "pareto-residual-morphology-mmr-v4"
 PERFORMANCE_CERTIFICATION_SCHEMA = "glic-search-performance-certifications-v1"
 PERFORMANCE_POLICY_VERSION = "metal-960x540-p95-30fps-v1"
 PERFORMANCE_BACKEND = "metal"
@@ -83,6 +83,16 @@ FAMILY_WEIGHTS = {
     "perceptual_richness": 0.06,
 }
 TIER_LIMITS = (("finalist", 12), ("shortlist", 32), ("reserve", 64))
+DIVERSITY_PREFIX_LIMIT = 8
+MORPHOLOGY_DISTANCE_FLOOR = 0.12
+PREFIX_CELL_CANDIDATE_LIMIT = 3
+SCALE_BUCKETS = ("none", "micro", "fine", "medium", "coarse", "mega")
+MORPHOLOGY_VECTOR_LENGTHS = {
+    "residual_luma_grid": 64,
+    "residual_edge_grid": 64,
+    "residual_scale_histogram": 7,
+    "residual_orientation": 2,
+}
 
 
 def atomic_write_text(path: Path, text: str) -> None:
@@ -175,6 +185,83 @@ def first_identity(*values: Any) -> str:
         if text:
             return text
     return ""
+
+
+def preview_reproduction_metadata(archive: Any) -> dict[str, int | None]:
+    """Extract the exact still-preview seed/phase without inventing legacy defaults."""
+
+    if not isinstance(archive, dict):
+        return {"preview_seed": None, "preview_frame_phase": None}
+    seeds = archive.get("evaluation_seeds")
+    phases = archive.get("frame_phases")
+    seed = seeds[0] if isinstance(seeds, list) and seeds else None
+    phase = phases[-1] if isinstance(phases, list) and phases else None
+    if not isinstance(seed, int) or isinstance(seed, bool) or not 0 <= seed <= 0xFFFFFFFF:
+        seed = None
+    if not isinstance(phase, int) or isinstance(phase, bool) or phase < 0:
+        phase = None
+    return {"preview_seed": seed, "preview_frame_phase": phase}
+
+
+def ready_to_run_args(
+    recipe: Any, preview_seed: int | None, canonical: Any = None
+) -> list[str] | None:
+    """Return process_video.py-compatible effect arguments for a ranked recipe."""
+
+    if preview_seed is None:
+        return None
+    if isinstance(canonical, str) and canonical:
+        return [
+            "--backend",
+            "metal",
+            "--canonical",
+            canonical,
+            "--seed",
+            str(preview_seed),
+        ]
+    if not isinstance(recipe, dict):
+        return None
+    effect = recipe.get("effect") if isinstance(recipe.get("effect"), dict) else {}
+    family = effect.get("family_name") or recipe.get("family_name")
+    strength = finite(recipe.get("strength"))
+    amount = finite(effect.get("amount"))
+    scale = finite(effect.get("scale"))
+    rate = finite(effect.get("rate"))
+    if not isinstance(family, str) or not family or None in (strength, amount, scale, rate):
+        return None
+
+    def number(value: float | None) -> str:
+        assert value is not None
+        return format(value, ".9g")
+
+    return [
+        "--backend",
+        "metal",
+        "--strength",
+        number(strength),
+        "--effect-family",
+        family,
+        "--effect-amount",
+        number(amount),
+        "--effect-scale",
+        number(scale),
+        "--effect-rate",
+        number(rate),
+        "--seed",
+        str(preview_seed),
+    ]
+
+
+def attach_preview_reproduction(
+    items: list[dict[str, Any]], archive: Any
+) -> dict[str, int | None]:
+    metadata = preview_reproduction_metadata(archive)
+    for item in items:
+        item.update(metadata)
+        item["ready_to_run_args"] = ready_to_run_args(
+            item.get("recipe"), metadata["preview_seed"], item.get("canonical")
+        )
+    return metadata
 
 
 def valid_sha256(value: Any) -> bool:
@@ -493,7 +580,7 @@ def get_analysis(
     return by_recipe.get(recipe_hash) or by_candidate.get(candidate_id)
 
 
-def recipe_family(recipe: dict[str, Any]) -> str:
+def legacy_recipe_family(recipe: dict[str, Any]) -> str:
     channels = recipe.get("channels") if isinstance(recipe, dict) else None
     if not isinstance(channels, list) or not channels:
         return "unknown"
@@ -517,6 +604,85 @@ def recipe_family(recipe: dict[str, Any]) -> str:
     nonzero_wavelets = sum(value != 0 for value in wavelets)
     wavelet_pattern = "none" if nonzero_wavelets == 0 else ("all" if nonzero_wavelets == len(wavelets) else "mixed")
     return f"mode{mode}:{channel_pattern}:{wavelet_pattern}"
+
+
+def mechanism_family(recipe: dict[str, Any]) -> str:
+    """Return the renderer's explicit mechanism identity when available."""
+    if isinstance(recipe, dict):
+        effect = recipe.get("effect")
+        if isinstance(effect, dict):
+            name = effect.get("family_name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+            family = finite(effect.get("family"))
+            if family is not None:
+                return f"effect-family-{int(family)}"
+        # Transitional v2 search rows also expose the name at recipe top level.
+        name = recipe.get("family_name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    return legacy_recipe_family(recipe)
+
+
+def recipe_family(recipe: dict[str, Any]) -> str:
+    """Backward-compatible alias for callers of the v2 ranking module."""
+    return mechanism_family(recipe)
+
+
+def bucket_from_effect_scale(value: Any) -> str:
+    scale = finite(value)
+    if scale is None or scale <= 0:
+        return "none"
+    if scale <= 4:
+        return "micro"
+    if scale <= 8:
+        return "fine"
+    if scale <= 16:
+        return "medium"
+    if scale <= 32:
+        return "coarse"
+    return "mega"
+
+
+def artifact_scale_bucket(recipe: dict[str, Any], perceptual: dict[str, Any]) -> str:
+    measured = perceptual.get("artifact_scale_bucket")
+    if isinstance(measured, str) and measured in SCALE_BUCKETS:
+        return measured
+    effect = recipe.get("effect") if isinstance(recipe, dict) else None
+    return bucket_from_effect_scale(effect.get("scale") if isinstance(effect, dict) else None)
+
+
+def artifact_orientation(recipe: dict[str, Any], perceptual: dict[str, Any]) -> str:
+    measured = perceptual.get("artifact_orientation")
+    if isinstance(measured, str) and measured in (
+        "none",
+        "horizontal",
+        "vertical",
+        "bidirectional",
+    ):
+        return measured
+    family = mechanism_family(recipe)
+    if family in ("line_tear", "scanline_tear", "row_repeat"):
+        return "horizontal"
+    if family in ("vertical_slice", "column_shear"):
+        return "vertical"
+    return "bidirectional"
+
+
+def morphology_available(perceptual: dict[str, Any]) -> bool:
+    if perceptual.get("residual_reference") != "dry_wet":
+        return False
+    for name, length in MORPHOLOGY_VECTOR_LENGTHS.items():
+        value = perceptual.get(name)
+        if not isinstance(value, list) or len(value) != length:
+            return False
+    return all(
+        finite(perceptual.get(name)) is not None
+        for name in (
+            "residual_mask_coverage",
+            "dominant_artifact_scale_fraction",
+        )
+    )
 
 
 def prepare_items(
@@ -547,6 +713,9 @@ def prepare_items(
         record = candidate.get("record") if isinstance(candidate.get("record"), dict) else {}
         recipe_hash = first_identity(candidate.get("recipe_hash"), record.get("recipe_hash"))
         recipe = record.get("recipe") if isinstance(record.get("recipe"), dict) else {}
+        canonical = record.get("canonical")
+        if not isinstance(canonical, str) or not canonical:
+            canonical = None
         certification = certifications_by_recipe.get(recipe_hash)
         performance_reasons = performance_gate_reasons(certification)
         certification_report = dict(certification) if isinstance(certification, dict) else {}
@@ -610,19 +779,29 @@ def prepare_items(
             else abs(float(metrics["luma_correlation"])),
             "unclipped": None
             if finite(metrics.get("clipping_ratio")) is None
-            else 1.0 - float(metrics["clipping_ratio"]),
+                else 1.0 - float(metrics["clipping_ratio"]),
         }
+        explicit_mechanism = mechanism_family(recipe)
+        measured_scale_bucket = artifact_scale_bucket(recipe, perceptual)
+        measured_orientation = artifact_orientation(recipe, perceptual)
         item = {
             "candidate_id": first_identity(
                 candidate.get("candidate_id"), record.get("candidate_id")
             ),
             "recipe_hash": recipe_hash,
+            "canonical": canonical,
             "preview_hash": str(record.get("preview_hash") or ""),
             "evaluation_hash": str(record.get("evaluation_hash") or ""),
             "archive_cell": str(candidate.get("archive_cell") or record.get("cell") or ""),
             "generation": str(record.get("generation") or ""),
             "parent_hash": str(record.get("parent_hash") or ""),
-            "recipe_family": recipe_family(recipe),
+            # Keep recipe_family as an output alias for existing report readers,
+            # but all v3 quotas use the explicit mechanism identity.
+            "mechanism_family": explicit_mechanism,
+            "recipe_family": explicit_mechanism,
+            "artifact_scale_bucket": measured_scale_bucket,
+            "artifact_orientation": measured_orientation,
+            "morphology_available": morphology_available(perceptual),
             "color_space": recipe.get("color_space"),
             "eligible": not reasons,
             "hard_gate": {"passed": not reasons, "reasons": reasons},
@@ -877,21 +1056,94 @@ def perceptual_components(left: dict[str, Any], right: dict[str, Any]) -> dict[s
     }
 
 
-def perceptual_distance(left: dict[str, Any], right: dict[str, Any]) -> float:
+def appearance_distance(left: dict[str, Any], right: dict[str, Any]) -> float:
+    """Whole-image distance with colour deliberately kept secondary."""
     component = perceptual_components(left, right)
     return clamp(
-        0.18 * component["phash"]
-        + 0.14 * component["dhash"]
-        + 0.18 * component["hsv"]
+        0.25 * component["phash"]
+        + 0.18 * component["dhash"]
+        + 0.05 * component["hsv"]
         + 0.20 * component["luma"]
         + 0.12 * component["edge"]
-        + 0.18 * component["color"]
+        + 0.20 * component["color"]
     )
+
+
+def zero_safe_jensen_shannon(left: Any, right: Any) -> float:
+    if not isinstance(left, list) or not isinstance(right, list) or len(left) != len(right):
+        return 1.0
+    left_total = sum(max(0.0, finite(value) or 0.0) for value in left)
+    right_total = sum(max(0.0, finite(value) or 0.0) for value in right)
+    if left_total <= 1e-12 and right_total <= 1e-12:
+        return 0.0
+    if left_total <= 1e-12 or right_total <= 1e-12:
+        return 1.0
+    return jensen_shannon(left, right)
+
+
+def morphology_components(left: dict[str, Any], right: dict[str, Any]) -> dict[str, float]:
+    a, b = left["perceptual"], right["perceptual"]
+    residual_hash = 0.5 * (
+        hex_hamming(a.get("residual_phash"), b.get("residual_phash"))
+        + hex_hamming(a.get("residual_dhash"), b.get("residual_dhash"))
+    )
+    coverage_a = finite(a.get("residual_mask_coverage"))
+    coverage_b = finite(b.get("residual_mask_coverage"))
+    fraction_a = finite(a.get("dominant_artifact_scale_fraction"))
+    fraction_b = finite(b.get("dominant_artifact_scale_fraction"))
+    return {
+        "residual_hash": residual_hash,
+        "residual_grid": vector_rmse(a.get("residual_luma_grid"), b.get("residual_luma_grid")),
+        "residual_edge": vector_rmse(a.get("residual_edge_grid"), b.get("residual_edge_grid")),
+        "scale": zero_safe_jensen_shannon(
+            a.get("residual_scale_histogram"), b.get("residual_scale_histogram")
+        ),
+        "orientation": vector_rmse(a.get("residual_orientation"), b.get("residual_orientation")),
+        "coverage": 1.0
+        if coverage_a is None or coverage_b is None
+        else clamp(abs(coverage_a - coverage_b)),
+        "scale_fraction": 1.0
+        if fraction_a is None or fraction_b is None
+        else clamp(abs(fraction_a - fraction_b) * 4.0),
+    }
+
+
+def morphology_distance(left: dict[str, Any], right: dict[str, Any]) -> float:
+    if not left.get("morphology_available") or not right.get("morphology_available"):
+        return appearance_distance(left, right)
+    component = morphology_components(left, right)
+    return clamp(
+        0.20 * component["residual_hash"]
+        + 0.20 * component["residual_grid"]
+        + 0.10 * component["residual_edge"]
+        + 0.25 * component["scale"]
+        + 0.15 * component["orientation"]
+        + 0.05 * component["coverage"]
+        + 0.05 * component["scale_fraction"]
+    )
+
+
+def perceptual_distance(left: dict[str, Any], right: dict[str, Any]) -> float:
+    appearance = appearance_distance(left, right)
+    if not left.get("morphology_available") or not right.get("morphology_available"):
+        return appearance
+    # A recolour may remain useful as appearance variation, but it must not
+    # masquerade as a new glitch topology.
+    return clamp(0.12 * appearance + 0.88 * morphology_distance(left, right))
 
 
 def is_near_duplicate(left: dict[str, Any], right: dict[str, Any]) -> bool:
     if left.get("preview_hash") and left["preview_hash"] == right.get("preview_hash"):
         return True
+    if left.get("morphology_available") and right.get("morphology_available"):
+        component = morphology_components(left, right)
+        return (
+            component["residual_hash"] <= 8.0 / 64.0
+            and component["residual_grid"] <= 0.075
+            and component["scale"] <= 0.10
+            and component["orientation"] <= 0.15
+            and component["coverage"] <= 0.08
+        ) or morphology_distance(left, right) <= MORPHOLOGY_DISTANCE_FLOOR
     component = perceptual_components(left, right)
     return (
         component["phash"] <= 6.0 / 64.0
@@ -922,6 +1174,20 @@ def recipe_distance(left: dict[str, Any], right: dict[str, Any]) -> float:
     values: list[float] = []
     values.append(0.0 if a.get("color_space") == b.get("color_space") else 1.0)
     values.append(clamp(abs((finite(a.get("strength")) or 0.0) - (finite(b.get("strength")) or 0.0))))
+    effect_a = a.get("effect") if isinstance(a.get("effect"), dict) else {}
+    effect_b = b.get("effect") if isinstance(b.get("effect"), dict) else {}
+    values.append(
+        0.0
+        if mechanism_family(a) == mechanism_family(b)
+        else 1.0
+    )
+    for name, scale in (("amount", 2.0), ("scale", 128.0), ("rate", 16.0)):
+        values.append(
+            clamp(
+                abs((finite(effect_a.get(name)) or 0.0) - (finite(effect_b.get(name)) or 0.0))
+                / scale
+            )
+        )
     for x, y in zip(a.get("border_rgb", []), b.get("border_rgb", [])):
         values.append(clamp(abs((finite(x) or 0.0) - (finite(y) or 0.0)) / 255.0))
     channel_ranges = {
@@ -951,9 +1217,9 @@ def diversity_distance(
     left: dict[str, Any], right: dict[str, Any], calibration: dict[str, Any]
 ) -> float:
     return clamp(
-        0.55 * perceptual_distance(left, right)
-        + 0.30 * behavior_distance(left, right, calibration)
-        + 0.15 * recipe_distance(left, right)
+        0.80 * perceptual_distance(left, right)
+        + 0.15 * behavior_distance(left, right, calibration)
+        + 0.05 * recipe_distance(left, right)
     )
 
 
@@ -1024,18 +1290,236 @@ def candidate_gain(
 
     nearest = 1.0 if not selected else min(distance(other) for other in selected)
     pareto_bonus = 1.0 / (1.0 + candidate["pareto_front"])
-    families = {item["recipe_family"] for item in selected}
-    cells = {item["archive_cell"] for item in selected}
-    family_bonus = 1.0 if candidate["recipe_family"] not in families else 0.0
-    cell_bonus = 1.0 if candidate["archive_cell"] not in cells else 0.0
+    mechanisms = {item["mechanism_family"] for item in selected}
+    scales = {item["artifact_scale_bucket"] for item in selected}
+    mechanism_bonus = 1.0 if candidate["mechanism_family"] not in mechanisms else 0.0
+    scale_bonus = 1.0 if candidate["artifact_scale_bucket"] not in scales else 0.0
     gain = (
-        0.45 * candidate["core_utility"]
-        + 0.15 * pareto_bonus
-        + 0.30 * nearest
-        + 0.05 * family_bonus
-        + 0.05 * cell_bonus
+        0.25 * candidate["core_utility"]
+        + 0.10 * pareto_bonus
+        + 0.45 * nearest
+        + 0.12 * mechanism_bonus
+        + 0.08 * scale_bonus
     )
     return gain, nearest
+
+
+def finalist_prefix_requirements(target: int) -> dict[str, int]:
+    return {
+        "unique_mechanisms": target,
+        "unique_scale_buckets": min(4, max(1, (target + 1) // 2)),
+        "maximum_per_scale_bucket": 2 if target >= 4 else target,
+        "maximum_mega": 1 if target >= 2 else target,
+    }
+
+
+def prefix_candidate_key(item: dict[str, Any]) -> tuple[Any, ...]:
+    """Static ordering only chooses among equivalent mechanism/scale cells."""
+
+    pareto_front = int(item.get("pareto_front") or 0)
+    pareto_bonus = 1.0 / (1.0 + pareto_front)
+    score = (
+        0.55 * (finite(item.get("core_utility")) or 0.0)
+        + 0.20 * pareto_bonus
+        + 0.15 * (finite(item.get("knn_novelty")) or 0.0)
+        + 0.10 * (finite(item.get("search_quality")) or 0.0)
+    )
+    return (
+        -score,
+        pareto_front,
+        -(finite(item.get("core_utility")) or 0.0),
+        item["recipe_hash"],
+        item["candidate_id"],
+    )
+
+
+def feasible_diversity_prefix(
+    eligible: list[dict[str, Any]], target: int
+) -> list[dict[str, Any]] | None:
+    """Find a complete quota-safe prefix before MMR ordering can create a dead end.
+
+    The first pass searches visual-cluster representatives.  That preserves the
+    morphology floor by construction.  A compressed all-candidate pass is kept
+    for archives whose only quota-feasible mechanism/scale cell is represented
+    by a non-representative item; it explicitly rejects cluster/morphology
+    collisions.
+    """
+
+    if target <= 0:
+        return []
+    requirements = finalist_prefix_requirements(target)
+
+    def search(representatives_only: bool) -> list[dict[str, Any]] | None:
+        grouped: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        for candidate in sorted(eligible, key=prefix_candidate_key):
+            if (
+                representatives_only
+                and candidate.get("cluster_representative") != candidate.get("recipe_hash")
+            ):
+                continue
+            mechanism = candidate["mechanism_family"]
+            scale = candidate["artifact_scale_bucket"]
+            cell = grouped.setdefault(mechanism, {}).setdefault(scale, [])
+            limit = 1 if representatives_only else PREFIX_CELL_CANDIDATE_LIMIT
+            if len(cell) < limit:
+                cell.append(candidate)
+
+        if len(grouped) < target:
+            return None
+        available_scales = {
+            scale for scale_cells in grouped.values() for scale in scale_cells
+        }
+        if len(available_scales) < requirements["unique_scale_buckets"]:
+            return None
+
+        mechanisms = sorted(
+            grouped,
+            key=lambda name: (
+                len(grouped[name]),
+                sum(len(rows) for rows in grouped[name].values()),
+                name,
+            ),
+        )
+        options: dict[str, list[dict[str, Any]]] = {}
+        for mechanism in mechanisms:
+            rows = [
+                row
+                for scale in sorted(grouped[mechanism])
+                for row in grouped[mechanism][scale]
+            ]
+            options[mechanism] = sorted(rows, key=prefix_candidate_key)
+        dead_states: set[tuple[int, int, tuple[tuple[str, int], ...]]] = set()
+
+        def recurse(
+            mechanism_index: int,
+            chosen: list[dict[str, Any]],
+            scale_counts: Counter[str],
+            used_clusters: set[str],
+        ) -> list[dict[str, Any]] | None:
+            needed = target - len(chosen)
+            remaining = len(mechanisms) - mechanism_index
+            if needed == 0:
+                if len(scale_counts) >= requirements["unique_scale_buckets"]:
+                    return list(chosen)
+                return None
+            if remaining < needed:
+                return None
+
+            state = (
+                mechanism_index,
+                len(chosen),
+                tuple(sorted(scale_counts.items())),
+            )
+            if representatives_only and state in dead_states:
+                return None
+
+            possible_scales = set(scale_counts)
+            for name in mechanisms[mechanism_index:]:
+                possible_scales.update(grouped[name])
+            if len(possible_scales) < requirements["unique_scale_buckets"]:
+                if representatives_only:
+                    dead_states.add(state)
+                return None
+            remaining_scale_capacity = sum(
+                max(
+                    0,
+                    (
+                        requirements["maximum_mega"]
+                        if scale == "mega"
+                        else requirements["maximum_per_scale_bucket"]
+                    )
+                    - scale_counts[scale],
+                )
+                for scale in possible_scales
+            )
+            if remaining_scale_capacity < needed:
+                if representatives_only:
+                    dead_states.add(state)
+                return None
+
+            mechanism = mechanisms[mechanism_index]
+            for candidate in options[mechanism]:
+                scale = candidate["artifact_scale_bucket"]
+                if scale_counts[scale] >= requirements["maximum_per_scale_bucket"]:
+                    continue
+                if scale == "mega" and scale_counts[scale] >= requirements["maximum_mega"]:
+                    continue
+                cluster_id = str(candidate.get("cluster_id") or "")
+                if not representatives_only and cluster_id and cluster_id in used_clusters:
+                    continue
+                if not representatives_only and any(
+                    candidate.get("morphology_available")
+                    and other.get("morphology_available")
+                    and morphology_distance(candidate, other) < MORPHOLOGY_DISTANCE_FLOOR
+                    for other in chosen
+                ):
+                    continue
+
+                chosen.append(candidate)
+                scale_counts[scale] += 1
+                if cluster_id:
+                    used_clusters.add(cluster_id)
+                result = recurse(
+                    mechanism_index + 1, chosen, scale_counts, used_clusters
+                )
+                if result is not None:
+                    return result
+                if cluster_id:
+                    used_clusters.discard(cluster_id)
+                scale_counts[scale] -= 1
+                if scale_counts[scale] == 0:
+                    del scale_counts[scale]
+                chosen.pop()
+
+            if remaining - 1 >= needed:
+                result = recurse(
+                    mechanism_index + 1, chosen, scale_counts, used_clusters
+                )
+                if result is not None:
+                    return result
+            if representatives_only:
+                dead_states.add(state)
+            return None
+
+        return recurse(0, [], Counter(), set())
+
+    return search(representatives_only=True) or search(representatives_only=False)
+
+
+def append_gain_ordered_prefix(
+    planned: list[dict[str, Any]],
+    selected: list[dict[str, Any]],
+    selected_hashes: set[str],
+    calibration: dict[str, Any],
+    distance_cache: dict[tuple[str, str], float],
+) -> None:
+    remaining = list(planned)
+    while remaining:
+        options = []
+        for candidate in remaining:
+            gain, nearest = candidate_gain(
+                candidate, selected, calibration, distance_cache
+            )
+            options.append((candidate, gain, nearest))
+        options.sort(
+            key=lambda entry: (
+                -entry[1],
+                entry[0]["pareto_front"],
+                -entry[0]["core_utility"],
+                entry[0]["recipe_hash"],
+                entry[0]["candidate_id"],
+            )
+        )
+        candidate, gain, nearest = options[0]
+        candidate["selection"] = {
+            "gain": gain,
+            "nearest_selected_distance": nearest,
+            "quota_relaxation_level": 0,
+            "feasible_prefix_planned": True,
+        }
+        selected.append(candidate)
+        selected_hashes.add(candidate["recipe_hash"])
+        remaining.remove(candidate)
 
 
 def select_tiers(
@@ -1045,24 +1529,53 @@ def select_tiers(
 ) -> list[dict[str, Any]]:
     selected: list[dict[str, Any]] = []
     selected_hashes: set[str] = set()
+    prefix_target = min(DIVERSITY_PREFIX_LIMIT, len(eligible))
+    planned_prefix = feasible_diversity_prefix(eligible, prefix_target)
+    if planned_prefix is not None:
+        append_gain_ordered_prefix(
+            planned_prefix,
+            selected,
+            selected_hashes,
+            calibration,
+            distance_cache,
+        )
     for _, target in TIER_LIMITS:
         target = min(target, len(eligible))
         cell_limit, family_limit = tier_config(target)
         while len(selected) < target:
             chosen: tuple[dict[str, Any], float, float, int] | None = None
-            for relaxation in range(4):
+            for relaxation in range(5):
                 cell_counts = Counter(item["archive_cell"] for item in selected)
-                family_counts = Counter(item["recipe_family"] for item in selected)
+                mechanism_counts = Counter(item["mechanism_family"] for item in selected)
+                scale_counts = Counter(item["artifact_scale_bucket"] for item in selected)
                 options: list[tuple[dict[str, Any], float, float, int]] = []
                 for candidate in eligible:
                     if candidate["recipe_hash"] in selected_hashes:
                         continue
-                    if relaxation < 3 and candidate["cluster_representative"] != candidate["recipe_hash"]:
+                    if relaxation < 4 and candidate["cluster_representative"] != candidate["recipe_hash"]:
                         continue
-                    if relaxation < 1 and family_counts[candidate["recipe_family"]] >= family_limit:
-                        continue
-                    if relaxation < 2 and cell_counts[candidate["archive_cell"]] >= cell_limit:
-                        continue
+                    if len(selected) < min(DIVERSITY_PREFIX_LIMIT, len(eligible)):
+                        # Coverage first: scale constraints may relax before the
+                        # one-per-mechanism rule.  Any relaxation is recorded and
+                        # makes the finalist coverage summary fail closed.
+                        if (
+                            relaxation < 2
+                            and mechanism_counts[candidate["mechanism_family"]] >= 1
+                        ):
+                            continue
+                        if relaxation < 1:
+                            if scale_counts[candidate["artifact_scale_bucket"]] >= 2:
+                                continue
+                            if (
+                                candidate["artifact_scale_bucket"] == "mega"
+                                and scale_counts["mega"] >= 1
+                            ):
+                                continue
+                    else:
+                        if relaxation < 1 and mechanism_counts[candidate["mechanism_family"]] >= family_limit:
+                            continue
+                        if relaxation < 2 and cell_counts[candidate["archive_cell"]] >= cell_limit:
+                            continue
                     gain, nearest = candidate_gain(candidate, selected, calibration, distance_cache)
                     options.append((candidate, gain, nearest, relaxation))
                 if options:
@@ -1112,6 +1625,9 @@ def diversity_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         "pairwise_perceptual_mean": None if not distances else sum(distances) / len(distances),
         "unique_cells": len({item["archive_cell"] for item in items}),
         "unique_recipe_families": len({item["recipe_family"] for item in items}),
+        "unique_mechanisms": len({item.get("mechanism_family", item["recipe_family"]) for item in items}),
+        "unique_scale_buckets": len({item.get("artifact_scale_bucket", "none") for item in items}),
+        "unique_orientations": len({item.get("artifact_orientation", "none") for item in items}),
         "unique_clusters": len({item["cluster_id"] for item in items}),
     }
 
@@ -1139,7 +1655,7 @@ def diversity_coverage(items: list[dict[str, Any]]) -> dict[str, Any]:
         return rows
 
     cells = grouped("archive_cell")
-    families = grouped("recipe_family")
+    families = grouped("mechanism_family")
     overcrowded = [
         {
             "cluster_id": cluster_id,
@@ -1168,17 +1684,115 @@ def diversity_coverage(items: list[dict[str, Any]]) -> dict[str, Any]:
         else 1.0 - cluster_count / candidate_count,
         "cluster_size": summarize(cluster_counts.values(), cluster_count),
         "archive_cells": cells,
+        "mechanism_families": families,
         "recipe_families": families,
         "generation_directives": {
-            "policy": "increase global restarts and macro mutations toward undercovered cells; avoid overproducing crowded visual clusters",
+            "policy": "stratify global restarts across undercovered explicit mechanisms and artifact scales; avoid overproducing crowded morphology clusters",
             "undercovered_archive_cells": target_cells,
             "overcrowded_visual_clusters": overcrowded,
+            "repetitive_mechanism_families": repetitive_families,
             "repetitive_recipe_families": repetitive_families,
         },
     }
 
 
+def finalist_coverage_summary(
+    selected: list[dict[str, Any]], eligible_count: int
+) -> dict[str, Any]:
+    target = min(DIVERSITY_PREFIX_LIMIT, eligible_count)
+    prefix = selected[:target]
+    if target == 0:
+        return {
+            "status": "not_applicable",
+            "fail_closed": False,
+            "target": 0,
+            "reasons": [],
+        }
+
+    mechanisms = Counter(item["mechanism_family"] for item in prefix)
+    scales = Counter(item["artifact_scale_bucket"] for item in prefix)
+    orientations = Counter(item["artifact_orientation"] for item in prefix)
+    requirements = finalist_prefix_requirements(target)
+    required_mechanisms = requirements["unique_mechanisms"]
+    required_scale_buckets = requirements["unique_scale_buckets"]
+    maximum_per_scale = requirements["maximum_per_scale_bucket"]
+    maximum_mega = requirements["maximum_mega"]
+    reasons: list[str] = []
+    if len(prefix) < target:
+        reasons.append(f"insufficient_selected_candidates:{len(prefix)}<{target}")
+    if len(mechanisms) < required_mechanisms:
+        reasons.append(
+            f"insufficient_mechanism_coverage:{len(mechanisms)}<{required_mechanisms}"
+        )
+    if len(scales) < required_scale_buckets:
+        reasons.append(
+            f"insufficient_scale_bucket_coverage:{len(scales)}<{required_scale_buckets}"
+        )
+    overrepresented = sorted(
+        f"{name}={count}>{maximum_per_scale}"
+        for name, count in scales.items()
+        if count > maximum_per_scale
+    )
+    reasons.extend(f"scale_bucket_overrepresented:{row}" for row in overrepresented)
+    if scales["mega"] > maximum_mega:
+        reasons.append(f"mega_scale_overrepresented:{scales['mega']}>{maximum_mega}")
+
+    morphology_pairs = [
+        morphology_distance(left, right)
+        for index, left in enumerate(prefix)
+        for right in prefix[index + 1 :]
+        if left.get("morphology_available") and right.get("morphology_available")
+    ]
+    morphology_min = min(morphology_pairs) if morphology_pairs else None
+    if morphology_min is not None and morphology_min < MORPHOLOGY_DISTANCE_FLOOR:
+        reasons.append(
+            f"morphology_distance_below_floor:{morphology_min:.6f}<{MORPHOLOGY_DISTANCE_FLOOR:.6f}"
+        )
+    return {
+        "status": "failed" if reasons else "passed",
+        "fail_closed": bool(reasons),
+        "target": target,
+        "selected": len(prefix),
+        "requirements": {
+            "unique_mechanisms": required_mechanisms,
+            "unique_scale_buckets": required_scale_buckets,
+            "maximum_per_scale_bucket": maximum_per_scale,
+            "maximum_mega": maximum_mega,
+            "minimum_pairwise_morphology_distance": MORPHOLOGY_DISTANCE_FLOOR,
+        },
+        "actual": {
+            "unique_mechanisms": len(mechanisms),
+            "unique_scale_buckets": len(scales),
+            "unique_orientations": len(orientations),
+            "mechanisms": dict(sorted(mechanisms.items())),
+            "scale_buckets": dict(sorted(scales.items())),
+            "orientations": dict(sorted(orientations.items())),
+            "morphology_candidates": sum(item.get("morphology_available") is True for item in prefix),
+            "pairwise_morphology_min": morphology_min,
+        },
+        "reasons": reasons,
+    }
+
+
 def rank_items(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    for item in items:
+        recipe = item.get("recipe") if isinstance(item.get("recipe"), dict) else {}
+        perceptual = (
+            item.get("perceptual") if isinstance(item.get("perceptual"), dict) else {}
+        )
+        explicit = item.get("mechanism_family")
+        if not isinstance(explicit, str) or not explicit:
+            existing_family = item.get("recipe_family")
+            explicit = (
+                existing_family
+                if isinstance(existing_family, str) and existing_family
+                else mechanism_family(recipe)
+            )
+        item["mechanism_family"] = explicit
+        item["recipe_family"] = explicit
+        item.setdefault("artifact_scale_bucket", artifact_scale_bucket(recipe, perceptual))
+        item.setdefault("artifact_orientation", artifact_orientation(recipe, perceptual))
+        item.setdefault("morphology_available", morphology_available(perceptual))
     calibration = raw_calibration(items)
     eligible = [item for item in items if item["eligible"]]
     for item in eligible:
@@ -1255,6 +1869,7 @@ def rank_items(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[
     selected_diversity = diversity_summary(selected_top12)
     legacy_diversity = diversity_summary(legacy_top12)
     coverage = diversity_coverage(eligible)
+    finalist_coverage = finalist_coverage_summary(selected, len(eligible))
     selected_median = finite(selected_diversity["pairwise_perceptual_median"])
     legacy_median = finite(legacy_diversity["pairwise_perceptual_median"])
     median_improvement = (
@@ -1284,6 +1899,8 @@ def rank_items(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[
             "performance_excluded": len(items) - performance_certified,
             "performance_status": dict(sorted(certification_status_counts.items())),
             "clusters": len({item["cluster_id"] for item in eligible}),
+            "finalist_coverage_status": finalist_coverage["status"],
+            "publishable": not finalist_coverage["fail_closed"],
             "finalist": min(12, selected_count),
             "shortlist": min(32, selected_count),
             "reserve": min(64, selected_count),
@@ -1299,6 +1916,7 @@ def rank_items(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[
             "pairwise_median_improvement_ratio": median_improvement,
         },
         "diversity_coverage": coverage,
+        "finalist_coverage": finalist_coverage,
     }
     return ranked + [item for item in items if not item["eligible"]], metadata
 
@@ -1349,7 +1967,7 @@ def build_html(payload: dict[str, Any], output_dir: Path, media_root: Path) -> s
               {image}<div class="body">
               <div class="eyebrow">#{item["rank"]} · {html.escape(item["tier"])} · Pareto {item["pareto_front"]}</div>
               <h2>{html.escape(item["recipe_hash"])}</h2>
-              <p>{html.escape(item["archive_cell"])} · {html.escape(item["recipe_family"])} · {html.escape(item["cluster_id"])}</p>
+              <p>{html.escape(item["archive_cell"])} · {html.escape(item.get("mechanism_family", item["recipe_family"]))} · {html.escape(item.get("artifact_scale_bucket", "none"))} · {html.escape(item["cluster_id"])}</p>
               <div class="certification">CERTIFIED · {certification_text}</div>
               <div class="utility">balanced utility <strong>{item["core_utility"]:.3f}</strong></div>
               <div class="metrics">{family_rows}</div>
@@ -1360,6 +1978,12 @@ def build_html(payload: dict[str, Any], output_dir: Path, media_root: Path) -> s
         metadata.get("baseline_comparison", {}).get("pairwise_median_improvement_ratio")
     )
     improvement_text = "n/a" if improvement is None else f"{improvement * 100:+.1f}%"
+    finalist_coverage = metadata.get("finalist_coverage", {})
+    coverage_status = str(finalist_coverage.get("status") or "unknown").upper()
+    coverage_reasons = finalist_coverage.get("reasons")
+    coverage_text = coverage_status
+    if isinstance(coverage_reasons, list) and coverage_reasons:
+        coverage_text += ": " + ", ".join(str(reason) for reason in coverage_reasons)
     return f'''<!doctype html><html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>GLIC ranked presets</title>
 <style>
@@ -1367,7 +1991,7 @@ def build_html(payload: dict[str, Any], output_dir: Path, media_root: Path) -> s
 body{{margin:0;background:#070707;color:#eee}}header{{position:sticky;top:0;z-index:2;padding:18px 26px;background:#090909ef;border-bottom:1px solid #292929}}h1{{margin:0 0 5px;font-size:23px}}header p,.body p{{margin:0;color:#999}}
 main{{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:16px;padding:20px}}.card{{overflow:hidden;background:#111;border:1px solid #292929;border-radius:11px}}.tier-finalist{{border-color:#69ea8b}}.media{{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#030303}}.media.empty{{display:grid;place-items:center;color:#555}}.body{{padding:15px}}.eyebrow{{color:#78ef96;font:12px ui-monospace,monospace;text-transform:uppercase}}h2{{margin:7px 0;font:600 15px ui-monospace,monospace}}.certification{{margin-top:10px;padding:7px 8px;border:1px solid #28643a;border-radius:6px;color:#7bf09a;background:#102417;font:11px ui-monospace,monospace;text-transform:uppercase}}.utility{{margin:13px 0 9px;color:#aaa}}.utility strong{{float:right;color:#fff}}.metric{{display:grid;grid-template-columns:125px 1fr 35px;gap:7px;align-items:center;margin:5px 0;font-size:11px;color:#aaa}}.metric i{{height:5px;background:#282828;border-radius:5px;overflow:hidden}}.metric b{{display:block;height:100%;background:#71d98b}}.metric em{{font-style:normal;text-align:right;font-family:ui-monospace,monospace}}
 </style></head><body><header><h1>GLIC Metal ranked presets</h1>
-<p>{metadata["counts"]["input"]}候補 / {metadata["counts"]["performance_certified"]}件 960×540 Metal 30fps認証 / {metadata["counts"]["performance_excluded"]}件 性能除外 → {metadata["counts"]["clusters"]}知覚クラスタ → Top 12 / 32 / 64 · p95 ≤ {PERFORMANCE_MAX_P95_MS:.3f} ms · Top 12 median diversity {improvement_text} vs legacy quality順 · inactive: {html.escape(", ".join(inactive) or "none")} · {html.escape(metadata["generated_at"])}</p></header>
+<p>{metadata["counts"]["input"]}候補 / {metadata["counts"]["performance_certified"]}件 960×540 Metal 30fps認証 / {metadata["counts"]["performance_excluded"]}件 性能除外 → {metadata["counts"]["clusters"]}形態クラスタ → Top 12 / 32 / 64 · coverage {html.escape(coverage_text)} · p95 ≤ {PERFORMANCE_MAX_P95_MS:.3f} ms · Top 12 median diversity {improvement_text} vs legacy quality順 · inactive: {html.escape(", ".join(inactive) or "none")} · {html.escape(metadata["generated_at"])}</p></header>
 <main>{''.join(cards) or '<p>No eligible candidates.</p>'}</main></body></html>'''
 
 
@@ -1377,8 +2001,13 @@ def write_csv(path: Path, candidates: list[dict[str, Any]]) -> None:
         "tier",
         "candidate_id",
         "recipe_hash",
+        "canonical",
         "archive_cell",
+        "mechanism_family",
         "recipe_family",
+        "artifact_scale_bucket",
+        "artifact_orientation",
+        "morphology_available",
         "cluster_id",
         "pareto_front",
         "core_utility",
@@ -1444,12 +2073,17 @@ def sanitized_item(item: dict[str, Any]) -> dict[str, Any]:
         "tier",
         "candidate_id",
         "recipe_hash",
+        "canonical",
         "preview_hash",
         "evaluation_hash",
         "archive_cell",
         "generation",
         "parent_hash",
+        "mechanism_family",
         "recipe_family",
+        "artifact_scale_bucket",
+        "artifact_orientation",
+        "morphology_available",
         "color_space",
         "eligible",
         "hard_gate",
@@ -1473,6 +2107,9 @@ def sanitized_item(item: dict[str, Any]) -> dict[str, Any]:
         "warnings",
         "preview_path",
         "recipe",
+        "preview_seed",
+        "preview_frame_phase",
+        "ready_to_run_args",
     }
     return {key: value for key, value in item.items() if key in allowed}
 
@@ -1527,6 +2164,11 @@ def main() -> int:
     if catalog_archive_sha != analysis_archive_sha:
         print("catalog and image analysis came from different archive snapshots", file=sys.stderr)
         return 3
+    try:
+        archive = load_strict_json(catalog_archive_path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, CertificationValidationError) as error:
+        print(f"catalog archive snapshot is invalid: {error}", file=sys.stderr)
+        return 3
 
     try:
         certifications_by_recipe = validate_performance_certifications(
@@ -1537,12 +2179,14 @@ def main() -> int:
         return 3
 
     items = prepare_items(candidates, image_analysis, certifications_by_recipe, run_dir)
+    preview_metadata = attach_preview_reproduction(items, archive)
     ranked, ranking_metadata = rank_items(items)
     generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     metadata = {
         "schema": SCHEMA,
         "policy_version": POLICY_VERSION,
         "generated_at": generated_at,
+        **preview_metadata,
         "source": {
             "catalog": str(catalog_path),
             "catalog_generated_at": catalog.get("metadata", {}).get("generated_at"),
@@ -1571,6 +2215,7 @@ def main() -> int:
         "pareto_axes": ranking_metadata["pareto_axes"],
         "baseline_comparison": ranking_metadata["baseline_comparison"],
         "diversity_coverage": ranking_metadata["diversity_coverage"],
+        "finalist_coverage": ranking_metadata["finalist_coverage"],
         "tiers": {"finalist": 12, "shortlist": 32, "reserve": 64},
         "warnings": [
             "temporal_residual_delta is a frame-residual activity metric, not optical flow",
@@ -1597,6 +2242,7 @@ def main() -> int:
         "archive_sha256": metadata["source"]["archive_sha256"],
         "policy_version": POLICY_VERSION,
         "diversity_coverage": metadata["diversity_coverage"],
+        "finalist_coverage": metadata["finalist_coverage"],
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     atomic_write_text(

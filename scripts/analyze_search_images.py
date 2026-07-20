@@ -59,13 +59,42 @@ PERCEPTUAL_FIELDS = (
     "luma_grid",
     "edge_grid",
     "color_grid",
+    "residual_reference",
+    "residual_mask_coverage",
+    "residual_blockiness",
+    "dominant_artifact_scale_px",
+    "dominant_artifact_scale_fraction",
+    "artifact_scale_bucket",
+    "artifact_orientation",
+    "residual_horizontal_energy",
+    "residual_vertical_energy",
+    "residual_phash",
+    "residual_dhash",
+    "residual_luma_grid",
+    "residual_edge_grid",
+    "residual_blockiness_multiscale",
+    "residual_scale_histogram",
+    "residual_orientation",
 )
 PERCEPTUAL_SCALAR_FIELDS = PERCEPTUAL_FIELDS[:7]
+MORPHOLOGY_SCALAR_FIELDS = (
+    "residual_mask_coverage",
+    "residual_blockiness",
+    "dominant_artifact_scale_px",
+    "dominant_artifact_scale_fraction",
+    "residual_horizontal_energy",
+    "residual_vertical_energy",
+)
 PERCEPTUAL_VECTOR_LENGTHS = {
     "hsv_hist": 128,
     "luma_grid": 64,
     "edge_grid": 64,
     "color_grid": 48,
+    "residual_luma_grid": 64,
+    "residual_edge_grid": 64,
+    "residual_blockiness_multiscale": 7,
+    "residual_scale_histogram": 7,
+    "residual_orientation": 2,
 }
 
 
@@ -156,13 +185,49 @@ def safe_preview_path(run_dir: Path, raw_path: Any) -> Path:
     return resolved
 
 
-def load_targets(run_dir: Path, archive_path: Path) -> tuple[list[dict[str, str]], str, bytes]:
+def resolve_dry_reference(archive: dict[str, Any], run_dir: Path) -> Path | None:
+    inputs = archive.get("inputs")
+    if not isinstance(inputs, list) or not inputs or not isinstance(inputs[0], str):
+        return None
+    raw = Path(inputs[0]).expanduser()
+    if raw.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+        return None
+    if raw.is_absolute():
+        resolved = raw.resolve()
+        return resolved if resolved.is_file() else None
+
+    # Current runs record repo-relative inputs while older copied runs may
+    # contain a path relative to the run directory.  Resolve only beneath the
+    # two explicit roots; do not let an archive traverse elsewhere.
+    repo_root = Path(__file__).resolve().parents[1]
+    for base in (run_dir, repo_root):
+        resolved = (base / raw).resolve()
+        try:
+            resolved.relative_to(base.resolve())
+        except ValueError:
+            continue
+        if resolved.is_file():
+            return resolved
+    return None
+
+
+def analysis_key(preview_sha256: str, reference_sha256: str) -> str:
+    return hashlib.sha256(
+        f"{preview_sha256}\0{reference_sha256 or 'wet-only'}".encode("utf-8")
+    ).hexdigest()
+
+
+def load_targets(
+    run_dir: Path, archive_path: Path
+) -> tuple[list[dict[str, str]], str, bytes, Path | None]:
     archive_bytes = archive_path.read_bytes()
     try:
         archive = json.loads(archive_bytes)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise AnalysisError(f"archive is not readable: {error}") from error
     records = archive_records(archive)
+    dry_reference = resolve_dry_reference(archive, run_dir)
+    reference_sha256 = sha256_file(dry_reference) if dry_reference is not None else ""
     targets: list[dict[str, str]] = []
     seen_labels: set[str] = set()
     seen_recipes: set[str] = set()
@@ -190,10 +255,17 @@ def load_targets(run_dir: Path, archive_path: Path) -> tuple[list[dict[str, str]
                 "preview_path": str(preview.relative_to(run_dir)),
                 "absolute_path": str(preview),
                 "preview_sha256": sha256_file(preview),
+                "reference_absolute_path": ""
+                if dry_reference is None
+                else str(dry_reference),
+                "reference_sha256": reference_sha256,
             }
         )
+        targets[-1]["analysis_key_sha256"] = analysis_key(
+            targets[-1]["preview_sha256"], reference_sha256
+        )
     targets.sort(key=lambda item: (item["recipe_hash"], item["candidate_id"]))
-    return targets, hashlib.sha256(archive_bytes).hexdigest(), archive_bytes
+    return targets, hashlib.sha256(archive_bytes).hexdigest(), archive_bytes, dry_reference
 
 
 def cache_preview(
@@ -215,6 +287,29 @@ def cache_preview(
         os.replace(temporary_path, cached_path)
     stable["absolute_path"] = str(cached_path)
     stable["preview_path"] = str(cached_path.relative_to(run_dir))
+    reference_path = target.get("reference_absolute_path")
+    reference_sha256 = target.get("reference_sha256")
+    if reference_path and reference_sha256:
+        source_reference = Path(reference_path)
+        reference_suffix = source_reference.suffix.lower()
+        cached_reference = cache_dir / f"dry-{reference_sha256}{reference_suffix}"
+        if not cached_reference.is_file() or sha256_file(cached_reference) != reference_sha256:
+            temporary_reference = temporary_dir / f"dry-{reference_sha256}{reference_suffix}"
+            try:
+                shutil.copyfile(source_reference, temporary_reference)
+            except OSError as error:
+                raise AnalysisError(
+                    f"dry reference changed while taking the analysis snapshot: {source_reference}"
+                ) from error
+            if sha256_file(temporary_reference) != reference_sha256:
+                raise AnalysisError(
+                    f"dry reference content changed during snapshot: {source_reference}"
+                )
+            os.replace(temporary_reference, cached_reference)
+        stable["reference_absolute_path"] = str(cached_reference)
+        stable["reference_path"] = str(cached_reference.relative_to(run_dir))
+    else:
+        stable["reference_path"] = ""
     return stable
 
 
@@ -304,7 +399,7 @@ def index_validated_rows(
 
 def validate_perceptual_rows(rows: dict[str, dict[str, Any]]) -> None:
     for label, row in rows.items():
-        for name in ("phash", "dhash"):
+        for name in ("phash", "dhash", "residual_phash", "residual_dhash"):
             value = row.get(name)
             if not isinstance(value, str) or len(value) != 16:
                 raise AnalysisError(f"perceptual feature analyzer returned invalid {name} for {label}")
@@ -320,6 +415,30 @@ def validate_perceptual_rows(rows: dict[str, dict[str, Any]]) -> None:
                 raise AnalysisError(
                     f"perceptual feature analyzer returned invalid {name} length for {label}"
                 )
+        if row.get("residual_reference") not in ("dry_wet", "unavailable"):
+            raise AnalysisError(
+                f"perceptual feature analyzer returned invalid residual reference for {label}"
+            )
+        if row.get("artifact_scale_bucket") not in (
+            "none",
+            "micro",
+            "fine",
+            "medium",
+            "coarse",
+            "mega",
+        ):
+            raise AnalysisError(
+                f"perceptual feature analyzer returned invalid scale bucket for {label}"
+            )
+        if row.get("artifact_orientation") not in (
+            "none",
+            "horizontal",
+            "vertical",
+            "bidirectional",
+        ):
+            raise AnalysisError(
+                f"perceptual feature analyzer returned invalid orientation for {label}"
+            )
 
 
 def analyze_batch(
@@ -334,7 +453,15 @@ def analyze_batch(
     liveliness_path = temporary_dir / f"liveliness-{batch_index:04d}.json"
     feature_path = temporary_dir / f"perceptual-{batch_index:04d}.json"
     liveliness_specs = [f'{target["absolute_path"]}|1|{target["label"]}' for target in targets]
-    feature_specs = [f'{target["absolute_path"]}|0|{target["label"]}' for target in targets]
+    feature_specs = [
+        f'{target["absolute_path"]}|0|{target["label"]}'
+        + (
+            f'|{target["reference_absolute_path"]}'
+            if target.get("reference_absolute_path")
+            else ""
+        )
+        for target in targets
+    ]
 
     run_checked(
         command_prefix(runner) + ["--json", str(liveliness_path), *liveliness_specs],
@@ -371,14 +498,17 @@ def load_cache(path: Path, analyzer_fingerprint: str) -> dict[str, dict[str, Any
         if not isinstance(record, dict):
             continue
         preview_sha = record.get("preview_sha256")
+        cached_analysis_key = record.get("analysis_key_sha256")
         liveliness = record.get("liveliness")
         perceptual = record.get("perceptual")
         if (
             not isinstance(preview_sha, str)
+            or not isinstance(cached_analysis_key, str)
             or not isinstance(liveliness, dict)
             or not isinstance(perceptual, dict)
             or any(finite_number(liveliness.get(name)) is False for name in LIVELINESS_FIELDS)
             or any(finite_number(perceptual.get(name)) is False for name in PERCEPTUAL_SCALAR_FIELDS)
+            or any(finite_number(perceptual.get(name)) is False for name in MORPHOLOGY_SCALAR_FIELDS)
             or any(name not in perceptual for name in PERCEPTUAL_FIELDS)
         ):
             continue
@@ -386,7 +516,7 @@ def load_cache(path: Path, analyzer_fingerprint: str) -> dict[str, dict[str, Any
             validate_perceptual_rows({"cached": perceptual})
         except AnalysisError:
             continue
-        cache[preview_sha] = record
+        cache[cached_analysis_key] = record
     return cache
 
 
@@ -445,7 +575,7 @@ def main() -> int:
 
     try:
         run_selftests(runner, feature_python, feature_script)
-        targets, archive_sha, archive_bytes = load_targets(run_dir, archive_path)
+        targets, archive_sha, archive_bytes, dry_reference = load_targets(run_dir, archive_path)
         analyzer_fingerprint = sha256_files([runner, runner.with_name("liveliness.py"), feature_script])
         cache = {} if args.force else load_cache(output_path, analyzer_fingerprint)
         analyzed: dict[str, dict[str, Any]] = {}
@@ -459,13 +589,19 @@ def main() -> int:
                 cache_preview(target, run_dir, preview_cache, temporary_dir) for target in targets
             ]
             for target in stable_targets:
-                cached = cache.get(target["preview_sha256"])
+                cached = cache.get(target["analysis_key_sha256"])
                 if cached:
                     analyzed[target["label"]] = {
                         "candidate_id": target["candidate_id"],
                         "recipe_hash": target["recipe_hash"],
                         "preview_path": target["preview_path"],
                         "preview_sha256": target["preview_sha256"],
+                        "analysis_key_sha256": target["analysis_key_sha256"],
+                        "reference_path": target.get("reference_path", ""),
+                        "reference_sha256": target.get("reference_sha256", ""),
+                        "residual_mode": "dry_wet"
+                        if target.get("reference_sha256")
+                        else "wet_only_fallback",
                         "liveliness": {key: cached["liveliness"][key] for key in LIVELINESS_FIELDS},
                         "perceptual": {key: cached["perceptual"][key] for key in PERCEPTUAL_FIELDS},
                     }
@@ -484,6 +620,12 @@ def main() -> int:
                         "recipe_hash": target["recipe_hash"],
                         "preview_path": target["preview_path"],
                         "preview_sha256": target["preview_sha256"],
+                        "analysis_key_sha256": target["analysis_key_sha256"],
+                        "reference_path": target.get("reference_path", ""),
+                        "reference_sha256": target.get("reference_sha256", ""),
+                        "residual_mode": "dry_wet"
+                        if target.get("reference_sha256")
+                        else "wet_only_fallback",
                         "liveliness": {key: liveliness[key] for key in LIVELINESS_FIELDS},
                         "perceptual": {key: perceptual[key] for key in PERCEPTUAL_FIELDS},
                     }
@@ -501,6 +643,17 @@ def main() -> int:
                 "archive_snapshot_path": str(archive_snapshot_path),
                 "archive_sha256": archive_sha,
                 "run_dir": str(run_dir),
+                "dry_reference_path": "" if dry_reference is None else str(dry_reference),
+                "dry_reference_sha256": ""
+                if dry_reference is None
+                else (
+                    targets[0]["reference_sha256"]
+                    if targets
+                    else sha256_file(dry_reference)
+                ),
+                "residual_mode": "dry_wet"
+                if dry_reference is not None
+                else "wet_only_fallback",
             },
             "analyzer": {
                 "fingerprint": analyzer_fingerprint,
@@ -515,6 +668,7 @@ def main() -> int:
                 "analyzed": len(records),
                 "reused": reused,
                 "new": len(pending),
+                "dry_reference_available": dry_reference is not None,
             },
             "records": records,
         }

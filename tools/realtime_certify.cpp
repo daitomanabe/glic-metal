@@ -37,6 +37,7 @@ struct Options {
 
 struct Recipe {
   glic::CodecConfig config;
+  glic::RealtimeEffectConfig effect{};
   float strength = 1.0f;
 };
 
@@ -156,6 +157,53 @@ int normalizeBlockSize(int value) {
   return result;
 }
 
+const char *effectFamilyName(glic::RealtimeEffectFamily family) noexcept {
+  switch (family) {
+  case glic::RealtimeEffectFamily::LEGACY_BLOCK:
+    return "legacy_block";
+  case glic::RealtimeEffectFamily::LINE_TEAR:
+    return "line_tear";
+  case glic::RealtimeEffectFamily::CHANNEL_SHEAR:
+    return "channel_shear";
+  case glic::RealtimeEffectFamily::ANALOG_SYNC:
+    return "analog_sync";
+  case glic::RealtimeEffectFamily::MIRROR_FOLD:
+    return "mirror_fold";
+  case glic::RealtimeEffectFamily::EDGE_ECHO:
+    return "edge_echo";
+  case glic::RealtimeEffectFamily::BITPLANE_DITHER:
+    return "bitplane_dither";
+  case glic::RealtimeEffectFamily::WAVE_WARP:
+    return "wave_warp";
+  case glic::RealtimeEffectFamily::POSTER_SOLAR:
+    return "poster_solar";
+  case glic::RealtimeEffectFamily::COUNT:
+    break;
+  }
+  return "legacy_block";
+}
+
+float normalizedEffectParameter(float value) {
+  return std::round(std::clamp(value, 0.0f, 1.0f) * 1000.0f) / 1000.0f;
+}
+
+void normalizeEffect(glic::RealtimeEffectConfig &effect) {
+  const int family = std::clamp(
+      static_cast<int>(effect.family),
+      static_cast<int>(glic::RealtimeEffectFamily::LEGACY_BLOCK),
+      static_cast<int>(glic::RealtimeEffectFamily::COUNT) - 1);
+  effect.family = static_cast<glic::RealtimeEffectFamily>(family);
+  if (effect.family == glic::RealtimeEffectFamily::LEGACY_BLOCK) {
+    effect.amount = 0.7f;
+    effect.scale = 0.5f;
+    effect.rate = 0.5f;
+    return;
+  }
+  effect.amount = normalizedEffectParameter(effect.amount);
+  effect.scale = normalizedEffectParameter(effect.scale);
+  effect.rate = normalizedEffectParameter(effect.rate);
+}
+
 void normalizeRecipe(Recipe &recipe) {
   recipe.config.colorSpace = static_cast<glic::ColorSpace>(std::clamp(
       static_cast<int>(recipe.config.colorSpace), 0,
@@ -163,6 +211,7 @@ void normalizeRecipe(Recipe &recipe) {
   recipe.strength =
       std::round(std::clamp(recipe.strength, 0.0f, 2.0f) * 1000.0f) /
       1000.0f;
+  normalizeEffect(recipe.effect);
   for (auto &channel : recipe.config.channels) {
     channel.minBlockSize = normalizeBlockSize(channel.minBlockSize);
     channel.maxBlockSize = normalizeBlockSize(channel.maxBlockSize);
@@ -188,9 +237,8 @@ void normalizeRecipe(Recipe &recipe) {
   }
 }
 
-std::string canonicalRecipe(const Recipe &recipe) {
-  std::ostringstream output;
-  output << "v1|" << static_cast<int>(recipe.config.colorSpace) << '|'
+void appendCanonicalCodec(std::ostringstream &output, const Recipe &recipe) {
+  output << static_cast<int>(recipe.config.colorSpace) << '|'
          << static_cast<int>(recipe.config.borderColorR) << '|'
          << static_cast<int>(recipe.config.borderColorG) << '|'
          << static_cast<int>(recipe.config.borderColorB) << '|'
@@ -207,6 +255,23 @@ std::string canonicalRecipe(const Recipe &recipe) {
            << channel.transformScale << ','
            << static_cast<int>(channel.encodingMethod) << ';';
   }
+}
+
+std::string canonicalRecipeV1(const Recipe &recipe) {
+  std::ostringstream output;
+  output << "v1|";
+  appendCanonicalCodec(output, recipe);
+  return output.str();
+}
+
+std::string canonicalRecipe(const Recipe &recipe) {
+  std::ostringstream output;
+  output << "v2|";
+  appendCanonicalCodec(output, recipe);
+  output << '|' << static_cast<int>(recipe.effect.family) << ','
+         << std::lround(recipe.effect.amount * 1000.0f) << ','
+         << std::lround(recipe.effect.scale * 1000.0f) << ','
+         << std::lround(recipe.effect.rate * 1000.0f);
   return output.str();
 }
 
@@ -218,13 +283,14 @@ bool decodeCanonical(std::string text, Recipe &recipe) {
   }
   std::istringstream input(text);
   std::string version;
-  std::array<long long, 38> values{};
-  if (!(input >> version) || version != "v1")
+  std::array<long long, 42> values{};
+  if (!(input >> version) || (version != "v1" && version != "v2"))
     return false;
-  for (auto &value : values) {
-    if (!(input >> value) ||
-        value < static_cast<long long>(std::numeric_limits<int>::min()) ||
-        value > static_cast<long long>(std::numeric_limits<int>::max()))
+  const size_t valueCount = version == "v1" ? 38 : values.size();
+  for (size_t index = 0; index < valueCount; ++index) {
+    if (!(input >> values[index]) ||
+        values[index] < static_cast<long long>(std::numeric_limits<int>::min()) ||
+        values[index] > static_cast<long long>(std::numeric_limits<int>::max()))
       return false;
   }
   std::string extra;
@@ -251,8 +317,20 @@ bool decodeCanonical(std::string text, Recipe &recipe) {
     channel.transformScale = take();
     channel.encodingMethod = static_cast<glic::EncodingMethod>(take());
   }
+  if (version == "v2") {
+    recipe.effect.family = static_cast<glic::RealtimeEffectFamily>(take());
+    recipe.effect.amount = static_cast<float>(take()) / 1000.0f;
+    recipe.effect.scale = static_cast<float>(take()) / 1000.0f;
+    recipe.effect.rate = static_cast<float>(take()) / 1000.0f;
+  } else {
+    recipe.effect.family = glic::RealtimeEffectFamily::LEGACY_BLOCK;
+    recipe.effect.amount = 0.7f;
+    recipe.effect.scale = 0.5f;
+    recipe.effect.rate = 0.5f;
+  }
   normalizeRecipe(recipe);
-  return canonicalRecipe(recipe) == original;
+  return (version == "v1" ? canonicalRecipeV1(recipe)
+                           : canonicalRecipe(recipe)) == original;
 }
 
 uint64_t fnv1a64(std::string_view text) {
@@ -435,6 +513,10 @@ int runSelftest() {
   recipe.config.borderColorG = 2;
   recipe.config.borderColorB = 3;
   recipe.strength = 1.25f;
+  recipe.effect.family = glic::RealtimeEffectFamily::WAVE_WARP;
+  recipe.effect.amount = 0.7344f;
+  recipe.effect.scale = 0.1254f;
+  recipe.effect.rate = 1.0f;
   for (size_t index = 0; index < recipe.config.channels.size(); ++index) {
     auto &channel = recipe.config.channels[index];
     channel.minBlockSize = 2 << static_cast<int>(index);
@@ -455,11 +537,27 @@ int runSelftest() {
   passed &= expect(decodeCanonical(canonical, decoded),
                    "canonical recipe parsing");
   passed &= expect(canonicalRecipe(decoded) == canonical,
-                   "canonical recipe round trip");
+                   "canonical v2 recipe round trip");
   passed &= expect(!decodeCanonical(canonical + "0", decoded),
-                   "canonical trailing-data rejection");
+                   "canonical v2 trailing-data rejection");
   passed &= expect(validRecipeHash(hexHash(fnv1a64(canonical))),
-                   "canonical FNV hash formatting");
+                   "canonical v2 FNV hash formatting");
+
+  const std::string legacyCanonical = canonicalRecipeV1(recipe);
+  Recipe legacyDecoded;
+  passed &= expect(decodeCanonical(legacyCanonical, legacyDecoded),
+                   "canonical v1 backward-compatible parsing");
+  passed &= expect(canonicalRecipeV1(legacyDecoded) == legacyCanonical,
+                   "canonical v1 byte-for-byte round trip");
+  passed &= expect(
+      legacyDecoded.effect.family ==
+              glic::RealtimeEffectFamily::LEGACY_BLOCK &&
+          legacyDecoded.effect.amount == 0.7f &&
+          legacyDecoded.effect.scale == 0.5f &&
+          legacyDecoded.effect.rate == 0.5f,
+      "canonical v1 legacy effect defaults");
+  passed &= expect(validRecipeHash(hexHash(fnv1a64(legacyCanonical))),
+                   "canonical v1 FNV hash formatting");
 
   if (!passed)
     return 1;
@@ -499,6 +597,13 @@ void appendResultJson(std::ostream &output, const RecipeRecord &record,
   output << std::setprecision(17)
          << "{\"schema\":\"" << kResultSchema << "\""
          << ",\"recipe_hash\":\"" << record.recipeHash << "\""
+         << ",\"effect_family\":\""
+         << effectFamilyName(record.recipe.effect.family) << "\""
+         << ",\"effect\":{\"family\":"
+         << static_cast<int>(record.recipe.effect.family)
+         << ",\"amount\":" << record.recipe.effect.amount
+         << ",\"scale\":" << record.recipe.effect.scale
+         << ",\"rate\":" << record.recipe.effect.rate << "}"
          << ",\"backend\":\"" << jsonEscape(backend) << "\""
          << ",\"width\":" << result.width
          << ",\"height\":" << result.height
@@ -605,6 +710,7 @@ int main(int argc, char **argv) {
     glic::RealtimeCertificationRequest request;
     request.config = record.recipe.config;
     request.effectStrength = record.recipe.strength;
+    request.effect = record.recipe.effect;
     request.frameIndexBase = frameIndexBase;
     auto result = glic::certifyRealtimePreset(*backend, input, output, request);
     appendResultJson(ndjson, record, backend->name(), std::move(result));

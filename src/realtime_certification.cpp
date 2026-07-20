@@ -60,7 +60,8 @@ RealtimeCertificationResult certifyRealtimePreset(
       .height = kRealtimeCertificationHeight,
       .config = request.config,
       .seed = request.seed,
-      .effectStrength = request.effectStrength};
+      .effectStrength = request.effectStrength,
+      .effect = request.effect};
   if (!backend.prepare(prepareOptions, result.error))
     return result;
 

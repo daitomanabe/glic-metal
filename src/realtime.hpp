@@ -11,12 +11,33 @@ namespace glic {
 
 enum class RealtimeBackendKind : uint8_t { AUTO = 0, CPU = 1, METAL = 2 };
 
+enum class RealtimeEffectFamily : uint32_t {
+  LEGACY_BLOCK = 0,
+  LINE_TEAR = 1,
+  CHANNEL_SHEAR = 2,
+  ANALOG_SYNC = 3,
+  MIRROR_FOLD = 4,
+  EDGE_ECHO = 5,
+  BITPLANE_DITHER = 6,
+  WAVE_WARP = 7,
+  POSTER_SOLAR = 8,
+  COUNT = 9
+};
+
+struct RealtimeEffectConfig {
+  RealtimeEffectFamily family = RealtimeEffectFamily::LEGACY_BLOCK;
+  float amount = 0.7f;
+  float scale = 0.5f;
+  float rate = 0.5f;
+};
+
 struct RealtimePrepareOptions {
   int width = 0;
   int height = 0;
   CodecConfig config{};
   uint32_t seed = 0x474C4943u;
   float effectStrength = 1.0f;
+  RealtimeEffectConfig effect{};
 };
 
 struct RealtimeFrameStats {

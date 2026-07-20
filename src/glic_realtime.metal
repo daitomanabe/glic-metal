@@ -30,6 +30,11 @@ struct PresetUniform {
     float effectStrength;
 
     ChannelUniform channels[3];
+
+    uint effectFamily;
+    float effectAmount;
+    float effectScale;
+    float effectRate;
 };
 
 struct FrameUniform {
@@ -251,6 +256,184 @@ static float channelAtWrapped(texture2d<float, access::read> input,
     return channelAt(input, wrapped, channel, preset);
 }
 
+static float effectChannelAtWrapped(texture2d<float, access::read> input,
+                                    int2 coordinate,
+                                    int channel,
+                                    constant PresetUniform& preset) {
+    int2 wrapped = int2(wrapCoordinate(coordinate.x, int(preset.width)),
+                        wrapCoordinate(coordinate.y, int(preset.height)));
+    return input.read(uint2(wrapped)).rgb[channel];
+}
+
+constant ushort kBayer4x4[16] = {
+    0, 8, 2, 10,
+    12, 4, 14, 6,
+    3, 11, 1, 9,
+    15, 7, 13, 5
+};
+
+static float triangleWave(int value, int halfPeriod) {
+    halfPeriod = max(1, halfPeriod);
+    int period = halfPeriod * 2;
+    int position = wrapCoordinate(value, period);
+    int ramp = position <= halfPeriod ? position : period - position;
+    return float(ramp * 2 - halfPeriod) / float(halfPeriod);
+}
+
+static int triangleOffset(int value, int halfPeriod, int amplitude, int divisor) {
+    halfPeriod = max(1, halfPeriod);
+    divisor = max(1, divisor);
+    int period = halfPeriod * 2;
+    int position = wrapCoordinate(value, period);
+    int ramp = position <= halfPeriod ? position : period - position;
+    int numerator = (ramp * 2 - halfPeriod) * amplitude;
+    int denominator = halfPeriod * divisor;
+    return numerator >= 0 ? (numerator + denominator / 2) / denominator
+                          : -((-numerator + denominator / 2) / denominator);
+}
+
+static uint heldEffectFrame(constant PresetUniform& preset,
+                            constant FrameUniform& frame) {
+    float rate = clamp(preset.effectRate, 0.0, 1.0);
+    uint holdFrames = 1u + uint(round((1.0 - rate) * 11.0));
+    return frame.frameIndex / max(1u, holdFrames);
+}
+
+static float realtimeFamilyValue(texture2d<float, access::read> input,
+                                 int2 point,
+                                 int channel,
+                                 float current,
+                                 constant PresetUniform& preset,
+                                 constant FrameUniform& frame) {
+    float amount = clamp(preset.effectAmount, 0.0, 1.0);
+    float scale = clamp(preset.effectScale, 0.0, 1.0);
+    float mixAmount = clamp(amount * preset.effectStrength, 0.0, 1.0);
+    uint heldFrame = heldEffectFrame(preset, frame);
+    float affected = current;
+
+    switch (preset.effectFamily) {
+        case 1u: { // LINE_TEAR: thin horizontal bands with long horizontal displacement.
+            int bandHeight = 1 + int(round(scale * 15.0));
+            int band = point.y / bandHeight;
+            uint bandHash = pixelHash(0, band, 0, heldFrame, preset.seed);
+            float density = 0.10 + amount * 0.65;
+            if (float(bandHash & 0xffffu) < density * 65535.0) {
+                int maximum = min(320, max(4, int(preset.width) / 3));
+                int maximumShift = 4 + int(round(amount * float(maximum - 4)));
+                int shift = 1 + int((bandHash >> 16u) % uint(max(1, maximumShift)));
+                if ((bandHash & 0x80000000u) != 0u) shift = -shift;
+                affected = effectChannelAtWrapped(input, point + int2(shift, 0), channel, preset);
+            }
+            break;
+        }
+        case 2u: { // CHANNEL_SHEAR: independently separate RGB/opponent channels.
+            int halfPeriod = 8 + int(round(scale * 120.0));
+            int phase = int(heldFrame % uint(max(1, halfPeriod * 2)));
+            float wave = triangleWave(point.y + phase, halfPeriod);
+            int maximumOffset = 2 + int(round(amount * 96.0));
+            int channelDirection = channel - 1;
+            int offset = channelDirection * maximumOffset +
+                         int(round(float(channelDirection * maximumOffset) * wave * 0.5));
+            affected = effectChannelAtWrapped(input, point + int2(offset, 0), channel, preset);
+            break;
+        }
+        case 3u: { // ANALOG_SYNC: shared raster wobble, roll, jitter and scanline loss.
+            int halfPeriod = 6 + int(round(scale * 72.0));
+            int speed = 1 + int(round(preset.effectRate * 3.0));
+            int phase = int(heldFrame) * speed;
+            float wave = triangleWave(point.y + phase, halfPeriod);
+            int amplitude = 1 + int(round(amount * 32.0));
+            int wobble = int(round(wave * float(amplitude)));
+            int lineGroup = point.y / max(1, 1 + int(round(scale * 5.0)));
+            uint lineHash = pixelHash(0, lineGroup, 0, heldFrame / 2u, preset.seed);
+            if (float(lineHash & 0xffu) < amount * 90.0) {
+                int jitter = 1 + int((lineHash >> 8u) % uint(max(1, amplitude * 2)));
+                wobble += (lineHash & 0x10000u) == 0u ? -jitter : jitter;
+            }
+            int rollSpeed = 1 + int(round(preset.effectRate * 4.0));
+            int roll = int((heldFrame * uint(rollSpeed)) % max(1u, preset.height));
+            int chromaOffset = (channel - 1) * max(1, int(round(amount * 3.0)));
+            affected = effectChannelAtWrapped(
+                input, point + int2(wobble + chromaOffset, roll), channel, preset);
+            if (((point.y + phase) & 1) != 0)
+                affected *= 1.0 - amount * 0.25;
+            break;
+        }
+        case 4u: { // MIRROR_FOLD: wide mirrored ribbons rather than square blocks.
+            int halfPeriod = min(12 + int(round(scale * 148.0)),
+                                 max(2, int(preset.width) / 2));
+            int period = halfPeriod * 2;
+            int phase = int(heldFrame % uint(max(1, period)));
+            int shiftedX = point.x + phase;
+            int cell = shiftedX >= 0 ? shiftedX / period
+                                     : -((-shiftedX + period - 1) / period);
+            int local = wrapCoordinate(shiftedX, period);
+            int folded = local <= halfPeriod ? local : period - 1 - local;
+            int sampleX = cell * period + folded - phase;
+            affected = effectChannelAtWrapped(input, int2(sampleX, point.y), channel, preset);
+            break;
+        }
+        case 5u: { // EDGE_ECHO: displace only where source gradients are present.
+            float left = effectChannelAtWrapped(input, point + int2(-1, 0), channel, preset);
+            float right = effectChannelAtWrapped(input, point + int2(1, 0), channel, preset);
+            float top = effectChannelAtWrapped(input, point + int2(0, -1), channel, preset);
+            float bottom = effectChannelAtWrapped(input, point + int2(0, 1), channel, preset);
+            float edge = (abs(right - left) + abs(bottom - top)) * 0.5;
+            int distance = 2 + int(round(scale * 46.0));
+            int direction = (heldFrame & 1u) == 0u ? -1 : 1;
+            float echo = effectChannelAtWrapped(
+                input, point + int2(direction * distance, distance / 2), channel, preset);
+            float displacementEdge = abs(echo - current);
+            float threshold = mix(0.12, 0.012, scale);
+            float edgeMix = clamp(max((edge - threshold) * 10.0,
+                                      (displacementEdge - threshold * 0.55) * 4.5),
+                                  0.0, 1.0);
+            affected = mix(current, echo, edgeMix);
+            break;
+        }
+        case 6u: { // BITPLANE_DITHER: ordered bit-plane damage without resampling.
+            int grainPower = clamp(int(round(scale * 2.0)), 0, 2);
+            int grain = 1 << grainPower;
+            int matrixX = (point.x / grain) & 3;
+            int matrixY = (point.y / grain) & 3;
+            uint threshold = uint(kBayer4x4[matrixY * 4 + matrixX]);
+            uint coverage = uint(clamp(int(round(amount * 16.0)), 0, 16));
+            if (threshold < coverage) {
+                int baseBit = clamp(1 + int(floor(amount * 6.0)), 1, 6);
+                int bit = (baseBit + channel + int(heldFrame & 1u)) % 7;
+                uint byteValue = uint(clamp(int(round(current * 255.0)), 0, 255));
+                affected = float(byteValue ^ (1u << uint(bit))) / 255.0;
+            }
+            break;
+        }
+        case 7u: { // WAVE_WARP: continuous two-axis displacement.
+            int halfPeriod = 12 + int(round(scale * 120.0));
+            int speed = 1 + int(round(preset.effectRate * 3.0));
+            int phase = int(heldFrame) * speed;
+            int amplitude = 1 + int(round(amount * 48.0));
+            // Integer ratio rounding keeps source coordinates bit-exact with
+            // the CPU implementation at half-integer boundaries.
+            int offsetX = triangleOffset(point.y + phase, halfPeriod, amplitude, 1);
+            int offsetY = triangleOffset(point.x - phase, halfPeriod, amplitude, 2);
+            affected = effectChannelAtWrapped(
+                input, point + int2(offsetX, offsetY), channel, preset);
+            break;
+        }
+        case 8u: { // POSTER_SOLAR: palette reduction plus animated solarization.
+            int levels = 2 + int(round(scale * 14.0));
+            float stepSize = 1.0 / float(max(1, levels - 1));
+            float quantized = round(current / stepSize) * stepSize;
+            float drift = triangleWave(int(heldFrame), 32) * 0.15;
+            float threshold = clamp(0.25 + scale * 0.50 + drift, 0.10, 0.90);
+            affected = quantized > threshold ? 1.0 - quantized : quantized;
+            break;
+        }
+        default:
+            break;
+    }
+    return clamp(mix(current, affected, mixAmount), 0.0, 1.0);
+}
+
 static float predictorValue(texture2d<float, access::read> input,
                             int requested,
                             int channel,
@@ -382,8 +565,19 @@ kernel void glicRealtime(texture2d<float, access::read> input [[texture(0)]],
         output.write(sourcePixel, gid);
         return;
     }
-    float3 currentSpace = toSpace(sourcePixel.rgb, preset.colorSpace);
+    float3 currentSpace = preset.effectFamily == 0u
+                              ? toSpace(sourcePixel.rgb, preset.colorSpace)
+                              : sourcePixel.rgb;
     float3 reconstructed;
+
+    if (preset.effectFamily != 0u) {
+        for (int channel = 0; channel < 3; ++channel) {
+            reconstructed[channel] = realtimeFamilyValue(
+                input, point, channel, currentSpace[channel], preset, frame);
+        }
+        output.write(float4(reconstructed, sourcePixel.a), gid);
+        return;
+    }
 
     for (int channel = 0; channel < 3; ++channel) {
         ChannelUniform config = preset.channels[channel];

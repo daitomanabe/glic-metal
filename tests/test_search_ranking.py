@@ -8,6 +8,7 @@ import random
 import sys
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 
 
@@ -39,7 +40,27 @@ def descriptor(index: int, length: int, multiplier: int) -> list[float]:
 
 
 def candidate_recipe(index: int) -> dict:
+    families = (
+        "macro_displace",
+        "line_tear",
+        "vertical_slice",
+        "channel_split",
+        "bitplane_xor",
+        "tile_dropout",
+        "temporal_freeze",
+        "feedback_smear",
+    )
+    scales = (2, 4, 8, 16, 32, 64, 128)
+    family = families[index % len(families)]
     return {
+        "family_name": family,
+        "effect": {
+            "family": index % len(families),
+            "family_name": family,
+            "amount": 0.25 + (index % 7) / 10.0,
+            "scale": scales[index % len(scales)],
+            "rate": 1.0 + index % 5,
+        },
         "color_space": index % 16,
         "strength": (index % 100) / 100.0,
         "border_rgb": [index % 256, index * 3 % 256, index * 7 % 256],
@@ -149,6 +170,11 @@ def ranking_item(index: int) -> dict:
         "solidity": 0.60 + (index % 30) / 100.0,
         "shape_entropy": 0.15 + (index % 28) / 35.0,
     }
+    scale_index = index % 7
+    scale_buckets = ("micro", "micro", "fine", "medium", "coarse", "mega", "mega")
+    orientation_index = index % 3
+    orientation_names = ("horizontal", "vertical", "bidirectional")
+    orientation_vectors = ([1.0, 0.0], [0.0, 1.0], [0.5, 0.5])
     visual = {
         "colorfulness": 0.10 + (index % 25) / 30.0,
         "saturation_mean": 0.15 + (index % 30) / 40.0,
@@ -163,6 +189,26 @@ def ranking_item(index: int) -> dict:
         "luma_grid": descriptor(index, 64, 23),
         "edge_grid": descriptor(index, 64, 47),
         "color_grid": descriptor(index, 48, 71),
+        "residual_reference": "dry_wet",
+        "residual_mask_coverage": 0.35 + (index % 20) / 40.0,
+        "residual_blockiness": 0.05 + scale_index / 20.0,
+        "dominant_artifact_scale_px": float((2, 4, 8, 16, 32, 64, 128)[scale_index]),
+        "dominant_artifact_scale_fraction": (2, 4, 8, 16, 32, 64, 128)[scale_index] / 270.0,
+        "artifact_scale_bucket": scale_buckets[scale_index],
+        "artifact_orientation": orientation_names[orientation_index],
+        "residual_horizontal_energy": orientation_vectors[orientation_index][0],
+        "residual_vertical_energy": orientation_vectors[orientation_index][1],
+        "residual_phash": f"{(index * 0xA24BAED4963EE407) & ((1 << 64) - 1):016x}",
+        "residual_dhash": f"{(index * 0x9FB21C651E98DF25) & ((1 << 64) - 1):016x}",
+        "residual_luma_grid": descriptor(index, 64, 31),
+        "residual_edge_grid": descriptor(index, 64, 59),
+        "residual_blockiness_multiscale": [
+            1.0 if position == scale_index else 0.0 for position in range(7)
+        ],
+        "residual_scale_histogram": [
+            1.0 if position == scale_index else 0.0 for position in range(7)
+        ],
+        "residual_orientation": list(orientation_vectors[orientation_index]),
     }
     consistency = min(1.0, metric["min_input_changed_ratio"] / metric["changed_ratio"])
     recipe = candidate_recipe(index)
@@ -173,12 +219,17 @@ def ranking_item(index: int) -> dict:
     return {
         "candidate_id": str(index),
         "recipe_hash": recipe_hash,
+        "canonical": None,
         "preview_hash": f"{index + 1000:016x}",
         "evaluation_hash": f"{index + 2000:016x}",
         "archive_cell": f"cell-{index}",
         "generation": "mutation",
         "parent_hash": "",
-        "recipe_family": f"family-{index}",
+        "mechanism_family": recipe["effect"]["family_name"],
+        "recipe_family": recipe["effect"]["family_name"],
+        "artifact_scale_bucket": visual["artifact_scale_bucket"],
+        "artifact_orientation": visual["artifact_orientation"],
+        "morphology_available": True,
         "color_space": index % 16,
         "eligible": True,
         "hard_gate": {"passed": True, "reasons": []},
@@ -433,6 +484,147 @@ class PerceptualTests(unittest.TestCase):
     def test_distinct_descriptor_is_not_duplicate(self) -> None:
         self.assertFalse(ranking.is_near_duplicate(ranking_item(1), ranking_item(37)))
 
+    def test_colour_change_does_not_fake_morphology_diversity(self) -> None:
+        left = ranking_item(1)
+        right = copy.deepcopy(left)
+        right["recipe_hash"] = "colour-only"
+        right["preview_hash"] = "colour-only"
+        right["perceptual"].update(
+            {
+                "phash": "ffffffffffffffff",
+                "dhash": "ffffffffffffffff",
+                "hsv_hist": [1.0 if position == 127 else 0.0 for position in range(128)],
+                "luma_grid": [1.0 - value for value in left["perceptual"]["luma_grid"]],
+                "color_grid": [1.0 - value for value in left["perceptual"]["color_grid"]],
+            }
+        )
+        self.assertEqual(ranking.morphology_distance(left, right), 0.0)
+        self.assertLess(ranking.perceptual_distance(left, right), 0.12)
+        self.assertTrue(ranking.is_near_duplicate(left, right))
+
+    def test_same_colour_eight_and_sixty_four_pixel_scales_are_far(self) -> None:
+        fine = ranking_item(2)
+        coarse = copy.deepcopy(fine)
+        coarse["recipe_hash"] = "scale-64"
+        coarse["preview_hash"] = "scale-64"
+        coarse["artifact_scale_bucket"] = "mega"
+        coarse["perceptual"].update(
+            {
+                "dominant_artifact_scale_px": 64.0,
+                "dominant_artifact_scale_fraction": 64.0 / 270.0,
+                "artifact_scale_bucket": "mega",
+                "residual_blockiness_multiscale": [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                "residual_scale_histogram": [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            }
+        )
+        self.assertGreater(ranking.morphology_distance(fine, coarse), 0.20)
+        self.assertFalse(ranking.is_near_duplicate(fine, coarse))
+
+
+class MechanismAndCoverageTests(unittest.TestCase):
+    def test_explicit_effect_family_replaces_legacy_inference(self) -> None:
+        recipe = candidate_recipe(1)
+        self.assertEqual(ranking.mechanism_family(recipe), recipe["effect"]["family_name"])
+
+    def test_same_legacy_sixty_four_pixel_top_eight_fails_closed(self) -> None:
+        rows = [ranking_item(index) for index in range(1, 17)]
+        for row in rows:
+            row["mechanism_family"] = "legacy_macro_displace"
+            row["recipe_family"] = "legacy_macro_displace"
+            row["artifact_scale_bucket"] = "mega"
+            row["perceptual"].update(
+                {
+                    "artifact_scale_bucket": "mega",
+                    "dominant_artifact_scale_px": 64.0,
+                    "dominant_artifact_scale_fraction": 64.0 / 270.0,
+                    "residual_blockiness_multiscale": [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                    "residual_scale_histogram": [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                }
+            )
+        ranked, metadata = ranking.rank_items(rows)
+        coverage = metadata["finalist_coverage"]
+        self.assertEqual(coverage["status"], "failed")
+        self.assertTrue(coverage["fail_closed"])
+        self.assertFalse(metadata["counts"]["publishable"])
+        self.assertTrue(
+            any(reason.startswith("insufficient_mechanism_coverage:") for reason in coverage["reasons"])
+        )
+        self.assertTrue(
+            any(reason.startswith("insufficient_scale_bucket_coverage:") for reason in coverage["reasons"])
+        )
+        self.assertTrue(
+            any(reason.startswith("mega_scale_overrepresented:") for reason in coverage["reasons"])
+        )
+        self.assertFalse(
+            any(
+                row.get("selection", {}).get("feasible_prefix_planned") is True
+                for row in ranked[:8]
+            )
+        )
+
+    def test_feasible_prefix_avoids_micro_scale_dead_end(self) -> None:
+        specifications = (
+            (1, "m0", "micro"),
+            (2, "m1", "micro"),
+            (3, "m2", "micro"),
+            (4, "m2", "coarse"),
+            (5, "m3", "fine"),
+            (6, "m4", "medium"),
+            (7, "m5", "coarse"),
+            (8, "m6", "mega"),
+            (9, "m7", "medium"),
+        )
+        rows = []
+        for index, mechanism, scale in specifications:
+            row = ranking_item(index)
+            row["mechanism_family"] = mechanism
+            row["recipe_family"] = mechanism
+            row["artifact_scale_bucket"] = scale
+            rows.append(row)
+
+        ranked, metadata = ranking.rank_items(rows)
+        top_eight = ranked[:8]
+        coverage = metadata["finalist_coverage"]
+        self.assertEqual(coverage["status"], "passed")
+        self.assertTrue(metadata["counts"]["publishable"])
+        self.assertEqual(len({row["mechanism_family"] for row in top_eight}), 8)
+        self.assertLessEqual(
+            max(Counter(row["artifact_scale_bucket"] for row in top_eight).values()),
+            2,
+        )
+        self.assertEqual(
+            Counter(row["artifact_scale_bucket"] for row in top_eight)["mega"], 1
+        )
+        self.assertTrue(
+            all(
+                row["selection"]["quota_relaxation_level"] == 0
+                and row["selection"]["feasible_prefix_planned"] is True
+                for row in top_eight
+            )
+        )
+        self.assertEqual(
+            [
+                row["artifact_scale_bucket"]
+                for row in top_eight
+                if row["mechanism_family"] == "m2"
+            ],
+            ["coarse"],
+        )
+
+    def test_small_fixture_scales_requirements_with_candidate_count(self) -> None:
+        selected = []
+        for index, scale in enumerate(("micro", "fine", "medium"), 1):
+            selected.append(
+                {
+                    "mechanism_family": f"m{index}",
+                    "artifact_scale_bucket": scale,
+                    "artifact_orientation": "bidirectional",
+                    "morphology_available": False,
+                }
+            )
+        coverage = ranking.finalist_coverage_summary(selected, len(selected))
+        self.assertEqual(coverage["status"], "passed")
+
 
 class RankingTests(unittest.TestCase):
     def test_deterministic_tiers_and_saturated_speed(self) -> None:
@@ -449,6 +641,8 @@ class RankingTests(unittest.TestCase):
         self.assertEqual(first_meta["counts"]["reserve"], 64)
         self.assertFalse(first_meta["families"]["realtime_headroom"]["active"])
         self.assertIn("pairwise_median_improvement_ratio", first_meta["baseline_comparison"])
+        self.assertEqual(first_meta["finalist_coverage"]["status"], "passed")
+        self.assertTrue(first_meta["counts"]["publishable"])
         top12 = [row for row in first if row.get("rank") and row["rank"] <= 12]
         self.assertEqual(len({row["archive_cell"] for row in top12}), 12)
         self.assertEqual(len({row["cluster_id"] for row in top12}), 12)
@@ -457,6 +651,117 @@ class RankingTests(unittest.TestCase):
         rows, metadata = ranking.rank_items([])
         self.assertEqual(rows, [])
         self.assertEqual(metadata["counts"]["eligible"], 0)
+
+
+class PreviewReproductionTests(unittest.TestCase):
+    def test_prepare_items_copies_catalog_record_canonical(self) -> None:
+        canonical = "v2|1|128|128|128|1000|8,32,48000,9,32,0,0,0,0,20,0;|1,700,500,500"
+        source = ranking_item(1)
+        recipe = source["recipe"]
+        recipe_hash = source["recipe_hash"]
+        with tempfile.TemporaryDirectory() as name:
+            run_dir = Path(name)
+            preview = run_dir / "elites" / "candidate.png"
+            preview.parent.mkdir()
+            preview.write_bytes(b"preview")
+            candidates = [
+                {
+                    "candidate_id": "1",
+                    "recipe_hash": recipe_hash,
+                    "archive_cell": "cell-1",
+                    "quality": 0.75,
+                    "record": {
+                        "candidate_id": "1",
+                        "recipe_hash": recipe_hash,
+                        "canonical": canonical,
+                        "preview": "elites/candidate.png",
+                        "metrics": source["raw_metrics"],
+                        "recipe": recipe,
+                    },
+                }
+            ]
+            analysis = {
+                "records": [
+                    {
+                        "candidate_id": "1",
+                        "recipe_hash": recipe_hash,
+                        "preview_path": "elites/candidate.png",
+                        "liveliness": source["liveliness"],
+                        "perceptual": source["perceptual"],
+                    }
+                ]
+            }
+            certification = valid_certification("1", recipe_hash, recipe)
+            prepared = ranking.prepare_items(
+                candidates, analysis, {recipe_hash: certification}, run_dir
+            )
+        self.assertEqual(prepared[0]["canonical"], canonical)
+
+    def test_canonical_recipe_is_preserved_and_has_priority_in_ready_args(self) -> None:
+        canonical = (
+            "v2|1|128|128|128|1937|"
+            "8,32,48000,9,32,0,0,0,0,20,0;"
+            "8,32,48000,9,32,0,0,0,0,20,0;"
+            "8,32,48000,9,32,0,0,0,0,20,0;|0,700,500,500"
+        )
+        rows = [ranking_item(1)]
+        rows[0]["canonical"] = canonical
+        ranking.attach_preview_reproduction(
+            rows,
+            {"evaluation_seeds": [0x13579BDF], "frame_phases": [89]},
+        )
+        clean = ranking.sanitized_item(rows[0])
+        self.assertEqual(clean["canonical"], canonical)
+        self.assertEqual(
+            clean["ready_to_run_args"],
+            [
+                "--backend",
+                "metal",
+                "--canonical",
+                canonical,
+                "--seed",
+                str(0x13579BDF),
+            ],
+        )
+
+    def test_fresh_archive_seed_and_last_phase_propagate_to_candidate(self) -> None:
+        rows = [ranking_item(1)]
+        metadata = ranking.attach_preview_reproduction(
+            rows,
+            {
+                "evaluation_seeds": [0x13579BDF, 0x8BADF00D],
+                "frame_phases": [0, 3, 7, 13, 23, 37, 61, 89],
+            },
+        )
+        clean = ranking.sanitized_item(rows[0])
+        self.assertEqual(
+            metadata,
+            {"preview_seed": 0x13579BDF, "preview_frame_phase": 89},
+        )
+        self.assertEqual(clean["preview_seed"], 0x13579BDF)
+        self.assertEqual(clean["preview_frame_phase"], 89)
+        args = clean["ready_to_run_args"]
+        self.assertEqual(args[args.index("--seed") + 1], str(0x13579BDF))
+        self.assertEqual(args[args.index("--effect-family") + 1], "line_tear")
+        for option in (
+            "--strength",
+            "--effect-amount",
+            "--effect-scale",
+            "--effect-rate",
+        ):
+            self.assertIn(option, args)
+
+    def test_legacy_archive_does_not_invent_preview_defaults(self) -> None:
+        rows = [ranking_item(1)]
+        metadata = ranking.attach_preview_reproduction(rows, {})
+        clean = ranking.sanitized_item(rows[0])
+        self.assertEqual(
+            metadata,
+            {"preview_seed": None, "preview_frame_phase": None},
+        )
+        self.assertIsNone(clean["preview_seed"])
+        self.assertIsNone(clean["preview_frame_phase"])
+        self.assertIsNone(clean["ready_to_run_args"])
 
 
 class CertificationReportTests(unittest.TestCase):

@@ -112,9 +112,14 @@ struct alignas(16) MetalPresetUniform {
   float effectStrength = 1.0f;
 
   std::array<MetalChannelUniform, 3> channels{};
+
+  uint32_t effectFamily = 0;
+  float effectAmount = 0.7f;
+  float effectScale = 0.5f;
+  float effectRate = 0.5f;
 };
 
-static_assert(sizeof(MetalPresetUniform) == 176);
+static_assert(sizeof(MetalPresetUniform) == 192);
 
 inline MetalPresetUniform
 makeMetalPresetUniform(const RealtimePrepareOptions &options) {
@@ -127,6 +132,15 @@ makeMetalPresetUniform(const RealtimePrepareOptions &options) {
   uniform.borderG = options.config.borderColorG / 255.0f;
   uniform.borderB = options.config.borderColorB / 255.0f;
   uniform.effectStrength = std::clamp(options.effectStrength, 0.0f, 2.0f);
+  const uint32_t requestedFamily =
+      static_cast<uint32_t>(options.effect.family);
+  uniform.effectFamily =
+      requestedFamily < static_cast<uint32_t>(RealtimeEffectFamily::COUNT)
+          ? requestedFamily
+          : static_cast<uint32_t>(RealtimeEffectFamily::LEGACY_BLOCK);
+  uniform.effectAmount = std::clamp(options.effect.amount, 0.0f, 1.0f);
+  uniform.effectScale = std::clamp(options.effect.scale, 0.0f, 1.0f);
+  uniform.effectRate = std::clamp(options.effect.rate, 0.0f, 1.0f);
 
   for (size_t i = 0; i < uniform.channels.size(); ++i) {
     const auto &source = options.config.channels[i];

@@ -77,7 +77,7 @@ cmake --build .
 
 リアルタイムAPIは [src/realtime.hpp](src/realtime.hpp) にあります。CPU backendは3チャンネルを永続workerで並列処理し、解像度変更時以外はworkspaceを再利用します。Metal backendはCPU配列を扱う同期APIに加え、`MTLTexture`を直接渡すゼロコピーAPIと、呼び出し側の`MTLCommandBuffer`へ処理を追加する非同期APIを提供します。
 
-リアルタイム経路はpresetの予測・量子化・wavelet・encoding設定から、残差欠落、ブロック転送、RLEストリーク、RGB分離、ビットプレーン破損を生成します。破損パターンは数フレーム保持されるため、動画上で構造として認識できます。`--strength` は `0`（無加工）から `2`（最大）で、既定値は `1` です。
+リアルタイム経路には、従来のブロック破損に加えて、走査線ティア、RGBチャンネルシア、アナログ同期崩れ、ミラーフォールド、輪郭エコー、ビットプレーン・ディザ、波形ワープ、ポスタライズ／ソラリゼーションの9機構があります。いずれも1 passのCPU/Metal実装で、フレームごとの確保を行いません。`--strength` は `0`（無加工）から `2`（最大）で、`--effect-amount`、`--effect-scale`、`--effect-rate` で機構固有の形状を制御します。
 
 macOSでMetal shaderをビルドする際はFull Xcodeが必要です。CMakeはデフォルトで `/Applications/Xcode.app/Contents/Developer` を使用するため、システムの`xcode-select`設定を変更する必要はありません。
 
@@ -87,8 +87,11 @@ macOSでMetal shaderをビルドする際はFull Xcodeが必要です。CMakeは
 
 ```bash
 python3 scripts/process_video.py input.mov output.mp4 \
-  --preset bi0g4n1c --backend metal --strength 1.0
+  --backend metal --effect-family line_tear \
+  --effect-amount 0.9 --effect-scale 0.55 --effect-rate 0.4
 ```
+
+探索結果の `ready_to_run_args` に含まれる `--canonical 'v2|...' --seed ...` を渡すと、preset名への変換を挟まず、評価した強度・機構・形状を動画上へ完全に再現できます。
 
 入力・出力動画をローカルに保持する場合は、Git対象外の `test-videos/` を使用できます。
 
@@ -112,11 +115,11 @@ python3 tools/evaluate_effect_difference.py input.mov \
 
 ### 無人preset探索
 
-`glic_realtime_search` は外部APIやLLMを呼ばず、決定的なMAP-Elites探索で技術的に異なるpreset候補を収集します。128候補のランダム初期集団後は、2/3をarchive内eliteの変異、1/3をglobal random restartとし、変異にもchannel全再生成・channel交換・3 channel macro restartを含めます。これにより少数eliteの近傍へ探索が収束するのを防ぎます。複数入力・2 seed・8 frame phaseでMetal出力を評価し、無変化、過剰破壊、クリッピング、入力非依存ノイズを除外します。archiveへ入る可能性がある候補だけを、別の永続Metal backendで960×540・10 frame warm-up・120 frame計測し、wall-clockの平均とp95が両方33.333ms以下の場合に限ってeliteとして保存します。レシピだけでなく全評価frameと代表PNGもhash化するため、異なる設定から生じる同一出力がarchive枠を消費しません。
+`glic_realtime_search` は外部APIやLLMを呼ばず、決定的なMAP-Elites探索で技術的に異なる候補を収集します。recipe v2は9つの描画機構を均等に試し、長時間探索では同じ機構のeliteを親にして `amount`、`scale`、`rate`、強度を変異させます。定期的なglobal random restartも機構ごとの試行数を均等に保つため、1種類のブロック解像度へ収束しません。複数入力・2 seed・8 frame phaseでMetal出力を評価し、無変化、過剰破壊、クリッピング、入力非依存ノイズを除外します。archiveへ入る可能性がある候補だけを、別の永続Metal backendで960×540・10 frame warm-up・120 frame計測し、wall-clockの平均とp95が両方33.333ms以下の場合に限ってeliteとして保存します。recipe v1は従来互換の `legacy_block` として読み込めます。
 
-探索archiveはさらに、技術ゲート、9つの独立評価family、量子化Pareto front、知覚的近似画像cluster、cell/recipe-family制約付きMMRの順に絞り込めます。ランキングは同じarchive snapshotを960×540で再認証し、Metal、warm-up 10以上、計測120 frame以上、平均・p95とも30fps以上という証明が欠ける候補をfail-closedで除外します。速度差は認証済みp95 FPSを30〜60fpsで評価し、60fps以上で飽和させます。出力はTop 12、Shortlist 32、Reserve 64と全候補です。
+探索archiveは、技術ゲート、独立評価family、量子化Pareto front、無加工との差分形状cluster、多様性制約の順に絞り込みます。画像解析は16:9を維持し、2/4/8/16/32/64/128pxの支配的な変化スケール、方向、差分領域、空間分布を測ります。Top 8は8種類の機構、4種類以上のスケール、1スケール最大2件、mega-scale最大1件、形状距離の下限を必須にします。条件を満たす組がなければ似た候補で穴埋めせず、`publishable=false` にします。ランキングは同じarchive snapshotを960×540で再認証し、Metal、warm-up 10以上、計測120 frame以上、平均・p95とも30fps以上という証明が欠ける候補をfail-closedで除外します。
 
-画像解析は外部の `visual-liveliness` を毎回self-testして明暗・占有率・blob形状を測り、repo内の知覚特徴器がpHash/dHash、HSV分布、色、edge、block境界を測ります。代表PNGは静止画なので、`temporal_residual_delta` は時間変化量であって光学flowではありません。美的な「最適」を断定するものではなく、目視する候補を説明可能な少数へ絞る仕組みです。Full HDを線形1/4へ縮小済みの480×270入力では、追加縮小を避けるため `--scale 1` を指定します。
+画像解析は無加工フレームとの残差を主軸にし、色相差による見かけ上の多様性より、破損のスケール・方向・位置を重く評価します。代表PNGは静止画なので、`temporal_residual_delta` は時間変化量であって光学flowではありません。美的な「最適」を断定するものではなく、目視する候補を説明可能で似ていない少数へ絞る仕組みです。Full HDを線形1/4へ縮小済みの480×270入力では、追加縮小を避けるため `--scale 1` を指定します。
 
 ```bash
 ./build/glic_realtime_search \
@@ -419,7 +422,21 @@ cmake --build .
 
 The realtime API is declared in [src/realtime.hpp](src/realtime.hpp). The CPU backend reuses resolution-sized workspaces after preparation. The Metal backend provides a synchronous CPU-buffer API, an opaque zero-copy `MTLTexture` API, and a non-blocking API that appends work to the caller's `MTLCommandBuffer`.
 
-The realtime path derives residual loss, block displacement, RLE streaks, RGB separation, and bit-plane damage from each preset's prediction, quantization, wavelet, and encoding settings. Corruption patterns are held for several frames so they read as temporal structures. `--strength` ranges from `0` (off) to `2` (maximum) and defaults to `1`.
+The realtime path has nine explicit glitch mechanisms. `legacy_block` preserves the preset-derived codec damage path; the other eight are independent RGB mechanisms so selecting a legacy preset cannot collapse them back into the same block topology.
+
+| Realtime family | Spatial character |
+|---|---|
+| `legacy_block` | Held macroblock displacement and codec damage |
+| `line_tear` | Thin horizontal tears with long row displacement |
+| `channel_shear` | Independently moving RGB channel bands |
+| `analog_sync` | Raster wobble, vertical roll, jitter, and scanline loss |
+| `mirror_fold` | Repeating mirrored ribbons |
+| `edge_echo` | Directional displaced edge echoes |
+| `bitplane_dither` | Ordered bit-plane XOR damage without resampling |
+| `wave_warp` | Continuous two-axis waveform displacement |
+| `poster_solar` | Animated posterization and solarization |
+
+`--strength` ranges from `0` (off) to `2` (maximum). The explicit families also expose normalized `amount`, `scale`, and `rate` controls. Corruption patterns use a reproducible 32-bit seed and are held for several frames according to `rate`.
 
 Full Xcode is required to compile the Metal shader on macOS. CMake uses `/Applications/Xcode.app/Contents/Developer` by default, so it does not need to change the system `xcode-select` setting.
 
@@ -429,8 +446,14 @@ Full Xcode is required to compile the Metal shader on macOS. CMake uses `/Applic
 
 ```bash
 python3 scripts/process_video.py input.mov output.mp4 \
-  --preset bi0g4n1c --backend metal --strength 1.0
+  --preset default --backend metal --strength 1.25 \
+  --effect-family line_tear --effect-amount 0.9 \
+  --effect-scale 0.35 --effect-rate 0.65 --seed 0x13579bdf
 ```
+
+Pass the exact `--canonical 'v2|...' --seed ...` values from a ranked row's
+`ready_to_run_args` to reproduce the evaluated mechanism and controls without
+converting the recipe back through a preset name.
 
 Use the Git-ignored `test-videos/` directory for local input and preview files.
 
@@ -454,9 +477,9 @@ The evaluator requires NumPy and OpenCV from `requirements-qa.txt`. Only `VISIBL
 
 ### Unattended preset search
 
-`glic_realtime_search` is a deterministic, API-free MAP-Elites search for technically diverse preset candidates. After 128 random seeds, two candidates in three mutate archive elites and one in three performs a global random restart. Mutations also include full-channel regeneration, channel swaps, and a rare three-channel macro restart. After the low-resolution visual gates, only candidates that could enter the archive are certified on a separate persistent Metal backend at 960x540 with 10 warm-up and 120 measured frames. A candidate becomes an elite only when both mean and p95 synchronous wall time are at most 33.333 ms.
+`glic_realtime_search` is a deterministic, API-free MAP-Elites search for technically diverse preset candidates. Recipe v2 cycles all nine explicit mechanisms evenly. Long runs select parents from the same mechanism before mutating `amount`, `scale`, `rate`, and strength, while scheduled global restarts preserve equal trial counts. Recipe v1 remains readable as `legacy_block`. After the low-resolution visual gates, only candidates that could enter the mechanism-prefixed archive are certified on a separate persistent Metal backend at 960x540 with 10 warm-up and 120 measured frames. A candidate becomes an elite only when both mean and p95 synchronous wall time are at most 33.333 ms.
 
-The archive is narrowed in stages: technical gates, nine separate score families, quantized Pareto fronts, perceptual near-duplicate clusters, and MMR selection with cell/recipe-family quotas. The ranking pipeline independently certifies the exact archive snapshot and fails closed unless every row has a matching recipe identity and Metal 960x540 measurement. Missing certification, CPU results, fewer than 120 frames, or mean/p95 above the 30 fps budget are excluded and never used to fill Top 12/32/64. Certified p95 FPS is scored from 30 to 60 fps and saturated above 60.
+The archive is narrowed in stages: technical gates, score families, quantized Pareto fronts, dry/wet residual morphology clusters, and diversity selection. Analysis preserves 16:9 geometry and measures 2/4/8/16/32/64/128px artifact scales, orientation, residual coverage, and spatial grids. The Top 8 must cover eight mechanisms, at least four scale buckets, no more than two candidates per bucket, at most one mega-scale result, and a minimum morphology distance. If a feasible set does not exist the report is marked `publishable=false` instead of filling it with lookalikes. The ranking pipeline independently certifies the exact archive snapshot and fails closed unless every row has a matching recipe identity and Metal 960x540 measurement. Missing certification, CPU results, fewer than 120 frames, or mean/p95 above the 30 fps budget are excluded and never used to fill Top 12/32/64.
 
 An external, self-tested `visual-liveliness` instrument measures presence and connected-component shape. The repository analyzer adds pHash/dHash, HSV, color, edge, and block-boundary descriptors. A representative PNG is still only one frame, so `temporal_residual_delta` is labelled activity rather than optical flow. This is deterministic technical/perceptual triage, not a claim of learned aesthetic optimality. Inputs already reduced from Full HD to 480×270 should use `--scale 1`.
 

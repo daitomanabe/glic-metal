@@ -64,6 +64,7 @@ struct Options {
 
 struct Recipe {
   glic::CodecConfig config;
+  glic::RealtimeEffectConfig effect{};
   float strength = 1.0f;
 };
 
@@ -521,6 +522,76 @@ int normalizeBlockSize(int value) {
   return result;
 }
 
+const char *effectFamilyName(glic::RealtimeEffectFamily family) noexcept {
+  switch (family) {
+  case glic::RealtimeEffectFamily::LEGACY_BLOCK:
+    return "legacy_block";
+  case glic::RealtimeEffectFamily::LINE_TEAR:
+    return "line_tear";
+  case glic::RealtimeEffectFamily::CHANNEL_SHEAR:
+    return "channel_shear";
+  case glic::RealtimeEffectFamily::ANALOG_SYNC:
+    return "analog_sync";
+  case glic::RealtimeEffectFamily::MIRROR_FOLD:
+    return "mirror_fold";
+  case glic::RealtimeEffectFamily::EDGE_ECHO:
+    return "edge_echo";
+  case glic::RealtimeEffectFamily::BITPLANE_DITHER:
+    return "bitplane_dither";
+  case glic::RealtimeEffectFamily::WAVE_WARP:
+    return "wave_warp";
+  case glic::RealtimeEffectFamily::POSTER_SOLAR:
+    return "poster_solar";
+  case glic::RealtimeEffectFamily::COUNT:
+    break;
+  }
+  return "legacy_block";
+}
+
+float normalizedEffectParameter(float value) {
+  return std::round(std::clamp(value, 0.0f, 1.0f) * 1000.0f) / 1000.0f;
+}
+
+void normalizeEffect(glic::RealtimeEffectConfig &effect) {
+  const int family = std::clamp(
+      static_cast<int>(effect.family),
+      static_cast<int>(glic::RealtimeEffectFamily::LEGACY_BLOCK),
+      static_cast<int>(glic::RealtimeEffectFamily::COUNT) - 1);
+  effect.family = static_cast<glic::RealtimeEffectFamily>(family);
+  if (effect.family == glic::RealtimeEffectFamily::LEGACY_BLOCK) {
+    // Legacy output does not consume these fields. Canonicalizing them to the
+    // public defaults prevents visually identical legacy recipes from gaining
+    // distinct hashes through inert parameters.
+    effect.amount = 0.7f;
+    effect.scale = 0.5f;
+    effect.rate = 0.5f;
+    return;
+  }
+  effect.amount = normalizedEffectParameter(effect.amount);
+  effect.scale = normalizedEffectParameter(effect.scale);
+  effect.rate = normalizedEffectParameter(effect.rate);
+}
+
+void makeNeutralCodec(glic::CodecConfig &config) {
+  config.colorSpace = glic::ColorSpace::RGB;
+  config.borderColorR = 128;
+  config.borderColorG = 128;
+  config.borderColorB = 128;
+  glic::ChannelConfig channel;
+  channel.minBlockSize = 8;
+  channel.maxBlockSize = 32;
+  channel.segmentationPrecision = 48.0f;
+  channel.predictionMethod = glic::PredictionMethod::PAETH;
+  channel.quantizationValue = 32;
+  channel.clampMethod = glic::ClampMethod::NONE;
+  channel.transformType = glic::TransformType::FWT;
+  channel.waveletType = glic::WaveletType::NONE;
+  channel.transformCompress = 0.0f;
+  channel.transformScale = 20;
+  channel.encodingMethod = glic::EncodingMethod::RAW;
+  config.channels.fill(channel);
+}
+
 void normalizeRecipe(Recipe &recipe) {
   recipe.config.colorSpace = static_cast<glic::ColorSpace>(std::clamp(
       static_cast<int>(recipe.config.colorSpace), 0,
@@ -528,6 +599,7 @@ void normalizeRecipe(Recipe &recipe) {
   recipe.strength =
       std::round(std::clamp(recipe.strength, 0.0f, 2.0f) * 1000.0f) /
       1000.0f;
+  normalizeEffect(recipe.effect);
   for (auto &channel : recipe.config.channels) {
     channel.minBlockSize = normalizeBlockSize(channel.minBlockSize);
     channel.maxBlockSize = normalizeBlockSize(channel.maxBlockSize);
@@ -574,10 +646,24 @@ glic::ChannelConfig randomChannel(DeterministicRng &rng) {
   return channel;
 }
 
-Recipe generateRecipe(uint64_t searchSeed, uint64_t candidateId) {
-  DeterministicRng rng(
-      splitMix64(searchSeed ^ (candidateId * 0xd6e8feb86659fd93ULL)));
-  Recipe recipe;
+glic::RealtimeEffectConfig
+randomEffect(glic::RealtimeEffectFamily family, DeterministicRng &rng) {
+  glic::RealtimeEffectConfig effect;
+  effect.family = family;
+  effect.amount = static_cast<float>(rng.integer(350, 1000)) / 1000.0f;
+  int minimumScale = 0;
+  if (family == glic::RealtimeEffectFamily::EDGE_ECHO)
+    minimumScale = 150;
+  else if (family == glic::RealtimeEffectFamily::POSTER_SOLAR)
+    minimumScale = 50;
+  effect.scale =
+      static_cast<float>(rng.integer(minimumScale, 1000)) / 1000.0f;
+  effect.rate = static_cast<float>(rng.integer(0, 1000)) / 1000.0f;
+  normalizeEffect(effect);
+  return effect;
+}
+
+void randomizeLegacyCodec(Recipe &recipe, DeterministicRng &rng) {
   recipe.config.colorSpace = static_cast<glic::ColorSpace>(rng.integer(0, 15));
   recipe.config.borderColorR = static_cast<uint8_t>(rng.integer(0, 255));
   recipe.config.borderColorG = static_cast<uint8_t>(rng.integer(0, 255));
@@ -605,16 +691,79 @@ Recipe generateRecipe(uint64_t searchSeed, uint64_t candidateId) {
           static_cast<glic::EncodingMethod>(rng.integer(0, 5));
     recipe.config.channels[channelIndex] = channel;
   }
+}
+
+Recipe generateRecipe(uint64_t searchSeed, uint64_t candidateId) {
+  DeterministicRng rng(
+      splitMix64(searchSeed ^ (candidateId * 0xd6e8feb86659fd93ULL)));
+  Recipe recipe;
+  constexpr uint64_t familyCount =
+      static_cast<uint64_t>(glic::RealtimeEffectFamily::COUNT);
+  const auto family = static_cast<glic::RealtimeEffectFamily>(
+      candidateId % familyCount);
+  recipe.effect = randomEffect(family, rng);
+  if (family == glic::RealtimeEffectFamily::LEGACY_BLOCK) {
+    randomizeLegacyCodec(recipe, rng);
+  } else {
+    // Non-codec effects get one neutral codec substrate. Their diversity must
+    // come from a real effect mechanism and its explicit parameters, not from
+    // inert color-space/channel combinations.
+    makeNeutralCodec(recipe.config);
+    recipe.strength = static_cast<float>(rng.integer(650, 1600)) / 1000.0f;
+  }
   normalizeRecipe(recipe);
   return recipe;
 }
 
 Recipe mutateRecipe(uint64_t searchSeed, uint64_t candidateId,
-                    const Recipe &parent) {
+                    const Recipe &parent,
+                    glic::RealtimeEffectFamily desiredFamily) {
+  if (parent.effect.family != desiredFamily)
+    return generateRecipe(searchSeed, candidateId);
+
   DeterministicRng rng(splitMix64(searchSeed ^
                                   (candidateId * 0xa0761d6478bd642fULL) ^
                                   0xe7037ed1a0b428dbULL));
   Recipe recipe = parent;
+
+  // Family transitions are scheduled by the deterministic nine-candidate
+  // sweep. Keeping mutation inside its requested family guarantees equal trial
+  // counts while still evolving every family independently.
+
+  if (recipe.effect.family != glic::RealtimeEffectFamily::LEGACY_BLOCK) {
+    const int parameterMutations = rng.integer(2, 5);
+    for (int mutation = 0; mutation < parameterMutations; ++mutation) {
+      const float delta =
+          static_cast<float>(rng.integer(-350, 350)) / 1000.0f;
+      switch (rng.integer(0, 5)) {
+      case 0:
+        recipe.effect.amount += delta;
+        break;
+      case 1:
+        recipe.effect.scale += delta;
+        break;
+      case 2:
+        recipe.effect.rate += delta;
+        break;
+      case 3:
+        recipe.strength += delta;
+        break;
+      case 4:
+        recipe.effect.amount += delta;
+        recipe.effect.scale -= delta * 0.5f;
+        break;
+      case 5:
+        recipe.effect.rate += delta;
+        recipe.strength -= delta * 0.35f;
+        break;
+      }
+    }
+    // Keep the codec substrate identical across non-legacy descendants.
+    makeNeutralCodec(recipe.config);
+    normalizeRecipe(recipe);
+    return recipe;
+  }
+
   const int mutationCount = rng.integer(2, 7);
   for (int mutation = 0; mutation < mutationCount; ++mutation) {
     auto &channel = recipe.config.channels[static_cast<size_t>(rng.integer(0, 2))];
@@ -713,9 +862,8 @@ Recipe mutateRecipe(uint64_t searchSeed, uint64_t candidateId,
   return recipe;
 }
 
-std::string canonicalRecipe(const Recipe &recipe) {
-  std::ostringstream output;
-  output << "v1|" << static_cast<int>(recipe.config.colorSpace) << '|'
+void appendCanonicalCodec(std::ostringstream &output, const Recipe &recipe) {
+  output << static_cast<int>(recipe.config.colorSpace) << '|'
          << static_cast<int>(recipe.config.borderColorR) << '|'
          << static_cast<int>(recipe.config.borderColorG) << '|'
          << static_cast<int>(recipe.config.borderColorB) << '|'
@@ -732,6 +880,23 @@ std::string canonicalRecipe(const Recipe &recipe) {
            << channel.transformScale << ','
            << static_cast<int>(channel.encodingMethod) << ';';
   }
+}
+
+std::string canonicalRecipeV1(const Recipe &recipe) {
+  std::ostringstream output;
+  output << "v1|";
+  appendCanonicalCodec(output, recipe);
+  return output.str();
+}
+
+std::string canonicalRecipe(const Recipe &recipe) {
+  std::ostringstream output;
+  output << "v2|";
+  appendCanonicalCodec(output, recipe);
+  output << '|' << static_cast<int>(recipe.effect.family) << ','
+         << std::lround(recipe.effect.amount * 1000.0f) << ','
+         << std::lround(recipe.effect.scale * 1000.0f) << ','
+         << std::lround(recipe.effect.rate * 1000.0f);
   return output.str();
 }
 
@@ -743,11 +908,14 @@ bool decodeCanonical(std::string text, Recipe &recipe) {
   }
   std::istringstream input(text);
   std::string version;
-  std::array<long long, 38> values{};
-  if (!(input >> version) || version != "v1")
+  std::array<long long, 42> values{};
+  if (!(input >> version) || (version != "v1" && version != "v2"))
     return false;
-  for (auto &value : values) {
-    if (!(input >> value))
+  const size_t valueCount = version == "v1" ? 38 : values.size();
+  for (size_t index = 0; index < valueCount; ++index) {
+    if (!(input >> values[index]) ||
+        values[index] < static_cast<long long>(std::numeric_limits<int>::min()) ||
+        values[index] > static_cast<long long>(std::numeric_limits<int>::max()))
       return false;
   }
   std::string extra;
@@ -781,8 +949,21 @@ bool decodeCanonical(std::string text, Recipe &recipe) {
     channel.encodingMethod =
         static_cast<glic::EncodingMethod>(values[position++]);
   }
+  if (version == "v2") {
+    recipe.effect.family =
+        static_cast<glic::RealtimeEffectFamily>(values[position++]);
+    recipe.effect.amount = static_cast<float>(values[position++]) / 1000.0f;
+    recipe.effect.scale = static_cast<float>(values[position++]) / 1000.0f;
+    recipe.effect.rate = static_cast<float>(values[position++]) / 1000.0f;
+  } else {
+    recipe.effect.family = glic::RealtimeEffectFamily::LEGACY_BLOCK;
+    recipe.effect.amount = 0.7f;
+    recipe.effect.scale = 0.5f;
+    recipe.effect.rate = 0.5f;
+  }
   normalizeRecipe(recipe);
-  return canonicalRecipe(recipe) == original;
+  return (version == "v1" ? canonicalRecipeV1(recipe)
+                           : canonicalRecipe(recipe)) == original;
 }
 
 uint64_t recipeHash(std::string_view canonical) {
@@ -835,7 +1016,16 @@ std::string recipeJson(const Recipe &recipe) {
          << static_cast<int>(recipe.config.borderColorR) << ','
          << static_cast<int>(recipe.config.borderColorG) << ','
          << static_cast<int>(recipe.config.borderColorB)
-         << "],\"strength\":" << recipe.strength << ",\"channels\":[";
+         << "],\"strength\":" << recipe.strength
+         << ",\"family_name\":\""
+         << effectFamilyName(recipe.effect.family)
+         << "\",\"effect\":{\"family\":"
+         << static_cast<int>(recipe.effect.family)
+         << ",\"family_name\":\""
+         << effectFamilyName(recipe.effect.family)
+         << "\",\"amount\":" << recipe.effect.amount
+         << ",\"scale\":" << recipe.effect.scale
+         << ",\"rate\":" << recipe.effect.rate << "},\"channels\":[";
   for (size_t index = 0; index < recipe.config.channels.size(); ++index) {
     const auto &channel = recipe.config.channels[index];
     output << "{\"min_block\":" << channel.minBlockSize
@@ -1209,7 +1399,7 @@ uint64_t configurationFingerprint(const Options &options,
       addByte(value);
     addByte(0xffu);
   };
-  addText("glic-search-config-v5");
+  addText("glic-search-config-v6");
   addText(backend);
   addText("metal");
   addText(std::to_string(glic::kRealtimeCertificationWidth));
@@ -1242,8 +1432,9 @@ std::string runConfigurationJson(const Options &options,
                                  int height, uint64_t fingerprint) {
   std::ostringstream output;
   output << std::fixed << std::setprecision(8)
-         << "{\n  \"schema\": \"glic-realtime-search-run-config-v2\",\n"
-         << "  \"algorithm\": \"map-elites-diversity-mutation-v5\",\n"
+         << "{\n  \"schema\": \"glic-realtime-search-run-config-v6\",\n"
+         << "  \"algorithm\": \"map-elites-family-stratified-v6\",\n"
+         << "  \"recipe_schema\": \"glic-realtime-recipe-v2\",\n"
          << "  \"fingerprint\": \"" << hexHash(fingerprint) << "\",\n"
          << "  \"backend\": \"" << jsonEscape(backend) << "\",\n"
          << "  \"seed\": " << options.seed << ",\n"
@@ -1265,7 +1456,20 @@ std::string runConfigurationJson(const Options &options,
   return output.str();
 }
 
-std::optional<std::string> hardRejectReason(const Metrics &metrics) {
+bool sparseEffectFamily(glic::RealtimeEffectFamily family) {
+  return family == glic::RealtimeEffectFamily::LINE_TEAR ||
+         family == glic::RealtimeEffectFamily::CHANNEL_SHEAR ||
+         family == glic::RealtimeEffectFamily::ANALOG_SYNC ||
+         family == glic::RealtimeEffectFamily::EDGE_ECHO;
+}
+
+bool denseTonalEffectFamily(glic::RealtimeEffectFamily family) {
+  return family == glic::RealtimeEffectFamily::BITPLANE_DITHER ||
+         family == glic::RealtimeEffectFamily::POSTER_SOLAR;
+}
+
+std::optional<std::string>
+hardRejectReason(const Metrics &metrics, glic::RealtimeEffectFamily family) {
   if (!std::isfinite(metrics.mae) || !std::isfinite(metrics.entropy) ||
       !std::isfinite(metrics.structure) ||
       !std::isfinite(metrics.temporalResidualDelta) ||
@@ -1273,10 +1477,15 @@ std::optional<std::string> hardRejectReason(const Metrics &metrics) {
     return "non_finite_metrics";
   if (metrics.meanProcessMilliseconds > 1000.0 / 30.0)
     return "below_30_fps_lowres_prefilter";
-  if (metrics.mae < 8.0 || metrics.changedRatio < 0.20 ||
-      metrics.minimumInputChangedRatio < 0.15)
+  const bool sparse = sparseEffectFamily(family);
+  const double minimumMae = sparse ? 1.5 : 8.0;
+  const double minimumChanged = sparse ? 0.02 : 0.20;
+  const double minimumInputChanged = sparse ? 0.01 : 0.15;
+  if (metrics.mae < minimumMae || metrics.changedRatio < minimumChanged ||
+      metrics.minimumInputChangedRatio < minimumInputChanged)
     return "no_op";
-  if (metrics.mae > 75.0 || metrics.changedRatio > 0.95)
+  const double maximumChanged = denseTonalEffectFamily(family) ? 0.995 : 0.95;
+  if (metrics.mae > 75.0 || metrics.changedRatio > maximumChanged)
     return "excessive_change";
   if (metrics.entropy < 0.12 || metrics.outputStandardDeviation < 0.031)
     return "collapsed_output";
@@ -1294,13 +1503,15 @@ int fixedBin(double value, double firstThreshold, double secondThreshold) {
   return value < secondThreshold ? 1 : 2;
 }
 
-std::string behaviorCell(const Metrics &metrics) {
+std::string behaviorCell(const Metrics &metrics,
+                         glic::RealtimeEffectFamily family) {
   const int change = fixedBin(metrics.mae, 35.0, 60.0);
   const int structure = fixedBin(metrics.structure, 0.40, 0.65);
   const int temporal =
       fixedBin(metrics.temporalResidualDelta, 0.12, 0.18);
   const int dependency = fixedBin(metrics.contentDependency, 0.75, 0.95);
-  return "c" + std::to_string(change) + "-s" +
+  return "f-" + std::string(effectFamilyName(family)) + "-c" +
+         std::to_string(change) + "-s" +
          std::to_string(structure) + "-t" + std::to_string(temporal) +
          "-d" + std::to_string(dependency);
 }
@@ -1458,17 +1669,30 @@ public:
     return cells_;
   }
 
-  const Elite *selectParent(uint64_t selector) const {
-    if (cells_.empty())
+  const Elite *selectParentForFamily(glic::RealtimeEffectFamily family,
+                                     uint64_t selector) const {
+    size_t eligibleCount = 0;
+    for (const auto &[name, cell] : cells_) {
+      (void)name;
+      eligibleCount += static_cast<size_t>(
+          std::count_if(cell.begin(), cell.end(), [&](const Elite &elite) {
+            return elite.recipe.effect.family == family;
+          }));
+    }
+    if (eligibleCount == 0)
       return nullptr;
-    auto cell = cells_.begin();
-    std::advance(cell,
-                 static_cast<ptrdiff_t>(selector % cells_.size()));
-    if (cell->second.empty())
-      return nullptr;
-    const size_t eliteIndex = static_cast<size_t>(
-        (selector / cells_.size()) % cell->second.size());
-    return &cell->second[eliteIndex];
+
+    size_t selected = static_cast<size_t>(selector % eligibleCount);
+    for (const auto &[name, cell] : cells_) {
+      (void)name;
+      for (const auto &elite : cell) {
+        if (elite.recipe.effect.family != family)
+          continue;
+        if (selected-- == 0)
+          return &elite;
+      }
+    }
+    return nullptr;
   }
 
   bool referencesPreview(std::string_view path) const {
@@ -1882,7 +2106,8 @@ std::string archiveJson(const Options &options, std::string_view backend,
          << "  \"running\": " << (running ? "true" : "false") << ",\n"
          << "  \"stop_reason\": \"" << jsonEscape(stopReason) << "\",\n"
          << "  \"seed\": " << options.seed << ",\n"
-         << "  \"algorithm\": \"map-elites-diversity-mutation-v5\",\n"
+         << "  \"algorithm\": \"map-elites-family-stratified-v6\",\n"
+         << "  \"recipe_schema\": \"glic-realtime-recipe-v2\",\n"
          << "  \"backend\": \"" << jsonEscape(backend) << "\",\n"
          << "  \"render_scale\": " << options.renderScale << ",\n"
          << "  \"width\": " << width << ",\n"
@@ -2181,17 +2406,27 @@ int main(int argc, char **argv) {
 
     const uint64_t candidateId = state.nextCandidateId++;
     ++state.counters.attempted;
-    // One global restart per three candidates keeps the generator from
-    // collapsing into many near-identical descendants of a few good elites.
-    const bool useMutation = candidateId >= 128 && (candidateId % 3) != 0;
+    // Search in nine-candidate family sweeps. One sweep in three is a global
+    // restart, so every restart epoch visits all nine families exactly once;
+    // the other two sweeps mutate archive elites.
+    constexpr uint64_t familyCount =
+        static_cast<uint64_t>(glic::RealtimeEffectFamily::COUNT);
+    const auto desiredFamily = static_cast<glic::RealtimeEffectFamily>(
+        candidateId % familyCount);
+    const bool useMutation =
+        candidateId >= 128 && ((candidateId / familyCount) % 3) != 0;
     const Elite *parent =
         useMutation
-            ? state.archive.selectParent(
-                  splitMix64(options.seed ^ candidateId ^ 0x243f6a8885a308d3ULL))
+            ? state.archive.selectParentForFamily(
+                  desiredFamily,
+                  splitMix64(options.seed ^ candidateId ^
+                             0x243f6a8885a308d3ULL))
             : nullptr;
-    Recipe recipe = parent != nullptr
-                        ? mutateRecipe(options.seed, candidateId, parent->recipe)
-                        : generateRecipe(options.seed, candidateId);
+    Recipe recipe =
+        parent != nullptr
+            ? mutateRecipe(options.seed, candidateId, parent->recipe,
+                           desiredFamily)
+            : generateRecipe(options.seed, candidateId);
     const std::string generation = parent != nullptr ? "mutation" : "random";
     const std::string parentHash =
         parent != nullptr ? hexHash(parent->recipeHash) : std::string{};
@@ -2227,7 +2462,8 @@ int main(int argc, char **argv) {
               .height = height,
               .config = recipe.config,
               .seed = kEvaluationSeeds[seedIndex],
-              .effectStrength = recipe.strength};
+              .effectStrength = recipe.strength,
+              .effect = recipe.effect};
           if (!backend->prepare(prepareOptions, error)) {
             rejectReason = "prepare_failed: " + error;
             processSucceeded = false;
@@ -2274,11 +2510,12 @@ int main(int argc, char **argv) {
           rejectReason = "duplicate_visual";
           ++state.counters.duplicates;
         } else {
-          const auto hardReject = hardRejectReason(metrics);
+          const auto hardReject =
+              hardRejectReason(metrics, recipe.effect.family);
           if (hardReject) {
             rejectReason = *hardReject;
           } else {
-            cell = behaviorCell(metrics);
+            cell = behaviorCell(metrics, recipe.effect.family);
             quality = qualityScore(metrics);
             Elite elite;
             elite.candidateId = candidateId;
@@ -2299,6 +2536,7 @@ int main(int argc, char **argv) {
                   .config = recipe.config,
                   .seed = kEvaluationSeeds.front(),
                   .effectStrength = recipe.strength,
+                  .effect = recipe.effect,
                   .frameIndexBase =
                       candidateId *
                       (static_cast<uint64_t>(

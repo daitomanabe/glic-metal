@@ -22,7 +22,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--preset", default="default")
-    parser.add_argument(
+    processing_mode = parser.add_mutually_exclusive_group()
+    processing_mode.add_argument(
+        "--canonical",
+        help="Exact v1/v2 search recipe; overrides preset, strength, and effect controls.",
+    )
+    processing_mode.add_argument(
         "--passthrough",
         action="store_true",
         help="Copy BGRA frames unchanged to create an A/B codec baseline.",
@@ -36,6 +41,31 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=1.0,
         help="Glitch intensity from 0 (off) to 2 (maximum).",
+    )
+    parser.add_argument(
+        "--effect-family",
+        choices=(
+            "legacy_block",
+            "line_tear",
+            "channel_shear",
+            "analog_sync",
+            "mirror_fold",
+            "edge_echo",
+            "bitplane_dither",
+            "wave_warp",
+            "poster_solar",
+        ),
+        default="legacy_block",
+        help="Realtime glitch mechanism (default: legacy_block).",
+    )
+    parser.add_argument("--effect-amount", type=float, default=0.7)
+    parser.add_argument("--effect-scale", type=float, default=0.5)
+    parser.add_argument("--effect-rate", type=float, default=0.5)
+    parser.add_argument(
+        "--seed",
+        type=lambda value: int(value, 0),
+        default=0x474C4943,
+        help="Pattern seed as decimal or 0x-prefixed integer.",
     )
     parser.add_argument("--filter-bin", type=Path)
     parser.add_argument("--report", type=Path)
@@ -135,6 +165,15 @@ def main() -> int:
     args = parse_args()
     if not math.isfinite(args.strength) or not 0.0 <= args.strength <= 2.0:
         raise RuntimeError("--strength must be between 0 and 2")
+    for name, value in (
+        ("--effect-amount", args.effect_amount),
+        ("--effect-scale", args.effect_scale),
+        ("--effect-rate", args.effect_rate),
+    ):
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            raise RuntimeError(f"{name} must be between 0 and 1")
+    if not 0 <= args.seed <= 0xFFFFFFFF:
+        raise RuntimeError("--seed must fit an unsigned 32-bit integer")
     root = Path(__file__).resolve().parent.parent
     input_path = args.input.expanduser().resolve()
     output_path = args.output.expanduser().resolve()
@@ -143,7 +182,11 @@ def main() -> int:
         if args.report is not None
         else output_path.with_suffix(output_path.suffix + ".json")
     )
-    presets_dir = select_presets_directory(root, args.presets_dir)
+    presets_dir = (
+        None
+        if args.passthrough or args.canonical
+        else select_presets_directory(root, args.presets_dir)
+    )
 
     if not input_path.is_file():
         raise RuntimeError(f"Input video does not exist: {input_path}")
@@ -203,7 +246,19 @@ def main() -> int:
         ]
         if args.passthrough:
             filter_command.append("--passthrough")
+        elif args.canonical:
+            filter_command.extend(
+                [
+                    "--canonical",
+                    args.canonical,
+                    "--backend",
+                    args.backend,
+                    "--seed",
+                    str(args.seed),
+                ]
+            )
         else:
+            assert presets_dir is not None
             filter_command.extend(
                 [
                     "--preset",
@@ -214,6 +269,16 @@ def main() -> int:
                     args.backend,
                     "--strength",
                     str(args.strength),
+                    "--effect-family",
+                    args.effect_family,
+                    "--effect-amount",
+                    str(args.effect_amount),
+                    "--effect-scale",
+                    str(args.effect_scale),
+                    "--effect-rate",
+                    str(args.effect_rate),
+                    "--seed",
+                    str(args.seed),
                 ]
             )
         filter_command.extend(["--stats-json", str(filter_stats)])
@@ -321,8 +386,16 @@ def main() -> int:
         "schema": "glic-video-process-v1",
         "input": str(input_path),
         "output": str(output_path),
-        "preset": "passthrough" if args.passthrough else args.preset,
-        "strength": 0.0 if args.passthrough else args.strength,
+        "preset": filter_report.get("preset", "passthrough"),
+        "recipe_source": filter_report.get("recipe_source", "passthrough"),
+        "canonical": args.canonical,
+        "canonical_version": filter_report.get("canonical_version"),
+        "strength": filter_report.get("strength", 0.0),
+        "effect_family": filter_report.get("effect_family", "passthrough"),
+        "effect_amount": filter_report.get("effect_amount", 0.0),
+        "effect_scale": filter_report.get("effect_scale", 0.0),
+        "effect_rate": filter_report.get("effect_rate", 0.0),
+        "seed": filter_report.get("seed", 0),
         "backend_requested": "passthrough" if args.passthrough else args.backend,
         "encoder": encoder_name,
         "elapsed_seconds": round(elapsed, 3),

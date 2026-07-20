@@ -20,6 +20,7 @@ struct RealtimeCertificationRequest {
   CodecConfig config{};
   uint32_t seed = 0x474C4943u;
   float effectStrength = 1.0f;
+  RealtimeEffectConfig effect{};
   uint64_t frameIndexBase = 0;
 };
 

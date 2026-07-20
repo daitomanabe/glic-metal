@@ -83,11 +83,20 @@ public:
       return true;
     }
 
-    // One conversion per pixel. Channel workers operate on three contiguous
-    // slabs after this point, avoiding nested-vector pointer chasing.
+    const bool directRgbEffect =
+        uniform_.effectFamily !=
+        static_cast<uint32_t>(RealtimeEffectFamily::LEGACY_BLOCK);
+
+    // Explicit realtime effect families are RGB mechanisms and intentionally
+    // ignore the legacy codec preset's colour space. This keeps the effect
+    // portable across presets and makes the CPU and Metal paths equivalent.
+    // Channel workers still operate on three contiguous slabs after this
+    // conversion, avoiding nested-vector pointer chasing.
     for (size_t index = 0; index < pixelCount; ++index) {
-      const Color converted =
-          toColorSpace(input[index], options_.config.colorSpace);
+      const Color converted = directRgbEffect
+                                  ? input[index]
+                                  : toColorSpace(input[index],
+                                                 options_.config.colorSpace);
       sourcePlanes_[index] = static_cast<int16_t>(getR(converted));
       sourcePlanes_[pixelCount + index] = static_cast<int16_t>(getG(converted));
       sourcePlanes_[pixelCount * 2 + index] =
@@ -113,7 +122,10 @@ public:
                     static_cast<uint8_t>(outputPlanes_[pixelCount + index]),
                     static_cast<uint8_t>(outputPlanes_[pixelCount * 2 + index]),
                     getA(input[index]));
-      output[index] = fromColorSpace(converted, options_.config.colorSpace);
+      output[index] = directRgbEffect
+                          ? converted
+                          : fromColorSpace(converted,
+                                           options_.config.colorSpace);
     }
 
     lastStats_.frameIndex = frameIndex;
@@ -321,8 +333,245 @@ private:
     }
   }
 
+  static float triangleWave(int value, int halfPeriod) noexcept {
+    halfPeriod = std::max(1, halfPeriod);
+    const int period = halfPeriod * 2;
+    int position = value % period;
+    if (position < 0)
+      position += period;
+    const int ramp =
+        position <= halfPeriod ? position : period - position;
+    return static_cast<float>(ramp * 2 - halfPeriod) /
+           static_cast<float>(halfPeriod);
+  }
+
+  static int triangleOffset(int value, int halfPeriod, int amplitude,
+                            int divisor = 1) noexcept {
+    halfPeriod = std::max(1, halfPeriod);
+    divisor = std::max(1, divisor);
+    const int period = halfPeriod * 2;
+    int position = value % period;
+    if (position < 0)
+      position += period;
+    const int ramp =
+        position <= halfPeriod ? position : period - position;
+    const int numerator = (ramp * 2 - halfPeriod) * amplitude;
+    const int denominator = halfPeriod * divisor;
+    return numerator >= 0 ? (numerator + denominator / 2) / denominator
+                          : -((-numerator + denominator / 2) / denominator);
+  }
+
+  uint64_t heldEffectFrame() const noexcept {
+    const float rate = std::clamp(uniform_.effectRate, 0.0f, 1.0f);
+    const uint64_t holdFrames =
+        1u + static_cast<uint64_t>(std::lround((1.0f - rate) * 11.0f));
+    return frameIndex_ / std::max<uint64_t>(1u, holdFrames);
+  }
+
+  int effectValue(int channel, int x, int y, int current) const noexcept {
+    constexpr std::array<uint8_t, 16> bayer4x4 = {
+        0,  8, 2,  10, 12, 4, 14, 6,
+        3, 11, 1, 9,  15, 7, 13, 5};
+
+    const float amount = std::clamp(uniform_.effectAmount, 0.0f, 1.0f);
+    const float scale = std::clamp(uniform_.effectScale, 0.0f, 1.0f);
+    const float mixAmount =
+        std::clamp(amount * uniform_.effectStrength, 0.0f, 1.0f);
+    const uint64_t heldFrame = heldEffectFrame();
+    float affected = static_cast<float>(current);
+
+    switch (static_cast<RealtimeEffectFamily>(uniform_.effectFamily)) {
+    case RealtimeEffectFamily::LINE_TEAR: {
+      const int bandHeight = 1 + static_cast<int>(std::lround(scale * 15.0f));
+      const int band = y / bandHeight;
+      const uint32_t bandHash = realtime::pixelHash(
+          0, band, 0, heldFrame, options_.seed);
+      const float density = 0.10f + amount * 0.65f;
+      if (static_cast<float>(bandHash & 0xffffu) < density * 65535.0f) {
+        const int maximum = std::min(320, std::max(4, options_.width / 3));
+        const int maximumShift =
+            4 + static_cast<int>(std::lround(amount * (maximum - 4)));
+        int shift =
+            1 + static_cast<int>((bandHash >> 16u) %
+                                 static_cast<uint32_t>(std::max(1, maximumShift)));
+        if ((bandHash & 0x80000000u) != 0u)
+          shift = -shift;
+        affected = static_cast<float>(sourceWrapped(channel, x + shift, y));
+      }
+      break;
+    }
+    case RealtimeEffectFamily::CHANNEL_SHEAR: {
+      const int halfPeriod = 8 + static_cast<int>(std::lround(scale * 120.0f));
+      const int phase =
+          static_cast<int>(heldFrame % static_cast<uint64_t>(halfPeriod * 2));
+      const float wave = triangleWave(y + phase, halfPeriod);
+      const int maximumOffset =
+          2 + static_cast<int>(std::lround(amount * 96.0f));
+      const int channelDirection = channel - 1;
+      const int offset =
+          channelDirection * maximumOffset +
+          static_cast<int>(std::lround(channelDirection * maximumOffset * wave *
+                                       0.5f));
+      affected = static_cast<float>(sourceWrapped(channel, x + offset, y));
+      break;
+    }
+    case RealtimeEffectFamily::ANALOG_SYNC: {
+      const int halfPeriod = 6 + static_cast<int>(std::lround(scale * 72.0f));
+      const int speed =
+          1 + static_cast<int>(std::lround(uniform_.effectRate * 3.0f));
+      const int phase = static_cast<int>(heldFrame) * speed;
+      const float wave = triangleWave(y + phase, halfPeriod);
+      const int amplitude =
+          1 + static_cast<int>(std::lround(amount * 32.0f));
+      int wobble = static_cast<int>(std::lround(wave * amplitude));
+      const int lineGroup =
+          y / std::max(1, 1 + static_cast<int>(std::lround(scale * 5.0f)));
+      const uint32_t lineHash = realtime::pixelHash(
+          0, lineGroup, 0, heldFrame / 2u, options_.seed);
+      if (static_cast<float>(lineHash & 0xffu) < amount * 90.0f) {
+        const int jitter =
+            1 + static_cast<int>((lineHash >> 8u) %
+                                 static_cast<uint32_t>(std::max(1, amplitude * 2)));
+        wobble += (lineHash & 0x10000u) == 0u ? -jitter : jitter;
+      }
+      const int rollSpeed =
+          1 + static_cast<int>(std::lround(uniform_.effectRate * 4.0f));
+      const int roll = static_cast<int>(
+          (heldFrame * static_cast<uint64_t>(rollSpeed)) %
+          static_cast<uint64_t>(std::max(1, options_.height)));
+      const int chromaOffset =
+          (channel - 1) *
+          std::max(1, static_cast<int>(std::lround(amount * 3.0f)));
+      affected = static_cast<float>(
+          sourceWrapped(channel, x + wobble + chromaOffset, y + roll));
+      if (((y + phase) & 1) != 0)
+        affected *= 1.0f - amount * 0.25f;
+      break;
+    }
+    case RealtimeEffectFamily::MIRROR_FOLD: {
+      const int halfPeriod = std::min(
+          12 + static_cast<int>(std::lround(scale * 148.0f)),
+          std::max(2, options_.width / 2));
+      const int period = halfPeriod * 2;
+      const int phase =
+          static_cast<int>(heldFrame % static_cast<uint64_t>(period));
+      const int shiftedX = x + phase;
+      const int cell = shiftedX >= 0
+                           ? shiftedX / period
+                           : -((-shiftedX + period - 1) / period);
+      int local = shiftedX % period;
+      if (local < 0)
+        local += period;
+      const int folded =
+          local <= halfPeriod ? local : period - 1 - local;
+      const int sampleX = cell * period + folded - phase;
+      affected = static_cast<float>(sourceWrapped(channel, sampleX, y));
+      break;
+    }
+    case RealtimeEffectFamily::EDGE_ECHO: {
+      const int left = sourceWrapped(channel, x - 1, y);
+      const int right = sourceWrapped(channel, x + 1, y);
+      const int top = sourceWrapped(channel, x, y - 1);
+      const int bottom = sourceWrapped(channel, x, y + 1);
+      const float edge =
+          (std::abs(right - left) + std::abs(bottom - top)) * 0.5f / 255.0f;
+      const int distance =
+          2 + static_cast<int>(std::lround(scale * 46.0f));
+      const int direction = (heldFrame & 1u) == 0u ? -1 : 1;
+      const int echo =
+          sourceWrapped(channel, x + direction * distance, y + distance / 2);
+      const float displacementEdge =
+          std::abs(static_cast<float>(echo - current)) / 255.0f;
+      const float threshold = 0.12f + (0.012f - 0.12f) * scale;
+      const float edgeMix = std::clamp(
+          std::max((edge - threshold) * 10.0f,
+                   (displacementEdge - threshold * 0.55f) * 4.5f),
+          0.0f, 1.0f);
+      affected = current + (echo - current) * edgeMix;
+      break;
+    }
+    case RealtimeEffectFamily::BITPLANE_DITHER: {
+      const int grainPower =
+          std::clamp(static_cast<int>(std::lround(scale * 2.0f)), 0, 2);
+      const int grain = 1 << grainPower;
+      const int matrixX = (x / grain) & 3;
+      const int matrixY = (y / grain) & 3;
+      const uint32_t threshold =
+          bayer4x4[static_cast<size_t>(matrixY * 4 + matrixX)];
+      const uint32_t coverage = static_cast<uint32_t>(
+          std::clamp(static_cast<int>(std::lround(amount * 16.0f)), 0, 16));
+      if (threshold < coverage) {
+        const int baseBit =
+            std::clamp(1 + static_cast<int>(std::floor(amount * 6.0f)), 1, 6);
+        const int bit =
+            (baseBit + channel + static_cast<int>(heldFrame & 1u)) % 7;
+        affected = static_cast<float>(realtime::clampByte(current) ^ (1 << bit));
+      }
+      break;
+    }
+    case RealtimeEffectFamily::WAVE_WARP: {
+      const int halfPeriod =
+          12 + static_cast<int>(std::lround(scale * 120.0f));
+      const int speed =
+          1 + static_cast<int>(std::lround(uniform_.effectRate * 3.0f));
+      const int phase = static_cast<int>(heldFrame) * speed;
+      const int amplitude =
+          1 + static_cast<int>(std::lround(amount * 48.0f));
+      // Keep sampling coordinates bit-exact with Metal. Computing the triangle
+      // ratio in floating point can move a half-integer to opposite sides of
+      // the rounding boundary on the two backends.
+      const int offsetX = triangleOffset(y + phase, halfPeriod, amplitude);
+      const int offsetY =
+          triangleOffset(x - phase, halfPeriod, amplitude, 2);
+      affected =
+          static_cast<float>(sourceWrapped(channel, x + offsetX, y + offsetY));
+      break;
+    }
+    case RealtimeEffectFamily::POSTER_SOLAR: {
+      const int levels = 2 + static_cast<int>(std::lround(scale * 14.0f));
+      const float stepSize = 1.0f / std::max(1, levels - 1);
+      const float normalized = current / 255.0f;
+      const float quantized = std::round(normalized / stepSize) * stepSize;
+      const float drift =
+          triangleWave(static_cast<int>(heldFrame), 32) * 0.15f;
+      const float threshold =
+          std::clamp(0.25f + scale * 0.50f + drift, 0.10f, 0.90f);
+      const float solarized =
+          quantized > threshold ? 1.0f - quantized : quantized;
+      affected = solarized * 255.0f;
+      break;
+    }
+    case RealtimeEffectFamily::LEGACY_BLOCK:
+    case RealtimeEffectFamily::COUNT:
+      break;
+    }
+
+    return realtime::clampByte(static_cast<int>(
+        std::lround(current + (affected - current) * mixAmount)));
+  }
+
+  void processEffectChannel(int channel) noexcept {
+    const size_t pixelCount = static_cast<size_t>(options_.width) *
+                              static_cast<size_t>(options_.height);
+    const size_t planeOffset = static_cast<size_t>(channel) * pixelCount;
+    for (int y = 0; y < options_.height; ++y) {
+      for (int x = 0; x < options_.width; ++x) {
+        const size_t index =
+            static_cast<size_t>(y) * static_cast<size_t>(options_.width) +
+            static_cast<size_t>(x);
+        outputPlanes_[planeOffset + index] = static_cast<int16_t>(effectValue(
+            channel, x, y, sourcePlanes_[planeOffset + index]));
+      }
+    }
+  }
+
   void processChannel(int channel) noexcept {
     const auto &config = options_.config.channels[static_cast<size_t>(channel)];
+    if (uniform_.effectFamily !=
+        static_cast<uint32_t>(RealtimeEffectFamily::LEGACY_BLOCK)) {
+      processEffectChannel(channel);
+      return;
+    }
     int minBlock = realtime::normalizeBlockSize(config.minBlockSize);
     int maxBlock = realtime::normalizeBlockSize(config.maxBlockSize);
     if (minBlock > maxBlock)
