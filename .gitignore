@@ -18,6 +18,7 @@ cmake-build-*/
 output/
 *.glic
 examples/output/
+test-videos/
 
 # Cache
 .cache/

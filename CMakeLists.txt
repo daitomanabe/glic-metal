@@ -101,6 +101,9 @@ target_link_libraries(glic PRIVATE glic_core)
 add_executable(glic_realtime_bench benchmarks/realtime_benchmark.cpp)
 target_link_libraries(glic_realtime_bench PRIVATE glic_core)
 
+add_executable(glic_realtime_filter tools/realtime_filter.cpp)
+target_link_libraries(glic_realtime_filter PRIVATE glic_core)
+
 # Compiler warnings
 if(MSVC)
     target_compile_options(glic_core PRIVATE /W4)
@@ -129,7 +132,13 @@ if(BUILD_TESTING)
 endif()
 
 # Installation
-install(TARGETS glic glic_realtime_bench RUNTIME DESTINATION bin)
+install(TARGETS glic glic_realtime_bench glic_realtime_filter
+        RUNTIME DESTINATION bin)
+install(PROGRAMS scripts/process_video.py
+        DESTINATION bin
+        RENAME glic_process_video)
+install(DIRECTORY presets/
+        DESTINATION share/glic-metal/presets)
 if(APPLE)
     install(FILES "${GLIC_METALLIB}" DESTINATION lib/glic)
 endif()

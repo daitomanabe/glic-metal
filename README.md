@@ -78,6 +78,17 @@ cmake --build .
 
 macOSでMetal shaderをビルドする際はFull Xcodeが必要です。CMakeはデフォルトで `/Applications/Xcode.app/Contents/Developer` を使用するため、システムの`xcode-select`設定を変更する必要はありません。
 
+### 動画処理
+
+`process_video.py` はFFmpegで動画をBGRAフレームへデコードし、1つのリアルタイムbackendを全フレームで再利用します。処理後は元動画の音声を戻し、H.264 MP4とJSON性能レポートを出力します。
+
+```bash
+python3 scripts/process_video.py input.mov output.mp4 \
+  --preset bi0g4n1c --backend metal
+```
+
+入力・出力動画をローカルに保持する場合は、Git対象外の `test-videos/` を使用できます。
+
 ### プリセットオプション
 
 | オプション | 説明 |
@@ -280,8 +291,7 @@ Haar, Daubechies (DB2-DB10), Symlet (SYM2-SYM10), Coiflet (COIF1-COIF5)
 
 ### ブランチ
 
-- `master` - C++20版（推奨）
-- `cpp17` - C++17版（互換性のため）
+- `main` - glic-metal開発ブランチ
 
 ---
 
@@ -358,6 +368,17 @@ cmake --build .
 The realtime API is declared in [src/realtime.hpp](src/realtime.hpp). The CPU backend reuses resolution-sized workspaces after preparation. The Metal backend provides a synchronous CPU-buffer API, an opaque zero-copy `MTLTexture` API, and a non-blocking API that appends work to the caller's `MTLCommandBuffer`.
 
 Full Xcode is required to compile the Metal shader on macOS. CMake uses `/Applications/Xcode.app/Contents/Developer` by default, so it does not need to change the system `xcode-select` setting.
+
+### Video processing
+
+`process_video.py` uses FFmpeg to decode a video into BGRA frames and reuses one realtime backend across the complete stream. It restores the source audio after processing and writes both an H.264 MP4 and a JSON performance report.
+
+```bash
+python3 scripts/process_video.py input.mov output.mp4 \
+  --preset bi0g4n1c --backend metal
+```
+
+Use the Git-ignored `test-videos/` directory for local input and preview files.
 
 ### Preset Options
 
@@ -507,8 +528,7 @@ Haar, Daubechies (DB2-DB10), Symlet (SYM2-SYM10), Coiflet (COIF1-COIF5)
 
 ### Branches
 
-- `master` - C++20 version (recommended)
-- `cpp17` - C++17 version (for compatibility)
+- `main` - glic-metal development branch
 
 ---
 
