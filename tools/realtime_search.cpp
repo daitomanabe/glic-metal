@@ -613,10 +613,10 @@ Recipe mutateRecipe(uint64_t searchSeed, uint64_t candidateId,
                                   (candidateId * 0xa0761d6478bd642fULL) ^
                                   0xe7037ed1a0b428dbULL));
   Recipe recipe = parent;
-  const int mutationCount = rng.integer(2, 6);
+  const int mutationCount = rng.integer(2, 7);
   for (int mutation = 0; mutation < mutationCount; ++mutation) {
     auto &channel = recipe.config.channels[static_cast<size_t>(rng.integer(0, 2))];
-    switch (rng.integer(0, 13)) {
+    switch (rng.integer(0, 16)) {
     case 0:
       recipe.strength += static_cast<float>(rng.integer(-350, 350)) / 1000.0f;
       break;
@@ -685,6 +685,25 @@ Recipe mutateRecipe(uint64_t searchSeed, uint64_t candidateId,
     case 13:
       channel.encodingMethod =
           static_cast<glic::EncodingMethod>(rng.integer(0, 5));
+      break;
+    case 14:
+      // A full channel restart escapes families of locally similar block
+      // patterns while retaining the other two channels from the parent.
+      channel = randomChannel(rng);
+      break;
+    case 15: {
+      const size_t first = static_cast<size_t>(rng.integer(0, 2));
+      size_t second = static_cast<size_t>(rng.integer(0, 1));
+      if (second >= first)
+        ++second;
+      std::swap(recipe.config.channels[first], recipe.config.channels[second]);
+      break;
+    }
+    case 16:
+      // Rare macro restart: keep the parent's global color treatment but
+      // generate a substantially different three-channel glitch topology.
+      for (auto &replacement : recipe.config.channels)
+        replacement = randomChannel(rng);
       break;
     }
   }
@@ -1188,7 +1207,7 @@ uint64_t configurationFingerprint(const Options &options,
       addByte(value);
     addByte(0xffu);
   };
-  addText("glic-search-config-v3");
+  addText("glic-search-config-v4");
   addText(backend);
   addText(std::to_string(options.seed));
   addText(std::to_string(options.renderScale));
@@ -1213,7 +1232,7 @@ std::string runConfigurationJson(const Options &options,
                                  int height, uint64_t fingerprint) {
   std::ostringstream output;
   output << "{\n  \"schema\": \"glic-realtime-search-run-config-v1\",\n"
-         << "  \"algorithm\": \"map-elites-random-mutation-v3\",\n"
+         << "  \"algorithm\": \"map-elites-diversity-mutation-v4\",\n"
          << "  \"fingerprint\": \"" << hexHash(fingerprint) << "\",\n"
          << "  \"backend\": \"" << jsonEscape(backend) << "\",\n"
          << "  \"seed\": " << options.seed << ",\n"
@@ -1655,7 +1674,7 @@ std::string archiveJson(const Options &options, std::string_view backend,
          << "  \"running\": " << (running ? "true" : "false") << ",\n"
          << "  \"stop_reason\": \"" << jsonEscape(stopReason) << "\",\n"
          << "  \"seed\": " << options.seed << ",\n"
-         << "  \"algorithm\": \"map-elites-random-mutation-v3\",\n"
+         << "  \"algorithm\": \"map-elites-diversity-mutation-v4\",\n"
          << "  \"backend\": \"" << jsonEscape(backend) << "\",\n"
          << "  \"render_scale\": " << options.renderScale << ",\n"
          << "  \"width\": " << width << ",\n"
@@ -1912,7 +1931,9 @@ int main(int argc, char **argv) {
 
     const uint64_t candidateId = state.nextCandidateId++;
     ++state.counters.attempted;
-    const bool useMutation = candidateId >= 128 && (candidateId % 4) != 0;
+    // One global restart per three candidates keeps the generator from
+    // collapsing into many near-identical descendants of a few good elites.
+    const bool useMutation = candidateId >= 128 && (candidateId % 3) != 0;
     const Elite *parent =
         useMutation
             ? state.archive.selectParent(

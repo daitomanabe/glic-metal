@@ -33,12 +33,17 @@ supervisor_log="${logs_dir}/supervisor.log"
 search_log="${logs_dir}/search.log"
 catalog_log="${logs_dir}/catalog.log"
 catalog_builder="${SEARCH_CATALOG_BUILDER:-${repo_root}/scripts/build_search_catalog.py}"
+ranking_log="${logs_dir}/ranking.log"
+ranking_pipeline="${SEARCH_RANKING_PIPELINE:-${repo_root}/scripts/build_ranked_catalog.sh}"
+ranking_watcher="${SEARCH_RANKING_WATCHER:-${repo_root}/scripts/run_ranking_watcher.sh}"
+ranking_interval="${RANKING_INTERVAL_SECONDS:-300}"
 lock_path="${output_dir}/.search-supervisor.lock"
 lock_owner_path="${lock_path}/pid"
 search_pid_path="${output_dir}/.search.pid"
 
 search_pid=""
 runner_pid=""
+ranking_pid=""
 started_epoch=""
 deadline_epoch=""
 status_state="initializing"
@@ -242,6 +247,10 @@ if ! is_uint "$shutdown_grace_seconds"; then
   /bin/echo "SEARCH_SHUTDOWN_GRACE_SECONDS must be an unsigned integer" >&2
   exit 2
 fi
+if ! is_uint "$ranking_interval" || [ "$ranking_interval" -lt 10 ]; then
+  /bin/echo "RANKING_INTERVAL_SECONDS must be an integer of at least 10" >&2
+  exit 2
+fi
 case "$search_backend" in
   metal|cpu|auto) ;;
   *)
@@ -404,6 +413,20 @@ status_state="running"
 write_status
 log_message "search running; pid=${search_pid} runner_pid=${runner_pid}"
 
+if [ -x "$ranking_watcher" ] && [ -x "$ranking_pipeline" ]; then
+  /usr/bin/env -i \
+    HOME="${HOME:-/tmp}" \
+    PATH="${PATH:-/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin}" \
+    TMPDIR="${TMPDIR:-/tmp}" LANG="${LANG:-C}" \
+    RANKING_INTERVAL_SECONDS="$ranking_interval" \
+    RANKING_FINAL_PASS="0" \
+    SEARCH_RANKING_PIPELINE="$ranking_pipeline" \
+    "$ranking_watcher" "$output_dir" "$search_pid" \
+    >> "$ranking_log" 2>&1 &
+  ranking_pid="$!"
+  log_message "ranking watcher running; pid=${ranking_pid} interval=${ranking_interval}s"
+fi
+
 hard_deadline_epoch=$((deadline_epoch + shutdown_grace_seconds))
 last_disk_check_epoch="0"
 while /bin/kill -0 "$search_pid" 2>/dev/null; do
@@ -461,17 +484,34 @@ else
 fi
 status_exit_code="$final_exit"
 write_status
-if [ -f "$catalog_builder" ]; then
-  log_message "building final static catalog"
+if [ -n "$ranking_pid" ] && /bin/kill -0 "$ranking_pid" 2>/dev/null; then
+  log_message "stopping periodic ranking watcher before final ranking; pid=${ranking_pid}"
+  /bin/kill -TERM "$ranking_pid" 2>/dev/null
+  wait "$ranking_pid" 2>/dev/null
+fi
+if [ -x "$ranking_pipeline" ]; then
+  log_message "building final analyzed ranking"
+  if /usr/bin/env -i \
+      HOME="${HOME:-/tmp}" \
+      PATH="${PATH:-/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin}" \
+      TMPDIR="${TMPDIR:-/tmp}" LANG="${LANG:-C}" \
+      "$ranking_pipeline" "$output_dir" \
+      >> "$ranking_log" 2>&1; then
+    log_message "final analyzed ranking written to ${output_dir}/ranking.html"
+  else
+    log_message "final analyzed ranking failed; see ${ranking_log}"
+  fi
+elif [ -f "$catalog_builder" ]; then
+  log_message "building fallback static catalog"
   if /usr/bin/env -i \
       HOME="${HOME:-/tmp}" \
       PATH="${PATH:-/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin}" \
       TMPDIR="${TMPDIR:-/tmp}" LANG="${LANG:-C}" \
       /usr/bin/python3 "$catalog_builder" "$output_dir" --limit 324 \
       >> "$catalog_log" 2>&1; then
-    log_message "final static catalog written to ${output_dir}/index.html"
+    log_message "fallback static catalog written to ${output_dir}/index.html"
   else
-    log_message "final static catalog build failed; see ${catalog_log}"
+    log_message "fallback static catalog build failed; see ${catalog_log}"
   fi
 fi
 log_message "search finished; state=${status_state} exit=${final_exit}"

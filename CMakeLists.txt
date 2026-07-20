@@ -118,6 +118,12 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME glic_search_ranking
+                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/test_search_ranking.py")
+    endif()
+
     add_executable(glic_realtime_tests tests/realtime_tests.cpp)
     target_link_libraries(glic_realtime_tests PRIVATE glic_core)
     target_compile_definitions(glic_realtime_tests PRIVATE
@@ -144,6 +150,9 @@ install(PROGRAMS scripts/process_video.py
         DESTINATION bin
         RENAME glic_process_video)
 install(PROGRAMS scripts/run_search_supervisor.sh scripts/build_search_catalog.py
+        scripts/analyze_search_images.py scripts/perceptual_image_features.py
+        scripts/rank_search_results.py scripts/build_ranked_catalog.sh
+        scripts/run_ranking_watcher.sh
         DESTINATION bin)
 install(DIRECTORY presets/
         DESTINATION share/glic-metal/presets)

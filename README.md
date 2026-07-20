@@ -112,9 +112,11 @@ python3 tools/evaluate_effect_difference.py input.mov \
 
 ### 無人preset探索
 
-`glic_realtime_search` は外部APIやLLMを呼ばず、決定的なMAP-Elites探索で技術的に異なるpreset候補を収集します。128候補のランダム初期集団後はarchive内のeliteを変異させ、複数入力・2 seed・8 frame phaseでMetal出力を評価します。無変化、過剰破壊、クリッピング、入力非依存ノイズ、15fps未満を除外し、81個のbehavior cellへ各4候補まで保存します。レシピだけでなく全評価frameと代表PNGもhash化するため、異なる設定から生じる同一出力がarchive枠を消費しません。
+`glic_realtime_search` は外部APIやLLMを呼ばず、決定的なMAP-Elites探索で技術的に異なるpreset候補を収集します。128候補のランダム初期集団後は、2/3をarchive内eliteの変異、1/3をglobal random restartとし、変異にもchannel全再生成・channel交換・3 channel macro restartを含めます。これにより少数eliteの近傍へ探索が収束するのを防ぎます。複数入力・2 seed・8 frame phaseでMetal出力を評価し、無変化、過剰破壊、クリッピング、入力非依存ノイズ、15fps未満を除外して、81個のbehavior cellへ各4候補まで保存します。レシピだけでなく全評価frameと代表PNGもhash化するため、異なる設定から生じる同一出力がarchive枠を消費しません。
 
-これは美的な「最適」を保証する評価器ではなく、画像統計と再現性に基づく技術的多様性のpilotです。最終選抜には生成された静的catalogの目視評価を加えます。Full HDを線形1/4へ縮小済みの480×270入力では、追加縮小を避けるため `--scale 1` を指定します。
+探索archiveはさらに、技術ゲート、9つの独立評価family、量子化Pareto front、知覚的近似画像cluster、cell/recipe-family制約付きMMRの順に絞り込めます。速度は15fps通過判定に使い、60fps以上で飽和した差は順位へ入れません。出力はTop 12、Shortlist 32、Reserve 64と全候補で、単一スコアだけでなく各familyの強み・弱み・除外理由を保持します。
+
+画像解析は外部の `visual-liveliness` を毎回self-testして明暗・占有率・blob形状を測り、repo内の知覚特徴器がpHash/dHash、HSV分布、色、edge、block境界を測ります。代表PNGは静止画なので、`temporal_residual_delta` は時間変化量であって光学flowではありません。美的な「最適」を断定するものではなく、目視する候補を説明可能な少数へ絞る仕組みです。Full HDを線形1/4へ縮小済みの480×270入力では、追加縮小を避けるため `--scale 1` を指定します。
 
 ```bash
 ./build/glic_realtime_search \
@@ -123,10 +125,12 @@ python3 tools/evaluate_effect_difference.py input.mov \
   --output-dir search-runs/pilot \
   --duration-seconds 18000 --backend metal --scale 1
 
-python3 scripts/build_search_catalog.py search-runs/pilot
+scripts/build_ranked_catalog.sh search-runs/pilot
 ```
 
-5時間の無人実行は、API credentialを子プロセスへ渡さず、`caffeinate`、空き容量監視、二重起動防止、signal checkpointを行うsupervisorから起動できます。`status.json`、`supervisor-status.json`、`archive.json`、`candidates.ndjson` が進捗と復旧元です。同一入力・seed・backendだけが `--resume` でき、内容不一致は拒否されます。
+`ranking.html`、全監査用の `ranking.json` / `ranking.csv`、Top 32の `shortlist.json`、Top 64の `selection.json` が生成されます。`generation-directives.json` には過密な知覚cluster、類似出力が多いrecipe family、unique clusterが少ないarchive cellを保存し、次回探索のglobal restart/macro mutation配分へ利用できます。`image-analysis.json` は画像SHA256と解析器fingerprintでcacheされ、新しいeliteだけを再解析します。解析snapshotの画像はcontent-addressed `ranking-previews/` へ保持されるため、探索中に元eliteが更新されてもpreviewと評価世代は一致します。外部解析器の既定位置は `~/.codex/skills/visual-liveliness/scripts/run.sh` で、`VISUAL_LIVELINESS_RUNNER` で変更できます。欠損画像、self-test失敗、解析行の欠落、archive世代不一致時には部分結果を公開せず、直前のatomic reportを保持します。
+
+5時間の無人実行は、API credentialを子プロセスへ渡さず、`caffeinate`、空き容量監視、二重起動防止、signal checkpointを行うsupervisorから起動できます。ランキングは既定で5分ごとに更新され、終了後に安定したarchiveから最終生成されます。`status.json`、`supervisor-status.json`、`archive.json`、`candidates.ndjson` が進捗と復旧元です。同一入力・seed・backendだけが `--resume` でき、内容不一致は拒否されます。
 
 ```bash
 SEARCH_BIN="$PWD/build/glic_realtime_search" \
@@ -450,9 +454,11 @@ The evaluator requires NumPy and OpenCV from `requirements-qa.txt`. Only `VISIBL
 
 ### Unattended preset search
 
-`glic_realtime_search` is a deterministic, API-free MAP-Elites search for technically diverse preset candidates. It evaluates multiple inputs across two fixed seeds and eight frame phases, rejects no-ops, destructive collapse, clipping, input-independent noise, and sub-15fps candidates, then keeps up to four elites in each of 81 behavior cells. Full evaluation-output hashes and representative-image hashes prevent visually identical recipes from consuming archive slots.
+`glic_realtime_search` is a deterministic, API-free MAP-Elites search for technically diverse preset candidates. After 128 random seeds, two candidates in three mutate archive elites and one in three performs a global random restart. Mutations also include full-channel regeneration, channel swaps, and a rare three-channel macro restart, preventing the search from collapsing around a few successful lineages. It evaluates multiple inputs across two fixed seeds and eight frame phases, rejects no-ops, destructive collapse, clipping, input-independent noise, and sub-15fps candidates, then keeps up to four elites in each of 81 behavior cells. Full evaluation-output hashes and representative-image hashes prevent visually identical recipes from consuming archive slots.
 
-This is a technical-diversity pilot, not a model of aesthetic quality. Use the generated static catalog for the final visual selection. Inputs already reduced from Full HD to 480×270 should use `--scale 1`.
+The archive is narrowed in stages: the original technical gates, nine separate score families, quantized Pareto fronts, perceptual near-duplicate clusters, and MMR selection with cell/recipe-family quotas. Performance is a 15 fps gate; differences that are already saturated above 60 fps do not affect order. The result keeps an explainable Top 12, Shortlist 32, Reserve 64, and full audit list rather than hiding every tradeoff in one score.
+
+An external, self-tested `visual-liveliness` instrument measures presence and connected-component shape. The repository analyzer adds pHash/dHash, HSV, color, edge, and block-boundary descriptors. A representative PNG is still only one frame, so `temporal_residual_delta` is labelled activity rather than optical flow. This is deterministic technical/perceptual triage, not a claim of learned aesthetic optimality. Inputs already reduced from Full HD to 480×270 should use `--scale 1`.
 
 ```bash
 ./build/glic_realtime_search \
@@ -461,10 +467,12 @@ This is a technical-diversity pilot, not a model of aesthetic quality. Use the g
   --output-dir search-runs/pilot \
   --duration-seconds 18000 --backend metal --scale 1
 
-python3 scripts/build_search_catalog.py search-runs/pilot
+scripts/build_ranked_catalog.sh search-runs/pilot
 ```
 
-For a five-hour unattended run, `run_search_supervisor.sh` adds `caffeinate`, disk-space checks, an atomic lock, credential-free child environment, logs, and graceful checkpoints. Resume is refused when the input content, seed, scale, or resolved backend differs from `run-config.json`.
+The pipeline writes `ranking.html`, full-audit `ranking.json` / `ranking.csv`, Top-32 `shortlist.json`, and Top-64 `selection.json`. `generation-directives.json` records crowded visual clusters, repetitive recipe families, and archive cells with low unique-cluster coverage for the next run's restart/macro-mutation pressure. `image-analysis.json` is cached by image SHA256 and analyzer fingerprint, so only new elites are analyzed. Snapshot previews live in content-addressed `ranking-previews/`, keeping the analyzed generation viewable even when the live archive evicts an elite. The default external runner is `~/.codex/skills/visual-liveliness/scripts/run.sh`; override it with `VISUAL_LIVELINESS_RUNNER`. Missing images, failed self-tests, omitted analyzer rows, or mismatched archive generations fail closed and preserve the previous atomic reports.
+
+For a five-hour unattended run, `run_search_supervisor.sh` adds `caffeinate`, disk-space checks, an atomic lock, credential-free child environment, logs, graceful checkpoints, five-minute ranking snapshots, and a final stable ranking. Resume is refused when the input content, seed, scale, or resolved backend differs from `run-config.json`.
 
 ```bash
 SEARCH_BIN="$PWD/build/glic_realtime_search" \
