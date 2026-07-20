@@ -1,7 +1,9 @@
 #include "preset_loader.hpp"
 #include "realtime.hpp"
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -44,6 +46,46 @@ std::vector<glic::Color> makeFixture(int width, int height) {
     }
   }
   return pixels;
+}
+
+bool isVisibilityPreset(const std::string &preset) {
+  return preset == "bi0g4n1c" || preset == "d1ffu510n" || preset == "gif2";
+}
+
+double meanAbsoluteRgbDifference(const std::vector<glic::Color> &input,
+                                 const std::vector<glic::Color> &output) {
+  uint64_t difference = 0;
+  for (size_t index = 0; index < input.size(); ++index) {
+    difference += static_cast<uint64_t>(
+        std::abs(static_cast<int>(glic::getR(input[index])) -
+                 static_cast<int>(glic::getR(output[index]))));
+    difference += static_cast<uint64_t>(
+        std::abs(static_cast<int>(glic::getG(input[index])) -
+                 static_cast<int>(glic::getG(output[index]))));
+    difference += static_cast<uint64_t>(
+        std::abs(static_cast<int>(glic::getB(input[index])) -
+                 static_cast<int>(glic::getB(output[index]))));
+  }
+  return static_cast<double>(difference) /
+         static_cast<double>(input.size() * 3);
+}
+
+double changedPixelRatio(const std::vector<glic::Color> &input,
+                         const std::vector<glic::Color> &output,
+                         int threshold) {
+  size_t changed = 0;
+  for (size_t index = 0; index < input.size(); ++index) {
+    const int maximum =
+        std::max({std::abs(static_cast<int>(glic::getR(input[index])) -
+                           static_cast<int>(glic::getR(output[index]))),
+                  std::abs(static_cast<int>(glic::getG(input[index])) -
+                           static_cast<int>(glic::getG(output[index]))),
+                  std::abs(static_cast<int>(glic::getB(input[index])) -
+                           static_cast<int>(glic::getB(output[index])))});
+    if (maximum >= threshold)
+      ++changed;
+  }
+  return static_cast<double>(changed) / static_cast<double>(input.size());
 }
 
 bool runBackend(glic::RealtimeBackendKind kind,
@@ -96,6 +138,23 @@ bool runBackend(glic::RealtimeBackendKind kind,
       }
     }
 
+    if (isVisibilityPreset(preset)) {
+      const double meanDifference = meanAbsoluteRgbDifference(input, first);
+      const double changedRatio = changedPixelRatio(input, first, 10);
+      if (meanDifference < 6.0 || changedRatio < 0.20) {
+        std::cerr << backend->name() << " effect is not visible for " << preset
+                  << ": mean_rgb_difference=" << meanDifference
+                  << " changed_ratio=" << changedRatio << '\n';
+        return false;
+      }
+      if (!backend->process(input, second, 31, error) || first == second) {
+        std::cerr << backend->name()
+                  << " effect has no held temporal variation for " << preset
+                  << '\n';
+        return false;
+      }
+    }
+
     if (kind == glic::RealtimeBackendKind::CPU && presetIndex == 0) {
       gAllocationCount.store(0, std::memory_order_relaxed);
       gCountAllocations.store(true, std::memory_order_release);
@@ -108,6 +167,23 @@ bool runBackend(glic::RealtimeBackendKind kind,
         return false;
       }
     }
+  }
+
+  glic::CodecConfig offConfig;
+  if (!glic::PresetLoader::loadPresetByName(GLIC_TEST_PRESETS_DIR,
+                                            presets.front(), offConfig)) {
+    std::cerr << "Failed to load strength-zero test preset\n";
+    return false;
+  }
+  glic::RealtimePrepareOptions offOptions{.width = width,
+                                          .height = height,
+                                          .config = offConfig,
+                                          .seed = 12345,
+                                          .effectStrength = 0.0f};
+  if (!backend->prepare(offOptions, error) ||
+      !backend->process(input, first, 7, error) || first != input) {
+    std::cerr << backend->name() << " strength zero is not exact passthrough\n";
+    return false;
   }
   std::cout << "PASS backend=" << backend->name()
             << " presets=" << presets.size() << '\n';

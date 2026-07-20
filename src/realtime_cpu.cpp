@@ -3,6 +3,7 @@
 #include "colorspaces.hpp"
 #include "realtime_internal.hpp"
 
+#include <algorithm>
 #include <array>
 #include <condition_variable>
 #include <cstddef>
@@ -74,6 +75,13 @@ public:
           "Realtime input/output span size does not match prepared dimensions";
       return false;
     }
+    if (options_.effectStrength <= 0.0f) {
+      std::copy(input.begin(), input.end(), output.begin());
+      lastStats_.frameIndex = frameIndex;
+      lastStats_.gpuMilliseconds = 0.0;
+      error.clear();
+      return true;
+    }
 
     // One conversion per pixel. Channel workers operate on three contiguous
     // slabs after this point, avoiding nested-vector pointer chasing.
@@ -138,6 +146,14 @@ private:
         static_cast<size_t>(y) * static_cast<size_t>(options_.width) +
         static_cast<size_t>(x);
     return sourcePlanes_[static_cast<size_t>(channel) * pixelCount + index];
+  }
+
+  int sourceWrapped(int channel, int x, int y) const noexcept {
+    const int wrappedX =
+        ((x % options_.width) + options_.width) % options_.width;
+    const int wrappedY =
+        ((y % options_.height) + options_.height) % options_.height;
+    return source(channel, wrappedX, wrappedY);
   }
 
   int predictor(PredictionMethod requested, int channel, int x, int y,
@@ -323,6 +339,40 @@ private:
       transformGain *= 1.2f;
     const float compressionThreshold =
         50.0f * std::pow(config.transformCompress / 255.0f, 2.0f);
+    const float quantizationDrive =
+        std::clamp(config.quantizationValue / 255.0f, 0.0f, 1.0f);
+    const float compressionDrive =
+        std::clamp(config.transformCompress / 255.0f, 0.0f, 1.0f);
+    const float presetDrive =
+        0.55f + quantizationDrive * 0.25f + compressionDrive * 0.15f +
+        (config.predictionMethod == PredictionMethod::NONE ? 0.0f : 0.15f) +
+        (config.waveletType == WaveletType::NONE ? 0.0f : 0.10f);
+    const float drive =
+        std::clamp(options_.effectStrength * presetDrive, 0.0f, 1.35f);
+    const float density =
+        options_.effectStrength <= 0.0f
+            ? 0.0f
+            : std::clamp(0.30f + 0.42f * std::min(drive, 1.0f) +
+                             0.10f * quantizationDrive,
+                         0.25f, 0.90f);
+    const float residualKeep = std::clamp(
+        0.58f - drive * 0.40f - quantizationDrive * 0.18f, 0.04f, 0.58f);
+    const float corruptionMix =
+        std::clamp(0.55f + 0.35f * std::min(drive, 1.0f), 0.55f, 0.90f);
+    const int predictionCode =
+        std::abs(static_cast<int>(config.predictionMethod));
+    const uint64_t holdFrames =
+        3u +
+        static_cast<uint64_t>(
+            (predictionCode + static_cast<int>(config.encodingMethod)) % 6);
+    const uint64_t heldFrame = frameIndex_ / holdFrames;
+    const auto &anchorConfig = options_.config.channels[0];
+    const int anchorMin =
+        realtime::normalizeBlockSize(anchorConfig.minBlockSize);
+    const int anchorMax =
+        realtime::normalizeBlockSize(anchorConfig.maxBlockSize);
+    const int effectBlock = std::clamp(
+        std::max(anchorMin * 8, std::min(anchorMax * 2, 64)), 16, 64);
 
     for (int y = 0; y < options_.height; ++y) {
       for (int x = 0; x < options_.width; ++x) {
@@ -354,7 +404,82 @@ private:
 
         if (quantizer > 1.0f)
           residual = std::round(residual / quantizer) * quantizer;
-        int reconstructed = predicted + static_cast<int>(std::round(residual));
+
+        const int effectOriginX = (x / effectBlock) * effectBlock;
+        const int effectOriginY = (y / effectBlock) * effectBlock;
+        const uint32_t blockHash = realtime::pixelHash(
+            effectOriginX, effectOriginY, 0, heldFrame, options_.seed);
+        const bool affected =
+            static_cast<float>(blockHash & 0xffffu) < density * 65535.0f;
+
+        float value = static_cast<float>(current);
+        if (affected) {
+          const int direction = (blockHash & 0x10000u) == 0u ? -1 : 1;
+          const int distance =
+              effectBlock * (1 + static_cast<int>((blockHash >> 17u) % 3u));
+          const int channelShift =
+              (channel - 1) *
+              (1 + static_cast<int>(
+                       (blockHash >> 21u) %
+                       static_cast<uint32_t>(std::max(2, effectBlock / 4))));
+          int sampleX = x + direction * distance + channelShift;
+          int sampleY =
+              y + (static_cast<int>((blockHash >> 25u) % 3u) - 1) * effectBlock;
+          const int mode =
+              (static_cast<int>(config.encodingMethod) + predictionCode) % 6;
+          if (mode == 2) {
+            sampleX = effectOriginX +
+                      static_cast<int>(
+                          (blockHash >> 9u) %
+                          static_cast<uint32_t>(std::max(1, effectBlock / 4))) +
+                      channelShift;
+          } else if (mode == 5 && ((effectOriginY / effectBlock) & 1) != 0) {
+            sampleX = x - direction * distance + channelShift;
+            sampleY = y - (static_cast<int>((blockHash >> 25u) % 3u) - 1) *
+                              effectBlock;
+          }
+
+          const int displaced = sourceWrapped(channel, sampleX, sampleY);
+          const float broken = predicted + residual * residualKeep;
+          float corrupted = static_cast<float>(displaced);
+          switch (mode) {
+          case 0:
+            corrupted = broken * 0.55f + displaced * 0.45f;
+            break;
+          case 1:
+            corrupted = static_cast<float>(displaced);
+            break;
+          case 2:
+            corrupted = static_cast<float>(displaced);
+            break;
+          case 3:
+            corrupted =
+                current + (displaced - predicted) * (0.70f + drive * 0.22f);
+            break;
+          case 4:
+            corrupted = static_cast<float>(realtime::clampByte(current) ^
+                                           realtime::clampByte(displaced));
+            break;
+          case 5:
+            corrupted = displaced * 0.80f + broken * 0.20f;
+            break;
+          default:
+            break;
+          }
+          const float colorSpaceDamageScale =
+              static_cast<int>(options_.config.colorSpace) <= 2 ? 1.0f : 0.22f;
+          const float bitPlaneDamage =
+              colorSpaceDamageScale * (12.0f + 24.0f * drive) *
+              (0.65f +
+               0.35f * static_cast<float>((blockHash >> 8u) & 0xffu) / 255.0f);
+          const bool positiveDamage =
+              ((blockHash >> static_cast<uint32_t>(3 + channel * 5)) & 1u) !=
+              0u;
+          corrupted += positiveDamage ? bitPlaneDamage : -bitPlaneDamage;
+          value = current + (corrupted - current) * corruptionMix;
+        }
+
+        int reconstructed = static_cast<int>(std::round(value));
         reconstructed = config.clampMethod == ClampMethod::MOD256
                             ? realtime::wrapByte(reconstructed)
                             : realtime::clampByte(reconstructed);

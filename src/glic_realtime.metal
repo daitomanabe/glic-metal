@@ -15,7 +15,7 @@ struct ChannelUniform {
     float segmentationPrecision;
     float transformCompress;
     float waveletStrength;
-    uint reserved;
+    uint encodingMethod;
 };
 
 struct PresetUniform {
@@ -27,7 +27,7 @@ struct PresetUniform {
     float borderR;
     float borderG;
     float borderB;
-    float reserved;
+    float effectStrength;
 
     ChannelUniform channels[3];
 };
@@ -237,6 +237,20 @@ static float channelAt(texture2d<float, access::read> input, int2 coordinate, in
     return spaceAt(input, coordinate, preset)[channel];
 }
 
+static int wrapCoordinate(int value, int size) {
+    int wrapped = value % size;
+    return wrapped < 0 ? wrapped + size : wrapped;
+}
+
+static float channelAtWrapped(texture2d<float, access::read> input,
+                              int2 coordinate,
+                              int channel,
+                              constant PresetUniform& preset) {
+    int2 wrapped = int2(wrapCoordinate(coordinate.x, int(preset.width)),
+                        wrapCoordinate(coordinate.y, int(preset.height)));
+    return channelAt(input, wrapped, channel, preset);
+}
+
 static float predictorValue(texture2d<float, access::read> input,
                             int requested,
                             int channel,
@@ -364,6 +378,10 @@ kernel void glicRealtime(texture2d<float, access::read> input [[texture(0)]],
 
     int2 point = int2(gid);
     float4 sourcePixel = input.read(gid);
+    if (preset.effectStrength <= 0.0) {
+        output.write(sourcePixel, gid);
+        return;
+    }
     float3 currentSpace = toSpace(sourcePixel.rgb, preset.colorSpace);
     float3 reconstructed;
 
@@ -396,7 +414,75 @@ kernel void glicRealtime(texture2d<float, access::read> input [[texture(0)]],
 
         float quantizer = max(1.0, float(config.quantizationValue) * 0.5) / 255.0;
         if (quantizer > (1.0 / 255.0)) residual = round(residual / quantizer) * quantizer;
-        float value = predicted + residual;
+
+        float quantizationDrive = clamp(float(config.quantizationValue) / 255.0, 0.0, 1.0);
+        float compressionDrive = clamp(config.transformCompress / 255.0, 0.0, 1.0);
+        float presetDrive = 0.55 + quantizationDrive * 0.25 + compressionDrive * 0.15 +
+                            (config.predictionMethod == 0 ? 0.0 : 0.15) +
+                            (config.waveletType == 0u ? 0.0 : 0.10);
+        float drive = clamp(preset.effectStrength * presetDrive, 0.0, 1.35);
+        float density = preset.effectStrength <= 0.0
+                            ? 0.0
+                            : clamp(0.30 + 0.42 * min(drive, 1.0) +
+                                        0.10 * quantizationDrive,
+                                    0.25, 0.90);
+        float residualKeep = clamp(0.58 - drive * 0.40 - quantizationDrive * 0.18,
+                                   0.04, 0.58);
+        float corruptionMix = clamp(0.55 + 0.35 * min(drive, 1.0), 0.55, 0.90);
+        int predictionCode = abs(config.predictionMethod);
+        uint holdFrames = 3u + uint((predictionCode + int(config.encodingMethod)) % 6);
+        uint heldFrame = frame.frameIndex / holdFrames;
+
+        ChannelUniform anchorConfig = preset.channels[0];
+        int effectBlock = clamp(max(int(anchorConfig.minBlockSize) * 8,
+                                    min(int(anchorConfig.maxBlockSize) * 2, 64)),
+                                16, 64);
+        int2 effectOrigin = (point / effectBlock) * effectBlock;
+        uint blockHash = pixelHash(effectOrigin.x, effectOrigin.y, 0, heldFrame, preset.seed);
+        bool affected = float(blockHash & 0xffffu) < density * 65535.0;
+
+        float value = current;
+        if (affected) {
+            int direction = (blockHash & 0x10000u) == 0u ? -1 : 1;
+            int distance = effectBlock * (1 + int((blockHash >> 17u) % 3u));
+            int channelShift = (channel - 1) *
+                (1 + int((blockHash >> 21u) % uint(max(2, effectBlock / 4))));
+            int2 samplePoint = point + int2(direction * distance + channelShift,
+                                             (int((blockHash >> 25u) % 3u) - 1) * effectBlock);
+            int mode = (int(config.encodingMethod) + predictionCode) % 6;
+            if (mode == 2) {
+                samplePoint.x = effectOrigin.x +
+                    int((blockHash >> 9u) % uint(max(1, effectBlock / 4))) + channelShift;
+            } else if (mode == 5 && ((effectOrigin.y / effectBlock) & 1) != 0) {
+                samplePoint = point + int2(-direction * distance + channelShift,
+                    -(int((blockHash >> 25u) % 3u) - 1) * effectBlock);
+            }
+
+            float displaced = channelAtWrapped(input, samplePoint, channel, preset);
+            float broken = predicted + residual * residualKeep;
+            float corrupted = displaced;
+            switch (mode) {
+                case 0: corrupted = broken * 0.55 + displaced * 0.45; break;
+                case 1: corrupted = displaced; break;
+                case 2: corrupted = displaced; break;
+                case 3: corrupted = current + (displaced - predicted) * (0.70 + drive * 0.22); break;
+                case 4: {
+                    int currentByte = clamp(int(round(current * 255.0)), 0, 255);
+                    int displacedByte = clamp(int(round(displaced * 255.0)), 0, 255);
+                    corrupted = float(currentByte ^ displacedByte) / 255.0;
+                    break;
+                }
+                case 5: corrupted = displaced * 0.80 + broken * 0.20; break;
+                default: break;
+            }
+            float colorSpaceDamageScale = preset.colorSpace <= 2u ? 1.0 : 0.22;
+            float bitPlaneDamage = colorSpaceDamageScale * ((12.0 + 24.0 * drive) / 255.0) *
+                (0.65 + 0.35 * float((blockHash >> 8u) & 0xffu) / 255.0);
+            bool positiveDamage =
+                ((blockHash >> uint(3 + channel * 5)) & 1u) != 0u;
+            corrupted += positiveDamage ? bitPlaneDamage : -bitPlaneDamage;
+            value = mix(current, corrupted, corruptionMix);
+        }
         if (config.clampMethod == 1u) value = fract(value + 16.0);
         else value = clamp(value, 0.0, 1.0);
         reconstructed[channel] = value;

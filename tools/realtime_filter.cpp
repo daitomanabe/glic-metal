@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <iomanip>
@@ -26,6 +27,7 @@ struct Options {
   std::string presetsDirectory = "presets";
   std::string backend = "auto";
   std::string statsJson;
+  float strength = 1.0f;
   bool passthrough = false;
 };
 
@@ -38,6 +40,7 @@ void printUsage(const char *program) {
       << "  --preset <name>          Preset name (default: default)\n"
       << "  --presets-dir <path>     Preset directory (default: presets)\n"
       << "  --backend <auto|cpu|metal>\n"
+      << "  --strength <0..2>        Glitch intensity (default: 1)\n"
       << "  --passthrough             Copy frames unchanged for A/B "
          "calibration\n"
       << "  --stats-json <path>      Write processing statistics\n";
@@ -49,6 +52,18 @@ bool parsePositiveInt(std::string_view text, int &value) {
     if (parsed <= 0 || parsed > std::numeric_limits<int>::max())
       return false;
     value = static_cast<int>(parsed);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+bool parseStrength(std::string_view text, float &value) {
+  try {
+    const float parsed = std::stof(std::string(text));
+    if (!std::isfinite(parsed) || parsed < 0.0f || parsed > 2.0f)
+      return false;
+    value = parsed;
     return true;
   } catch (...) {
     return false;
@@ -85,6 +100,10 @@ bool parseOptions(int argc, char **argv, Options &options) {
       if (value == nullptr)
         return false;
       options.backend = value;
+    } else if (argument == "--strength") {
+      const char *value = takeValue();
+      if (value == nullptr || !parseStrength(value, options.strength))
+        return false;
     } else if (argument == "--stats-json") {
       const char *value = takeValue();
       if (value == nullptr)
@@ -132,6 +151,7 @@ void writeStats(const Options &options, const std::string &preset,
          << "  \"height\": " << options.height << ",\n"
          << "  \"preset\": \"" << preset << "\",\n"
          << "  \"backend\": \"" << backend << "\",\n"
+         << "  \"strength\": " << options.strength << ",\n"
          << "  \"frames\": " << frames << ",\n"
          << "  \"mean_process_ms\": " << meanMilliseconds << ",\n"
          << "  \"max_process_ms\": " << maximumMilliseconds << ",\n"
@@ -178,7 +198,9 @@ int main(int argc, char **argv) {
     glic::RealtimePrepareOptions prepareOptions{.width = options.width,
                                                 .height = options.height,
                                                 .config = config,
-                                                .seed = 0x474C4943u};
+                                                .seed = 0x474C4943u,
+                                                .effectStrength =
+                                                    options.strength};
     if (!backend->prepare(prepareOptions, error)) {
       std::cerr << "Failed to prepare realtime backend: " << error << '\n';
       return 4;
@@ -257,7 +279,8 @@ int main(int argc, char **argv) {
           ? 0.0
           : static_cast<double>(frameIndex) * 1000.0 / totalMilliseconds;
   std::cerr << "frames=" << frameIndex << " backend=" << backendName
-            << " preset=" << presetName << " processing_fps=" << std::fixed
-            << std::setprecision(3) << fps << '\n';
+            << " preset=" << presetName << " strength=" << options.strength
+            << " processing_fps=" << std::fixed << std::setprecision(3) << fps
+            << '\n';
   return frameIndex == 0 ? 5 : 0;
 }

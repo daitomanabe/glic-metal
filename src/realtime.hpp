@@ -16,6 +16,7 @@ struct RealtimePrepareOptions {
   int height = 0;
   CodecConfig config{};
   uint32_t seed = 0x474C4943u;
+  float effectStrength = 1.0f;
 };
 
 struct RealtimeFrameStats {

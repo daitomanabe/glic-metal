@@ -62,6 +62,7 @@ cmake --build .
 # MetalでフルHDを120フレーム計測し、15fpsのp95ゲートを確認
 ./build/glic_realtime_bench input-1920x1080.png \
   --preset bi0g4n1c --backend metal \
+  --strength 1.0 \
   --frames 120 --warmup 10 --require-fps 15 \
   --output realtime-output.png --json realtime-report.json
 
@@ -76,6 +77,8 @@ cmake --build .
 
 リアルタイムAPIは [src/realtime.hpp](src/realtime.hpp) にあります。CPU backendは3チャンネルを永続workerで並列処理し、解像度変更時以外はworkspaceを再利用します。Metal backendはCPU配列を扱う同期APIに加え、`MTLTexture`を直接渡すゼロコピーAPIと、呼び出し側の`MTLCommandBuffer`へ処理を追加する非同期APIを提供します。
 
+リアルタイム経路はpresetの予測・量子化・wavelet・encoding設定から、残差欠落、ブロック転送、RLEストリーク、RGB分離、ビットプレーン破損を生成します。破損パターンは数フレーム保持されるため、動画上で構造として認識できます。`--strength` は `0`（無加工）から `2`（最大）で、既定値は `1` です。
+
 macOSでMetal shaderをビルドする際はFull Xcodeが必要です。CMakeはデフォルトで `/Applications/Xcode.app/Contents/Developer` を使用するため、システムの`xcode-select`設定を変更する必要はありません。
 
 ### 動画処理
@@ -84,7 +87,7 @@ macOSでMetal shaderをビルドする際はFull Xcodeが必要です。CMakeは
 
 ```bash
 python3 scripts/process_video.py input.mov output.mp4 \
-  --preset bi0g4n1c --backend metal
+  --preset bi0g4n1c --backend metal --strength 1.0
 ```
 
 入力・出力動画をローカルに保持する場合は、Git対象外の `test-videos/` を使用できます。
@@ -371,6 +374,7 @@ cmake --build .
 # Benchmark 120 Full HD frames on Metal with a 15 fps p95 gate
 ./build/glic_realtime_bench input-1920x1080.png \
   --preset bi0g4n1c --backend metal \
+  --strength 1.0 \
   --frames 120 --warmup 10 --require-fps 15 \
   --output realtime-output.png --json realtime-report.json
 
@@ -385,6 +389,8 @@ cmake --build .
 
 The realtime API is declared in [src/realtime.hpp](src/realtime.hpp). The CPU backend reuses resolution-sized workspaces after preparation. The Metal backend provides a synchronous CPU-buffer API, an opaque zero-copy `MTLTexture` API, and a non-blocking API that appends work to the caller's `MTLCommandBuffer`.
 
+The realtime path derives residual loss, block displacement, RLE streaks, RGB separation, and bit-plane damage from each preset's prediction, quantization, wavelet, and encoding settings. Corruption patterns are held for several frames so they read as temporal structures. `--strength` ranges from `0` (off) to `2` (maximum) and defaults to `1`.
+
 Full Xcode is required to compile the Metal shader on macOS. CMake uses `/Applications/Xcode.app/Contents/Developer` by default, so it does not need to change the system `xcode-select` setting.
 
 ### Video processing
@@ -393,7 +399,7 @@ Full Xcode is required to compile the Metal shader on macOS. CMake uses `/Applic
 
 ```bash
 python3 scripts/process_video.py input.mov output.mp4 \
-  --preset bi0g4n1c --backend metal
+  --preset bi0g4n1c --backend metal --strength 1.0
 ```
 
 Use the Git-ignored `test-videos/` directory for local input and preview files.

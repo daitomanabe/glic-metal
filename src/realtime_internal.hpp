@@ -95,7 +95,7 @@ struct MetalChannelUniform {
   float segmentationPrecision = 0.0f;
   float transformCompress = 0.0f;
   float waveletStrength = 0.0f;
-  uint32_t reserved = 0;
+  uint32_t encodingMethod = 0;
 };
 
 static_assert(sizeof(MetalChannelUniform) == 48);
@@ -109,7 +109,7 @@ struct alignas(16) MetalPresetUniform {
   float borderR = 0.5f;
   float borderG = 0.5f;
   float borderB = 0.5f;
-  float reserved = 0.0f;
+  float effectStrength = 1.0f;
 
   std::array<MetalChannelUniform, 3> channels{};
 };
@@ -126,6 +126,7 @@ makeMetalPresetUniform(const RealtimePrepareOptions &options) {
   uniform.borderR = options.config.borderColorR / 255.0f;
   uniform.borderG = options.config.borderColorG / 255.0f;
   uniform.borderB = options.config.borderColorB / 255.0f;
+  uniform.effectStrength = std::clamp(options.effectStrength, 0.0f, 2.0f);
 
   for (size_t i = 0; i < uniform.channels.size(); ++i) {
     const auto &source = options.config.channels[i];
@@ -145,6 +146,7 @@ makeMetalPresetUniform(const RealtimePrepareOptions &options) {
     destination.segmentationPrecision = source.segmentationPrecision;
     destination.transformCompress = source.transformCompress;
     destination.waveletStrength = waveletGain(source.waveletType);
+    destination.encodingMethod = static_cast<uint32_t>(source.encodingMethod);
   }
   return uniform;
 }

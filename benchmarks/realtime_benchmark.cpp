@@ -28,6 +28,7 @@ struct Options {
   int frames = 120;
   int warmupFrames = 10;
   double requiredFps = 15.0;
+  float strength = 1.0f;
   bool allPresets = false;
 };
 
@@ -54,6 +55,7 @@ void printUsage(const char *program) {
       << "  --frames <count>         Measured frames (default: 120)\n"
       << "  --warmup <count>         Warm-up frames (default: 10)\n"
       << "  --require-fps <value>    p95 performance gate (default: 15)\n"
+      << "  --strength <0..2>        Glitch intensity (default: 1)\n"
       << "  --output <png>           Save the final processed frame\n"
       << "  --json <path>            Write a machine-readable report\n";
 }
@@ -115,6 +117,18 @@ bool parseOptions(int argc, char **argv, Options &options) {
         return false;
       }
       if (options.requiredFps <= 0.0)
+        return false;
+    } else if (argument == "--strength") {
+      const char *value = takeValue();
+      if (!value)
+        return false;
+      try {
+        options.strength = std::stof(value);
+      } catch (...) {
+        return false;
+      }
+      if (!std::isfinite(options.strength) || options.strength < 0.0f ||
+          options.strength > 2.0f)
         return false;
     } else if (argument == "--output") {
       const char *value = takeValue();
@@ -191,6 +205,7 @@ void writeJsonReport(const Options &options, int width, int height,
          << "  \"frames\": " << options.frames << ",\n"
          << "  \"warmup_frames\": " << options.warmupFrames << ",\n"
          << "  \"required_fps\": " << options.requiredFps << ",\n"
+         << "  \"strength\": " << options.strength << ",\n"
          << "  \"results\": [\n";
   for (size_t i = 0; i < results.size(); ++i) {
     const auto &result = results[i];
@@ -253,7 +268,8 @@ int main(int argc, char **argv) {
   std::cout << "resolution=" << width << 'x' << height
             << " backend=" << backend->name() << " presets=" << presets.size()
             << " frames=" << options.frames
-            << " warmup=" << options.warmupFrames << '\n';
+            << " warmup=" << options.warmupFrames
+            << " strength=" << options.strength << '\n';
   std::cout << "preset\tbackend\tmedian_ms\tp95_ms\tmean_ms\tmedian_gpu_"
                "ms\tfps\tpass\n";
 
@@ -279,7 +295,9 @@ int main(int argc, char **argv) {
     glic::RealtimePrepareOptions prepareOptions{.width = width,
                                                 .height = height,
                                                 .config = config,
-                                                .seed = 0x474C4943u};
+                                                .seed = 0x474C4943u,
+                                                .effectStrength =
+                                                    options.strength};
     if (!backend->prepare(prepareOptions, error)) {
       result.error = error;
       results.push_back(result);

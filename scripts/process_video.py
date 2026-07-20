@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -29,6 +30,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--presets-dir", type=Path)
     parser.add_argument(
         "--backend", choices=("auto", "cpu", "metal"), default="metal"
+    )
+    parser.add_argument(
+        "--strength",
+        type=float,
+        default=1.0,
+        help="Glitch intensity from 0 (off) to 2 (maximum).",
     )
     parser.add_argument("--filter-bin", type=Path)
     parser.add_argument("--report", type=Path)
@@ -126,6 +133,8 @@ def log_tail(path: Path, lines: int = 30) -> str:
 
 def main() -> int:
     args = parse_args()
+    if not math.isfinite(args.strength) or not 0.0 <= args.strength <= 2.0:
+        raise RuntimeError("--strength must be between 0 and 2")
     root = Path(__file__).resolve().parent.parent
     input_path = args.input.expanduser().resolve()
     output_path = args.output.expanduser().resolve()
@@ -203,6 +212,8 @@ def main() -> int:
                     str(presets_dir),
                     "--backend",
                     args.backend,
+                    "--strength",
+                    str(args.strength),
                 ]
             )
         filter_command.extend(["--stats-json", str(filter_stats)])
@@ -311,6 +322,7 @@ def main() -> int:
         "input": str(input_path),
         "output": str(output_path),
         "preset": "passthrough" if args.passthrough else args.preset,
+        "strength": 0.0 if args.passthrough else args.strength,
         "backend_requested": "passthrough" if args.passthrough else args.backend,
         "encoder": encoder_name,
         "elapsed_seconds": round(elapsed, 3),
