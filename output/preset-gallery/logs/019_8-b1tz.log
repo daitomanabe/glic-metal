@@ -1,0 +1,33 @@
+Loading preset: 8-b1tz
+Preset loaded successfully
+Loaded image: 640x480
+Encoding started
+Color space: XYZ
+Channel 0 segmentation
+Created 307200 segments
+Wavelet for plane 0 -> Symlet8
+Prediction for plane 0 -> LDIAG
+Channel 1 segmentation
+Created 76800 segments
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> ANGLE
+Channel 2 segmentation
+Created 9162 segments
+Wavelet for plane 2 -> Symlet8
+Prediction for plane 2 -> V
+FINISHED
+Encoded to: {repo_path}/output/preset-gallery/glic/019_8-b1tz.glic
+Decoding started
+Color space: XYZ
+Channel 0 segmentation
+Channel 1 segmentation
+Channel 2 segmentation
+Wavelet for plane 0 -> Symlet8
+Prediction for plane 0 -> LDIAG
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> ANGLE
+Wavelet for plane 2 -> Symlet8
+Prediction for plane 2 -> V
+FINISHED
+Decoded to: {repo_path}/output/preset-gallery/images/019_8-b1tz.png (640x480)
+preset=8-b1tz

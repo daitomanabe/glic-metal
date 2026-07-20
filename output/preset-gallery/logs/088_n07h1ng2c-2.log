@@ -1,0 +1,33 @@
+Loading preset: n07h1ng2c-2
+Preset loaded successfully
+Loaded image: 640x480
+Encoding started
+Color space: XYZ
+Channel 0 segmentation
+Created 37899 segments
+Wavelet for plane 0 -> Symlet8
+Prediction for plane 0 -> REF
+Channel 1 segmentation
+Created 76800 segments
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> ANGLE
+Channel 2 segmentation
+Created 8982 segments
+Wavelet for plane 2 -> Symlet8
+Prediction for plane 2 -> V
+FINISHED
+Encoded to: {repo_path}/output/preset-gallery/glic/088_n07h1ng2c-2.glic
+Decoding started
+Color space: XYZ
+Channel 0 segmentation
+Channel 1 segmentation
+Channel 2 segmentation
+Wavelet for plane 0 -> Symlet8
+Prediction for plane 0 -> REF
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> ANGLE
+Wavelet for plane 2 -> Symlet8
+Prediction for plane 2 -> V
+FINISHED
+Decoded to: {repo_path}/output/preset-gallery/images/088_n07h1ng2c-2.png (640x480)
+preset=n07h1ng2c-2

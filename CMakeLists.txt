@@ -1,0 +1,135 @@
+cmake_minimum_required(VERSION 3.16)
+project(glic_metal VERSION 1.0.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# stb library is included as a git submodule in external/stb
+
+# Core source files
+set(CORE_SOURCES
+    src/glic.cpp
+    src/planes.cpp
+    src/colorspaces.cpp
+    src/segment.cpp
+    src/prediction.cpp
+    src/quantization.cpp
+    src/wavelet.cpp
+    src/encoding.cpp
+    src/bitio.cpp
+    src/effects.cpp
+    src/preset_loader.cpp
+    src/realtime.cpp
+    src/realtime_cpu.cpp
+)
+
+# Header files
+set(HEADERS
+    src/glic.hpp
+    src/planes.hpp
+    src/colorspaces.hpp
+    src/segment.hpp
+    src/prediction.hpp
+    src/quantization.hpp
+    src/wavelet.hpp
+    src/encoding.hpp
+    src/bitio.hpp
+    src/config.hpp
+    src/effects.hpp
+    src/preset_loader.hpp
+    src/realtime.hpp
+    src/realtime_internal.hpp
+    src/realtime_cpu.hpp
+    src/realtime_metal.hpp
+)
+
+add_library(glic_core STATIC ${CORE_SOURCES} ${HEADERS})
+
+target_include_directories(glic_core
+    PUBLIC ${CMAKE_SOURCE_DIR}/src
+    PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/external/stb
+)
+
+if(APPLE)
+    enable_language(OBJCXX)
+
+    set(GLIC_XCODE_DEVELOPER_DIR "/Applications/Xcode.app/Contents/Developer"
+        CACHE PATH "Xcode developer directory used to compile Metal shaders")
+    if(NOT EXISTS "${GLIC_XCODE_DEVELOPER_DIR}/usr/bin/xcodebuild")
+        message(FATAL_ERROR "Full Xcode is required for the Metal backend: ${GLIC_XCODE_DEVELOPER_DIR}")
+    endif()
+
+    set(GLIC_METAL_AIR "${CMAKE_BINARY_DIR}/glic_realtime.air")
+    set(GLIC_METALLIB "${CMAKE_BINARY_DIR}/glic_realtime.metallib")
+    add_custom_command(
+        OUTPUT "${GLIC_METAL_AIR}"
+        COMMAND ${CMAKE_COMMAND} -E env
+            "DEVELOPER_DIR=${GLIC_XCODE_DEVELOPER_DIR}"
+            /usr/bin/xcrun -sdk macosx metal -std=metal3.1
+            -c "${CMAKE_SOURCE_DIR}/src/glic_realtime.metal"
+            -o "${GLIC_METAL_AIR}"
+        DEPENDS "${CMAKE_SOURCE_DIR}/src/glic_realtime.metal"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${GLIC_METALLIB}"
+        COMMAND ${CMAKE_COMMAND} -E env
+            "DEVELOPER_DIR=${GLIC_XCODE_DEVELOPER_DIR}"
+            /usr/bin/xcrun -sdk macosx metallib
+            "${GLIC_METAL_AIR}" -o "${GLIC_METALLIB}"
+        DEPENDS "${GLIC_METAL_AIR}"
+        VERBATIM
+    )
+    add_custom_target(glic_metal_shaders DEPENDS "${GLIC_METALLIB}")
+
+    target_sources(glic_core PRIVATE src/realtime_metal.mm)
+    set_source_files_properties(src/realtime_metal.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    add_dependencies(glic_core glic_metal_shaders)
+    target_compile_definitions(glic_core PRIVATE
+        GLIC_HAS_METAL=1
+        "GLIC_METALLIB_PATH=\"${GLIC_METALLIB}\""
+    )
+    target_link_libraries(glic_core PUBLIC "-framework Foundation" "-framework Metal")
+endif()
+
+add_executable(glic src/main.cpp)
+target_link_libraries(glic PRIVATE glic_core)
+
+add_executable(glic_realtime_bench benchmarks/realtime_benchmark.cpp)
+target_link_libraries(glic_realtime_bench PRIVATE glic_core)
+
+# Compiler warnings
+if(MSVC)
+    target_compile_options(glic_core PRIVATE /W4)
+else()
+    target_compile_options(glic_core PRIVATE -Wall -Wextra -O3)
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(glic_realtime_tests tests/realtime_tests.cpp)
+    target_link_libraries(glic_realtime_tests PRIVATE glic_core)
+    target_compile_definitions(glic_realtime_tests PRIVATE
+        "GLIC_TEST_PRESETS_DIR=\"${CMAKE_SOURCE_DIR}/presets\""
+    )
+    add_test(NAME glic_realtime_all_presets COMMAND glic_realtime_tests)
+
+    if(APPLE)
+        add_executable(glic_realtime_metal_interop_tests tests/realtime_metal_interop_tests.mm)
+        set_source_files_properties(tests/realtime_metal_interop_tests.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+        target_link_libraries(glic_realtime_metal_interop_tests PRIVATE glic_core)
+        target_compile_definitions(glic_realtime_metal_interop_tests PRIVATE
+            "GLIC_TEST_PRESETS_DIR=\"${CMAKE_SOURCE_DIR}/presets\""
+        )
+        add_test(NAME glic_realtime_metal_texture_interop COMMAND glic_realtime_metal_interop_tests)
+    endif()
+endif()
+
+# Installation
+install(TARGETS glic glic_realtime_bench RUNTIME DESTINATION bin)
+if(APPLE)
+    install(FILES "${GLIC_METALLIB}" DESTINATION lib/glic)
+endif()

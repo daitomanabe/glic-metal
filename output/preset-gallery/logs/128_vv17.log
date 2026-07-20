@@ -1,0 +1,33 @@
+Loading preset: vv17
+Preset loaded successfully
+Loaded image: 640x480
+Encoding started
+Color space: Greyscale
+Channel 0 segmentation
+Created 19200 segments
+Wavelet for plane 0 -> Symlet8
+Prediction for plane 0 -> PAETH
+Channel 1 segmentation
+Created 14613 segments
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> AVG
+Channel 2 segmentation
+Created 14364 segments
+Wavelet for plane 2 -> NONE
+Prediction for plane 2 -> AVG
+FINISHED
+Encoded to: {repo_path}/output/preset-gallery/glic/128_vv17.glic
+Decoding started
+Color space: Greyscale
+Channel 0 segmentation
+Channel 1 segmentation
+Channel 2 segmentation
+Wavelet for plane 0 -> Symlet8
+Prediction for plane 0 -> PAETH
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> AVG
+Wavelet for plane 2 -> NONE
+Prediction for plane 2 -> AVG
+FINISHED
+Decoded to: {repo_path}/output/preset-gallery/images/128_vv17.png (640x480)
+preset=vv17

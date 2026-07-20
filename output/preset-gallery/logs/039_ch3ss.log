@@ -1,0 +1,33 @@
+Loading preset: ch3ss
+Preset loaded successfully
+Loaded image: 640x480
+Encoding started
+Color space: HSB
+Channel 0 segmentation
+Created 10281 segments
+Wavelet for plane 0 -> Symlet8
+Prediction for plane 0 -> ANGLE
+Channel 1 segmentation
+Created 76800 segments
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> ANGLE
+Channel 2 segmentation
+Created 14865 segments
+Wavelet for plane 2 -> Symlet8
+Prediction for plane 2 -> V
+FINISHED
+Encoded to: {repo_path}/output/preset-gallery/glic/039_ch3ss.glic
+Decoding started
+Color space: HSB
+Channel 0 segmentation
+Channel 1 segmentation
+Channel 2 segmentation
+Wavelet for plane 0 -> Symlet8
+Prediction for plane 0 -> ANGLE
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> ANGLE
+Wavelet for plane 2 -> Symlet8
+Prediction for plane 2 -> V
+FINISHED
+Decoded to: {repo_path}/output/preset-gallery/images/039_ch3ss.png (640x480)
+preset=ch3ss

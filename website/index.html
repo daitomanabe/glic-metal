@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>glic-metal</title>
+  <style>
+    :root {
+      --canvas-bg: #000;
+      --canvas-text: #fff;
+      --panel-border: rgba(255,255,255,0.2);
+      --text-muted: rgba(255,255,255,0.72);
+      --accent: rgba(255,255,255,0.9);
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: Menlo, Monaco, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top, rgba(255,255,255,0.12), transparent 30%), #000;
+      color: var(--canvas-text);
+      font-family: var(--font-sans);
+    }
+    nav {
+      position: sticky;
+      top: 0;
+      display: flex;
+      justify-content: space-between;
+      padding: 1.25rem 1.5rem;
+      backdrop-filter: blur(12px);
+      background: rgba(0,0,0,0.72);
+      border-bottom: 1px solid var(--panel-border);
+    }
+    button {
+      background: transparent;
+      color: var(--canvas-text);
+      border: 1px solid var(--panel-border);
+      padding: 0.45rem 0.8rem;
+      cursor: pointer;
+    }
+    main {
+      width: min(980px, calc(100vw - 2rem));
+      margin: 0 auto;
+      padding: 4rem 0 6rem;
+    }
+    h1 {
+      font-size: clamp(3rem, 8vw, 6.5rem);
+      font-weight: 200;
+      margin: 0 0 1rem;
+      letter-spacing: -0.04em;
+    }
+    h2 {
+      margin-top: 3rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-size: 0.92rem;
+      color: var(--text-muted);
+    }
+    p, li {
+      color: var(--text-muted);
+      line-height: 1.75;
+    }
+    .grid {
+      display: grid;
+      gap: 1.5rem;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    }
+    .panel {
+      border: 1px solid var(--panel-border);
+      padding: 1rem;
+      min-height: 100%;
+    }
+    code {
+      font-family: var(--font-mono);
+      color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <div>glic-metal</div>
+    <button id="toggle">EN</button>
+  </nav>
+  <main>
+    <section>
+      <h1 data-ja="glic-metal" data-en="glic-metal">glic-metal</h1>
+      <p data-ja="cmake_minimum_required(VERSION 3.16)" data-en="cmake_minimum_required(VERSION 3.16)">cmake_minimum_required(VERSION 3.16)</p>
+    </section>
+    <section class="grid">
+      <article class="panel">
+        <h2 data-ja="役割" data-en="Role">役割</h2>
+        <p data-ja="repo" data-en="repo">repo</p>
+      </article>
+      <article class="panel">
+        <h2 data-ja="ルート" data-en="Root">ルート</h2>
+        <p><code>../glic-metal</code></p>
+      </article>
+    </section>
+    <section>
+      <h2 data-ja="主要項目" data-en="Key Paths">主要項目</h2>
+      <ul><li><code>.cache/</code></li><li><code>.claude/</code></li><li><code>.DS_Store</code></li><li><code>AGENTS.md</code></li><li><code>build/</code></li><li><code>CMakeLists.txt</code></li><li><code>daito-testimage.png</code></li><li><code>examples/</code></li><li><code>external/</code></li><li><code>output/</code></li><li><code>presets/</code></li><li><code>README.md</code></li><li><code>src/</code></li><li><code>website/</code></li></ul>
+    </section>
+    <section>
+      <h2 data-ja="Submodules" data-en="Submodules">Submodules</h2>
+      <ul><li><code>external/stb</code></li></ul>
+    </section>
+  </main>
+  <script>
+    const toggle = document.getElementById('toggle');
+    let current = 'ja';
+    toggle.addEventListener('click', () => {
+      current = current === 'ja' ? 'en' : 'ja';
+      toggle.textContent = current === 'ja' ? 'EN' : 'JA';
+      for (const node of document.querySelectorAll('[data-ja][data-en]')) {
+        node.textContent = node.dataset[current];
+      }
+      document.documentElement.lang = current;
+    });
+  </script>
+</body>
+</html>

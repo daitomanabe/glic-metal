@@ -1,0 +1,33 @@
+Loading preset: 0rg4n1c-tr1f0rc3
+Preset loaded successfully
+Loaded image: 640x480
+Encoding started
+Color space: RGB
+Channel 0 segmentation
+Created 76800 segments
+Wavelet for plane 0 -> NONE
+Prediction for plane 0 -> LDIAG
+Channel 1 segmentation
+Created 14424 segments
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> AVG
+Channel 2 segmentation
+Created 14148 segments
+Wavelet for plane 2 -> NONE
+Prediction for plane 2 -> AVG
+FINISHED
+Encoded to: {repo_path}/output/preset-gallery/glic/005_0rg4n1c-tr1f0rc3.glic
+Decoding started
+Color space: RGB
+Channel 0 segmentation
+Channel 1 segmentation
+Channel 2 segmentation
+Wavelet for plane 0 -> NONE
+Prediction for plane 0 -> LDIAG
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> AVG
+Wavelet for plane 2 -> NONE
+Prediction for plane 2 -> AVG
+FINISHED
+Decoded to: {repo_path}/output/preset-gallery/images/005_0rg4n1c-tr1f0rc3.png (640x480)
+preset=0rg4n1c-tr1f0rc3

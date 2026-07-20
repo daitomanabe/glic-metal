@@ -1,0 +1,33 @@
+Loading preset: constrctivist
+Preset loaded successfully
+Loaded image: 640x480
+Encoding started
+Color space: RGB
+Channel 0 segmentation
+Created 76893 segments
+Wavelet for plane 0 -> Symlet8
+Prediction for plane 0 -> PAETH
+Channel 1 segmentation
+Created 14436 segments
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> AVG
+Channel 2 segmentation
+Created 14163 segments
+Wavelet for plane 2 -> NONE
+Prediction for plane 2 -> AVG
+FINISHED
+Encoded to: {repo_path}/output/preset-gallery/glic/053_constrctivist.glic
+Decoding started
+Color space: RGB
+Channel 0 segmentation
+Channel 1 segmentation
+Channel 2 segmentation
+Wavelet for plane 0 -> Symlet8
+Prediction for plane 0 -> PAETH
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> AVG
+Wavelet for plane 2 -> NONE
+Prediction for plane 2 -> AVG
+FINISHED
+Decoded to: {repo_path}/output/preset-gallery/images/053_constrctivist.png (640x480)
+preset=constrctivist

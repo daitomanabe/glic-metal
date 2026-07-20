@@ -1,0 +1,33 @@
+Loading preset: sk3255
+Preset loaded successfully
+Loaded image: 640x480
+Encoding started
+Color space: HSB
+Channel 0 segmentation
+Created 8463 segments
+Wavelet for plane 0 -> Haar
+Prediction for plane 0 -> SPIRAL
+Channel 1 segmentation
+Created 18465 segments
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> AVG
+Channel 2 segmentation
+Created 14760 segments
+Wavelet for plane 2 -> NONE
+Prediction for plane 2 -> AVG
+FINISHED
+Encoded to: {repo_path}/output/preset-gallery/glic/107_sk3255.glic
+Decoding started
+Color space: HSB
+Channel 0 segmentation
+Channel 1 segmentation
+Channel 2 segmentation
+Wavelet for plane 0 -> Haar
+Prediction for plane 0 -> SPIRAL
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> AVG
+Wavelet for plane 2 -> NONE
+Prediction for plane 2 -> AVG
+FINISHED
+Decoded to: {repo_path}/output/preset-gallery/images/107_sk3255.png (640x480)
+preset=sk3255

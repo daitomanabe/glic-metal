@@ -1,0 +1,33 @@
+Loading preset: 8l33dm3
+Preset loaded successfully
+Loaded image: 640x480
+Encoding started
+Color space: XYZ
+Channel 0 segmentation
+Created 9444 segments
+Wavelet for plane 0 -> Symlet8
+Prediction for plane 0 -> ANGLE
+Channel 1 segmentation
+Created 76800 segments
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> ANGLE
+Channel 2 segmentation
+Created 9054 segments
+Wavelet for plane 2 -> Symlet8
+Prediction for plane 2 -> V
+FINISHED
+Encoded to: {repo_path}/output/preset-gallery/glic/020_8l33dm3.glic
+Decoding started
+Color space: XYZ
+Channel 0 segmentation
+Channel 1 segmentation
+Channel 2 segmentation
+Wavelet for plane 0 -> Symlet8
+Prediction for plane 0 -> ANGLE
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> ANGLE
+Wavelet for plane 2 -> Symlet8
+Prediction for plane 2 -> V
+FINISHED
+Decoded to: {repo_path}/output/preset-gallery/images/020_8l33dm3.png (640x480)
+preset=8l33dm3

@@ -1,0 +1,33 @@
+Loading preset: cubism
+Preset loaded successfully
+Loaded image: 640x480
+Encoding started
+Color space: XYZ
+Channel 0 segmentation
+Created 6825 segments
+Wavelet for plane 0 -> Symlet8
+Prediction for plane 0 -> LDIAG
+Channel 1 segmentation
+Created 9378 segments
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> AVG
+Channel 2 segmentation
+Created 8991 segments
+Wavelet for plane 2 -> NONE
+Prediction for plane 2 -> AVG
+FINISHED
+Encoded to: {repo_path}/output/preset-gallery/glic/057_cubism.glic
+Decoding started
+Color space: XYZ
+Channel 0 segmentation
+Channel 1 segmentation
+Channel 2 segmentation
+Wavelet for plane 0 -> Symlet8
+Prediction for plane 0 -> LDIAG
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> AVG
+Wavelet for plane 2 -> NONE
+Prediction for plane 2 -> AVG
+FINISHED
+Decoded to: {repo_path}/output/preset-gallery/images/057_cubism.png (640x480)
+preset=cubism

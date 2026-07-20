@@ -1,0 +1,33 @@
+Loading preset: channels
+Preset loaded successfully
+Loaded image: 640x480
+Encoding started
+Color space: R-GGB-G
+Channel 0 segmentation
+Created 5634 segments
+Wavelet for plane 0 -> Haar
+Prediction for plane 0 -> PAETH
+Channel 1 segmentation
+Created 26430 segments
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> H
+Channel 2 segmentation
+Created 10476 segments
+Wavelet for plane 2 -> Haar
+Prediction for plane 2 -> HV
+FINISHED
+Encoded to: {repo_path}/output/preset-gallery/glic/040_channels.glic
+Decoding started
+Color space: R-GGB-G
+Channel 0 segmentation
+Channel 1 segmentation
+Channel 2 segmentation
+Wavelet for plane 0 -> Haar
+Prediction for plane 0 -> PAETH
+Wavelet for plane 1 -> Symlet8
+Prediction for plane 1 -> H
+Wavelet for plane 2 -> Haar
+Prediction for plane 2 -> HV
+FINISHED
+Decoded to: {repo_path}/output/preset-gallery/images/040_channels.png (640x480)
+preset=channels

@@ -1,0 +1,71 @@
+# Build directories
+build/
+build-*/
+cmake-build-*/
+
+# IDE
+.vscode/
+.idea/
+*.xcodeproj/
+*.xcworkspace/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Output files
+output/
+*.glic
+examples/output/
+
+# Cache
+.cache/
+.claude/
+
+# Compiled files
+*.o
+*.a
+*.so
+*.dylib
+
+# Temporary files
+*.tmp
+*.swp
+*~
+
+# workspace-repo-normalizer: begin
+.DS_Store
+Thumbs.db
+*.log
+.env
+.env.*
+.idea/
+.vscode/
+*.swp
+*.swo
+node_modules/
+dist/
+coverage/
+.next/
+.vite/
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.dSYM/
+CMakeFiles/
+CMakeCache.txt
+cmake-build-*/
+# workspace-repo-normalizer: end
+# Local-only structure notes
+FILE-STRUCTURE.md
+
+# Committed preset effect gallery
+!output/
+output/*
+!output/preset-gallery/
+!output/preset-gallery/**
