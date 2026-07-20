@@ -20,6 +20,23 @@ def main() -> int:
     assert MODULE.parse_frame_rate("24") == 24.0
     assert MODULE.parse_frame_rate("0/0") == 0.0
     assert MODULE.parse_frame_rate("invalid") == 0.0
+    assert MODULE.parse_frame_count("166") == 166
+    assert MODULE.parse_frame_count("N/A") is None
+    assert MODULE.parse_frame_count("0") is None
+    assert MODULE.parse_frame_count("2000001") is None
+    assert MODULE.first_valid_duration("N/A", "5.533333") == 5.533333
+    assert MODULE.first_valid_duration(None, "nan", "0", "5.0") == 5.0
+    assert MODULE.first_valid_duration("N/A", None) is None
+    assert MODULE.estimate_frame_capacity("5.533333", 30.0) == 168
+    assert MODULE.estimate_frame_capacity("N/A", 30.0) is None
+    assert MODULE.select_frame_capacity("166", "5.533333", 30.0, False) == 168
+    assert MODULE.select_frame_capacity("166", "N/A", 30.0, False) == 166
+    assert MODULE.select_frame_capacity("166", "5.533333", 60.0, True) == 334
+    assert MODULE.resolve_backend("original_visual", None, "darwin") == "metal"
+    assert MODULE.resolve_backend("original_visual", "auto", "darwin") == "metal"
+    assert MODULE.resolve_backend("original_visual", "auto", "linux") == "cpu"
+    assert MODULE.resolve_backend("original_visual", "cpu", "darwin") == "cpu"
+    assert MODULE.resolve_backend("compat_realtime", "auto", "linux") == "auto"
 
     common = {
         "width": 960,

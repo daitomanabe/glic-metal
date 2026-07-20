@@ -7,6 +7,7 @@ import argparse
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 
@@ -52,6 +53,8 @@ def main() -> int:
             str(height),
             "--target-fps",
             "30",
+            "--expected-frames",
+            str(frames),
             "--preset",
             "default",
             "--presets-dir",
@@ -73,6 +76,9 @@ def main() -> int:
         assert stats["unsupported_policy"] == "fail-closed"
         assert stats["processing_pixel_exact"] is False
         assert stats["frames"] == frames
+        assert stats["expected_frames"] == frames
+        assert stats["initial_timing_capacity"] == frames
+        assert stats["timing_capacity_growth_events"] == 0
         assert stats["warmup_frames"] == frames
         assert stats["measured_frames"] == 0
         assert stats["kernel_timing_scope"] == "post-warmup-lane-process-call-only"
@@ -89,6 +95,36 @@ def main() -> int:
         assert stats["realtime_policy"]["minimum_measured_frames"] == 120
         assert stats["kernel_realtime_30fps_passed"] is False
         assert stats["realtime_30fps_passed"] is False
+
+        if sys.platform == "darwin":
+            metal_stats_path = Path(text) / "metal-stats.json"
+            metal_command = command[:-2] + [
+                "--backend",
+                "metal",
+                "--stats-json",
+                str(metal_stats_path),
+            ]
+            metal_result = subprocess.run(
+                metal_command, input=source, capture_output=True
+            )
+            if metal_result.returncode != 0:
+                raise AssertionError(
+                    metal_result.stderr.decode(errors="replace")
+                )
+            if len(metal_result.stdout) != len(source):
+                raise AssertionError("Metal filter did not emit complete frames")
+            metal_stats = json.loads(metal_stats_path.read_text())
+            assert metal_stats["backend"] == "metal-original-visual"
+            assert (
+                metal_stats["execution_mode"]
+                == "hybrid_cpu_colorspace_segmentation_gpu_reconstruction"
+            )
+            assert metal_stats["cdf97_precision"] == "float32-safe-math"
+            assert metal_stats["mean_gpu_dispatches"] >= 1
+            assert metal_stats["command_buffers_per_frame"] == 1
+            assert metal_stats["cpu_gpu_waits_per_frame"] == 1
+            assert metal_stats["mapped_buffer_copies_per_frame"] == 0
+            assert metal_stats["all_frames_mean_process_ms"] > 0
 
         checked = subprocess.run(command[:-2] + ["--check"], capture_output=True)
         if checked.returncode != 0 or b"supported original_visual preset" not in checked.stderr:

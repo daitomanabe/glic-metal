@@ -26,7 +26,7 @@ throughput measurement.
 |---|---|---|---|---|
 | `legacy_realtime` | Historical C++ interpretation | One-pass glitch approximation | No | Yes |
 | `original_values_realtime` | Upstream GUI semantics | One-pass glitch approximation | No | Yes |
-| `original_visual` | Upstream GUI semantics | Original-style segmentation, prediction, quantization and transform reconstruction | No | Yes on CPU, supported subset only |
+| `original_visual` | Upstream GUI semantics | Original-style segmentation, prediction, quantization and transform reconstruction | No | Yes on CPU or Metal, supported subset only |
 | `file_codec` | Codec configuration | C++ encode and decode path | Yes | No |
 
 Reports and command output must name the compatibility level. A 30 fps pass at
@@ -60,13 +60,12 @@ The `original_values_realtime` approximation gate is:
 - both mean and p95 processing time at or below 33.333 ms;
 - no processing failure or dropped output frame.
 
-The higher-fidelity `original_visual` lane is currently CPU-only. Its gate
-uses `backend=cpu-reference` with the same resolution, warm-up, measured-frame,
-mean and p95 limits. Therefore the 35/37 normal-input result and 34/37
-normal-plus-stress result below prove CPU throughput for the original-style
-lane; they do **not** satisfy or imply the Metal-backend requirement. The
-Metal result for all 144 names belongs only to the explicitly labelled visual
-approximation lane.
+The higher-fidelity `original_visual` lane has separate CPU-double and
+Metal-float32 implementations. Both use the same resolution, warm-up,
+measured-frame, mean, and p95 limits. Reports must identify
+`cpu-reference` or `metal-original-visual`; timing from one backend is not
+evidence for the other. The Metal result for all 144 names still belongs only
+to the separately labelled `compat_realtime` visual approximation lane.
 
 Video delivery is checked separately. Decode, colorspace conversion, the
 realtime kernel, display/encode and audio remux can make end-to-end throughput
@@ -162,7 +161,51 @@ all 14 supported predictors and both clamp modes. The source quantization value
 `87`, for example, is tested with the upstream codec step `43.5`; it is not
 scaled twice.
 
+## Implemented `original_metal_visual` lane
+
+`OriginalRealtimeMetalLane` keeps the same 37-preset fail-closed support
+boundary while moving reconstruction to Metal:
+
+1. six persistent CPU slices convert input pixels into the upstream color
+   space;
+2. three CPU channel workers run the seeded sampled quadtree independently;
+3. each leaf receives a dependency level from the fully reconstructed top and
+   left boundaries used by the fixed predictors;
+4. Metal dispatches each dependency frontier in order and processes all three
+   channels concurrently;
+5. each leaf runs residual prediction, quantization, CDF97 FWT/WPT,
+   compression, inverse transform, and reconstruction inside one threadgroup;
+6. six persistent CPU slices convert the shared output planes back to BGRA.
+
+Fixed-block presets bypass standard-deviation sampling and generate the same
+regular leaf set directly. Adaptive nodes whose split or leaf result is forced
+by block-size bounds advance the RNG without doing unused plane sampling and
+variance work. Threadgroup size is selected from the current block size and
+frame segment density. Per-frame work uses one command-buffer submission, one
+completion wait, and no mapped-buffer copy on Apple unified memory.
+
+Plane, segment, transform, scratch, uniform, dependency-map, and worker storage
+is allocated in `prepare()`. Frame processing does not grow those workspaces or
+create threads. The current API is a synchronous span/raw-video hybrid; it is
+not the zero-copy texture API used by `compat_realtime`.
+
+Metal/Foundation initialization, repeated `prepare()`, and destruction each
+run inside an autorelease pool. The video wrapper reserves the larger of
+`nb_frames` and its duration/fps estimate, so all timing vectors are allocated
+before streaming even when the container under-reports its frame count. The
+JSON report records the initial capacity and any unexpected growth event.
+
+Metal does not provide the fp64 arithmetic used by the CPU/JWave port. The
+Metal CDF97 kernel is compiled separately with safe math and precise fp32
+functions. No-wavelet reconstruction is integer-exact against the CPU lane.
+CDF97 follows the same stages and coefficients but is explicitly
+`processing_pixel_exact=false`. Tests cover fixed blocks 2 through 64, FWT and
+WPT, both small and large transform scales, every fixed predictor, adaptive
+segmentation parity, and all 37 preset preflights.
+
 ### Certified local baseline
+
+#### Historical CPU baseline
 
 The original no-wavelet tier certified all 16 presets on the Apple M5 Max. That
 result is a historical baseline, not the current supported count.
@@ -200,13 +243,87 @@ records resolution, sample counts, required fps and the mean-plus-p95 policy.
 Runs below those evidence minima can report `timing_passed`, but cannot report
 `performance_passed`.
 
-```bash
-sips -z 540 960 test-videos/preview/benchmark-1920x1080.png \
-  --out /tmp/glic-original-960x540.png
+#### Current Metal baseline
 
-./build/glic_original_realtime_bench /tmp/glic-original-960x540.png \
+The current isolated baseline was measured on `rhizoma30`, a MacBook Pro
+`Mac16,5` with Apple M4 Max (16 CPU cores) and 128 GB RAM. At 960 x 540 with
+10 warm-up and 120 measured frames, `metal-original-visual` passed all 37
+supported presets. Both mean and p95 remained below 33.333 ms:
+
+- normal source image: 37/37; slowest mean 32.554 ms and slowest p95
+  33.049 ms (`wtf2`);
+- deterministic uniform-noise stress: 37/37; slowest mean 23.922 ms and p95
+  24.074 ms (`webp`).
+
+The CPU-reference image comparison has two explicit gates. Integer/no-wavelet
+presets must be pixel-exact. CDF97 presets first receive a numeric gate using
+RGB MAE, luma SSIM, and aligned-edge correlation; 34/37 passed that gate.
+`colour_mess2`, `colour_waves_sharp`, and `colour_waves_sharp2` amplify fp32
+rounding through later predictor boundaries. They fail numeric identity but
+pass the separate original-style morphology gate based on blurred structure,
+aligned spatial-edge correlation, edge-orientation distribution, and
+edge-energy ratio. A negative-control test rejects spatially shuffled 32 px
+tiles even when their global edge statistics remain similar. Consequently the
+Metal claim is algorithmic and morphological fidelity for 37/37, not
+CPU-double pixel identity.
+
+An actual 166-frame 960 x 540 / 30 fps `vv02` video measured 150.787 kernel
+fps, 132.854 fps including BGRA pipe backpressure, and 107.669 fps including
+FFmpeg decode, VideoToolbox encode, and mux. Timing storage started at 168
+slots and recorded zero growth events; the Metal counters remained one command
+buffer, one CPU/GPU completion wait, and zero mapped-buffer copies per frame.
+Against a passthrough encode, the effect gate classified the output `STRONG`
+(RGB MAE 70.247, 99.91% of pixels changed by at least 10, luma SSIM 0.1085).
+Technical video QA decoded all 166 frames, found zero repeated or frozen pairs,
+and passed motion, exposure, color, complexity, and lighting checks.
+
+The complete reports, processed video, passthrough control, difference heatmap,
+and 111 CPU/Metal preview PNGs are under
+`test-videos/original-visual-metal/remote-m4max-20260720/`.
+
+```bash
+./build/glic_original_realtime_bench \
+  test-videos/preview/original-presets-v1/dry-960x540.png \
   --all-supported \
   --presets-dir presets \
+  --backend cpu \
+  --frames 120 --warmup 10 \
+  --output-dir test-videos/original-visual-metal/cpu-reference-previews \
+  --json test-videos/original-visual-metal/benchmark-cpu-reference-960x540.json
+
+./build/glic_original_realtime_bench \
+  test-videos/preview/original-presets-v1/dry-960x540.png \
+  --all-supported \
+  --presets-dir presets \
+  --backend metal \
+  --frames 120 --warmup 10 \
   --require-fps 30 \
-  --json /tmp/glic-original-fidelity.json
+  --output-dir test-videos/original-visual-metal/previews \
+  --json test-videos/original-visual-metal/benchmark-metal-960x540.json
+
+scripts/compare_original_metal_reference.py \
+  --cpu-dir test-videos/original-visual-metal/cpu-reference-previews \
+  --metal-dir test-videos/original-visual-metal/previews \
+  --cpu-benchmark test-videos/original-visual-metal/benchmark-cpu-reference-960x540.json \
+  --benchmark test-videos/original-visual-metal/benchmark-metal-960x540.json \
+  --output-json /tmp/glic-original-metal-reference.json
 ```
+
+For a complete repeatable run, including the noise stress case, real-video
+throughput, allocation counters, passthrough-relative visible-effect gate, and
+technical video QA:
+
+```bash
+scripts/run_original_metal_validation.sh \
+  --normal-image /absolute/path/to/dry-960x540.png \
+  --noise-image /absolute/path/to/noise-960x540.png \
+  --video /absolute/path/to/source-960x540-30fps.mkv \
+  --output-dir /absolute/path/to/validation-results
+```
+
+The comparison refuses missing or mismatched input hashes, resolution, sample
+counts, preview frame index, preset sets, or full three-channel preset
+configuration hashes. Each benchmark result binds its generated PNG with a
+raw-byte FNV-1a64 hash. The comparator reads each PNG once and derives the
+provenance check, image pixels, and SHA-256 audit hash from that same byte
+sequence, so stale or replaced previews cannot be scored accidentally.

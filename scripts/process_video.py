@@ -49,7 +49,10 @@ def parse_args() -> argparse.Namespace:
         "--backend",
         choices=("auto", "cpu", "metal"),
         default=None,
-        help="Defaults to metal for compat_realtime and cpu for original_visual.",
+        help=(
+            "Defaults to metal; explicit auto selects Metal on macOS and CPU "
+            "elsewhere for original_visual."
+        ),
     )
     parser.add_argument("--width", type=int, help="Output/filter width in pixels.")
     parser.add_argument("--height", type=int, help="Output/filter height in pixels.")
@@ -118,6 +121,53 @@ def parse_frame_rate(value: object) -> float:
     except (TypeError, ValueError):
         return 0.0
     return rate if math.isfinite(rate) and rate > 0.0 else 0.0
+
+
+def parse_frame_count(value: object) -> int | None:
+    try:
+        count = int(str(value))
+    except (TypeError, ValueError):
+        return None
+    return count if 0 < count <= 2_000_000 else None
+
+
+def first_valid_duration(*values: object) -> float | None:
+    """Return the first finite positive ffprobe duration candidate."""
+    for value in values:
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(seconds) and seconds > 0.0:
+            return seconds
+    return None
+
+
+def estimate_frame_capacity(duration: object, frame_rate: float) -> int | None:
+    seconds = first_valid_duration(duration)
+    if seconds is None:
+        return None
+    if frame_rate <= 0.0:
+        return None
+    # Container timestamps can end a fraction before the final decoded frame.
+    # Two slots of slack retain zero-growth behavior without claiming an exact
+    # frame count when ffprobe reports nb_frames=N/A.
+    return parse_frame_count(math.ceil(seconds * frame_rate) + 2)
+
+
+def select_frame_capacity(
+    nb_frames: object,
+    duration: object,
+    target_fps: float,
+    frame_rate_overridden: bool,
+) -> int | None:
+    exact_count = None if frame_rate_overridden else parse_frame_count(nb_frames)
+    estimated_count = estimate_frame_capacity(duration, target_fps)
+    if exact_count is None:
+        return estimated_count
+    if estimated_count is None:
+        return exact_count
+    return max(exact_count, estimated_count)
 
 
 def passes_end_to_end_average_30fps(
@@ -223,6 +273,16 @@ def log_tail(path: Path, lines: int = 30) -> str:
     return "\n".join(path.read_text(errors="replace").splitlines()[-lines:])
 
 
+def resolve_backend(
+    processing_mode: str, requested: str | None, platform: str = sys.platform
+) -> str:
+    if processing_mode == "original_visual":
+        if requested == "auto":
+            return "metal" if platform == "darwin" else "cpu"
+        return requested or "metal"
+    return requested or "metal"
+
+
 def main() -> int:
     args = parse_args()
     if (args.width is None) != (args.height is None):
@@ -238,13 +298,11 @@ def main() -> int:
             )
         if args.preset_semantics not in (None, "original"):
             raise RuntimeError("original_visual requires original preset semantics")
-        if args.backend not in (None, "auto", "cpu"):
-            raise RuntimeError("original_visual is currently a CPU lane; --backend metal is unavailable")
         preset_semantics = "original"
-        backend_requested = "cpu"
+        backend_requested = resolve_backend(args.processing_mode, args.backend)
     else:
         preset_semantics = args.preset_semantics or "legacy"
-        backend_requested = args.backend or "metal"
+        backend_requested = resolve_backend(args.processing_mode, args.backend)
     if not math.isfinite(args.strength) or not 0.0 <= args.strength <= 2.0:
         raise RuntimeError("--strength must be between 0 and 2")
     for name, value in (
@@ -298,6 +356,15 @@ def main() -> int:
     height = args.height or source_height
     target_fps = args.fps if args.fps is not None else source_fps
     frame_rate = f"{target_fps:g}"
+    source_duration = first_valid_duration(
+        stream.get("duration"), input_probe.get("format", {}).get("duration")
+    )
+    expected_frames = select_frame_capacity(
+        stream.get("nb_frames"),
+        source_duration,
+        target_fps,
+        args.fps is not None,
+    )
 
     if args.processing_mode == "original_visual":
         assert presets_dir is not None
@@ -310,6 +377,8 @@ def main() -> int:
                 str(height),
                 "--target-fps",
                 frame_rate,
+                "--backend",
+                backend_requested,
                 "--preset",
                 args.preset,
                 "--presets-dir",
@@ -364,10 +433,16 @@ def main() -> int:
         ]
         if args.processing_mode == "original_visual":
             assert presets_dir is not None
+            if expected_frames is not None:
+                filter_command.extend(
+                    ["--expected-frames", str(expected_frames)]
+                )
             filter_command.extend(
                 [
                     "--target-fps",
                     frame_rate,
+                    "--backend",
+                    backend_requested,
                     "--preset",
                     args.preset,
                     "--presets-dir",
@@ -516,9 +591,7 @@ def main() -> int:
     )
     output_fps = parse_frame_rate(output_frame_rate)
     elapsed = time.monotonic() - started
-    duration = float(
-        stream.get("duration") or input_probe.get("format", {}).get("duration", 0.0)
-    )
+    duration = source_duration or 0.0
     processed_frames = int(filter_report.get("frames", 0))
     end_to_end_observed_fps = processed_frames / elapsed if elapsed else 0.0
     report = {

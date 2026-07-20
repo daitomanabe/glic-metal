@@ -74,7 +74,7 @@ cmake --build .
 
 # 原作スタイルの再構成を、対応する37 presetだけfail-closedで検証
 ./build/glic_original_realtime_bench input-960x540.png \
-  --all-supported --presets-dir presets --require-fps 30 \
+  --all-supported --presets-dir presets --backend metal --require-fps 30 \
   --json original-visual-report.json
 
 # 3本の永続workerを使うCPU fallback
@@ -84,7 +84,7 @@ cmake --build .
 
 リアルタイムAPIは [src/realtime.hpp](src/realtime.hpp) にあります。CPU backendは3チャンネルを永続workerで並列処理し、解像度変更時以外はworkspaceを再利用します。Metal backendはCPU配列を扱う同期APIに加え、`MTLTexture`を直接渡すゼロコピーAPIと、呼び出し側の`MTLCommandBuffer`へ処理を追加する非同期APIを提供します。
 
-互換性レベル、上流GLICの20fps UI設定との違い、対応37 preset（CPU `original_visual`で通常画像3回のintersectionは35 PASS、uniform-noise stressまで含む保守的intersectionは34 PASS）の境界は [docs/ORIGINAL_PRESET_REALTIME.md](docs/ORIGINAL_PRESET_REALTIME.md) にあります。この35/34件はCPU忠実度レーンの結果であり、Metal合格数ではありません。Metalで全144名を通す経路は明示的に別の視覚近似です。
+互換性レベル、上流GLICの20fps UI設定との違い、対応37 presetの境界は [docs/ORIGINAL_PRESET_REALTIME.md](docs/ORIGINAL_PRESET_REALTIME.md) にあります。M4 Maxでの隔離認証では、`original_metal_visual` は960×540、warm-up 10 + 計測120フレームで、通常画像・uniform-noiseの双方とも37/37件が平均/p95 30fps gateを通過しました。CPU数値参照とは34/37件が規定範囲内、残り3件もエッジ方向・エッジ量・粗い構造による原作スタイル形態gateを通過しています。全144名を処理する `compat_realtime` は引き続き明示的に別の視覚近似です。
 
 リアルタイム経路には、従来のブロック破損に加えて、走査線ティア、RGBチャンネルシア、アナログ同期崩れ、ミラーフォールド、輪郭エコー、ビットプレーン・ディザ、波形ワープ、ポスタライズ／ソラリゼーションの9機構があります。いずれも1 passのCPU/Metal実装で、フレームごとの確保を行いません。`--strength` は `0`（無加工）から `2`（最大）で、`--effect-amount`、`--effect-scale`、`--effect-rate` で機構固有の形状を制御します。
 
@@ -101,11 +101,11 @@ python3 scripts/process_video.py input.mov output.mp4 \
 
 # 原作スタイル対応presetを、明示的なoriginal_visualレーンで960x540/30fps処理
 python3 scripts/process_video.py input.mov output-original.mp4 \
-  --processing-mode original_visual --preset burn \
+  --processing-mode original_visual --backend metal --preset burn \
   --width 960 --height 540 --fps 30 --overwrite
 ```
 
-`original_visual` は `compat_realtime` と別の、CPUによる原作スタイル再構成レーンです。対応するCDF97 FWT/WPTを実行し、それ以外のwaveletやpredictor探索を必要とするpresetは事前検査でfail-closedします。未対応presetを近似処理へ自動フォールバックしません。JSONの30fps判定は最初の10フレームを除いた最低120フレームについて、1フレームの入力開始から出力完了までのstream wall時間（pipeの待機・backpressureを含む平均とp95）を対象とします。カーネル単体は `kernel_realtime_30fps_passed`、FFmpegのdecode・scale・encode・muxまで含む動画全体は `end_to_end_realtime_factor` で別に確認できます。
+`original_visual` は `compat_realtime` と別の原作スタイル再構成レーンです。Metal backendはCPUで色空間変換・原作準拠quadtree分割・依存frontier構築を並列実行し、Metalで3チャンネルの予測・量子化・CDF97 FWT/WPT・逆変換を処理します。1フレームにつきcommand buffer 1回、完了待ち1回、mapped buffer copy 0回で、全workspaceとworkerは `prepare()` で固定確保します。動画の総フレーム数を取得できる場合はtiming領域も開始前に一括確保し、長時間処理中のvector再確保を避けます。MetalのCDF97はprecise float32なのでCPU doubleとのpixel exactは主張しません。未対応waveletやpredictor探索は事前検査でfail-closedし、近似処理へ自動フォールバックしません。JSONの30fps判定は最初の10フレームを除いた最低120フレームについて、pipe待機・backpressureを含む平均とp95を対象にします。
 
 探索結果の `ready_to_run_args` に含まれる `--canonical 'v2|...' --seed ...` を渡すと、preset名への変換を挟まず、評価した強度・機構・形状を動画上へ完全に再現できます。
 
@@ -434,7 +434,7 @@ cmake --build .
 
 # Fail-closed original-style reconstruction for the supported 37 presets
 ./build/glic_original_realtime_bench input-960x540.png \
-  --all-supported --presets-dir presets --require-fps 30 \
+  --all-supported --presets-dir presets --backend metal --require-fps 30 \
   --json original-visual-report.json
 
 # CPU fallback with three persistent channel workers
@@ -444,7 +444,7 @@ cmake --build .
 
 The realtime API is declared in [src/realtime.hpp](src/realtime.hpp). The CPU backend reuses resolution-sized workspaces after preparation. The Metal backend provides a synchronous CPU-buffer API, an opaque zero-copy `MTLTexture` API, and a non-blocking API that appends work to the caller's `MTLCommandBuffer`.
 
-See [docs/ORIGINAL_PRESET_REALTIME.md](docs/ORIGINAL_PRESET_REALTIME.md) for compatibility levels, why upstream's 20 fps setting is a UI rate rather than codec throughput, and the current 37-preset original-style CPU boundary (35 pass the intersection of three normal-image runs; 34 pass the conservative normal-plus-uniform-noise intersection). Those 35/34 counts are CPU fidelity-lane results, not Metal results; the all-144 Metal path is the separately labelled visual approximation.
+See [docs/ORIGINAL_PRESET_REALTIME.md](docs/ORIGINAL_PRESET_REALTIME.md) for compatibility levels and why upstream's 20 fps setting is a UI rate rather than codec throughput. In the isolated M4 Max certification, `original_metal_visual` passes the mean+p95 30 fps gate for all 37 supported presets on both the normal and uniform-noise inputs. Numeric CPU-reference comparison passes 34/37; the remaining three pass the separate blurred-structure and edge-morphology gate. The all-144 Metal path remains the separately labelled `compat_realtime` visual approximation.
 
 The realtime path has nine explicit glitch mechanisms. `legacy_block` preserves the preset-derived codec damage path; the other eight are independent RGB mechanisms so selecting a legacy preset cannot collapse them back into the same block topology.
 
@@ -476,11 +476,30 @@ python3 scripts/process_video.py input.mov output.mp4 \
 
 # Process a supported original-style preset at 960x540/30 fps
 python3 scripts/process_video.py input.mov output-original.mp4 \
-  --processing-mode original_visual --preset burn \
+  --processing-mode original_visual --backend metal --preset burn \
   --width 960 --height 540 --fps 30 --overwrite
 ```
 
-`original_visual` is a dedicated CPU original-style reconstruction lane, separate from `compat_realtime`. Supported CDF97 FWT/WPT presets run that transform; other wavelets and predictor-search modes fail during preflight instead of silently falling back to an approximation. The JSON 30 fps gate covers wall time from frame-read start through completed frame write, including pipe wait and backpressure: 10 warm-up frames followed by at least 120 measured frames, with both mean and p95 inside the frame budget. Kernel-only status remains explicit as `kernel_realtime_30fps_passed`; check `end_to_end_realtime_factor` separately for decode, scale, encode, and mux performance.
+Run the complete fail-closed certification with explicit normal, uniform-noise,
+and video inputs:
+
+```bash
+scripts/run_original_metal_validation.sh \
+  --normal-image /absolute/path/to/dry-960x540.png \
+  --noise-image /absolute/path/to/noise-960x540.png \
+  --video /absolute/path/to/source-960x540-30fps.mkv \
+  --output-dir /absolute/path/to/validation-results
+```
+
+This builds Release, runs CTest, requires 37/37 Metal presets to satisfy both
+mean and p95 at 30 fps on normal and noise inputs, verifies CPU/Metal preview
+provenance and morphology, checks the real video pipeline at 960x540/30 fps,
+requires a VISIBLE/STRONG dry/wet difference against a passthrough encode, and
+requires a clean technical video-QA result. `--skip-video-qa` is available
+only for an isolated machine without the global QA skill; the returned video
+must then be checked separately before certification is complete.
+
+`original_visual` is separate from `compat_realtime`. Its Metal backend parallelizes CPU colorspace conversion, upstream-style quadtree segmentation, and dependency-frontier construction, then runs three-channel prediction, quantization, CDF97 FWT/WPT, and reconstruction on Metal. Each frame uses one command buffer, one completion wait, zero mapped-buffer copies, and workspaces allocated only by `prepare()`. When the source frame count is available, timing storage is also preallocated before streaming so long renders do not grow vectors mid-run. Metal CDF97 uses precise float32, so CPU-double pixel exactness is not claimed. Unsupported wavelets and predictor-search modes fail during preflight instead of falling back to an approximation. The JSON 30 fps gate covers 10 warm-up plus at least 120 measured frames, with both mean and p95 inside the frame budget.
 
 Pass the exact `--canonical 'v2|...' --seed ...` values from a ranked row's
 `ready_to_run_args` to reproduce the evaluated mechanism and controls without

@@ -24,6 +24,7 @@ set(CORE_SOURCES
     src/realtime_certification.cpp
     src/realtime_cpu.cpp
     src/original_realtime.cpp
+    src/original_realtime_metal_stub.cpp
 )
 
 # Header files
@@ -46,6 +47,7 @@ set(HEADERS
     src/realtime_cpu.hpp
     src/realtime_metal.hpp
     src/original_realtime.hpp
+    src/original_realtime_metal.hpp
 )
 
 add_library(glic_core STATIC ${CORE_SOURCES} ${HEADERS})
@@ -67,6 +69,8 @@ if(APPLE)
     endif()
 
     set(GLIC_METAL_AIR "${CMAKE_BINARY_DIR}/glic_realtime.air")
+    set(GLIC_ORIGINAL_METAL_AIR
+        "${CMAKE_BINARY_DIR}/glic_original_realtime.air")
     set(GLIC_METALLIB "${CMAKE_BINARY_DIR}/glic_realtime.metallib")
     add_custom_command(
         OUTPUT "${GLIC_METAL_AIR}"
@@ -79,18 +83,33 @@ if(APPLE)
         VERBATIM
     )
     add_custom_command(
+        OUTPUT "${GLIC_ORIGINAL_METAL_AIR}"
+        COMMAND ${CMAKE_COMMAND} -E env
+            "DEVELOPER_DIR=${GLIC_XCODE_DEVELOPER_DIR}"
+            /usr/bin/xcrun -sdk macosx metal -std=metal3.1
+            -fmetal-math-mode=safe
+            -fmetal-math-fp32-functions=precise
+            -c "${CMAKE_SOURCE_DIR}/src/original_realtime_metal_kernel.metal"
+            -o "${GLIC_ORIGINAL_METAL_AIR}"
+        DEPENDS "${CMAKE_SOURCE_DIR}/src/original_realtime_metal_kernel.metal"
+        VERBATIM
+    )
+    add_custom_command(
         OUTPUT "${GLIC_METALLIB}"
         COMMAND ${CMAKE_COMMAND} -E env
             "DEVELOPER_DIR=${GLIC_XCODE_DEVELOPER_DIR}"
             /usr/bin/xcrun -sdk macosx metallib
-            "${GLIC_METAL_AIR}" -o "${GLIC_METALLIB}"
-        DEPENDS "${GLIC_METAL_AIR}"
+            "${GLIC_METAL_AIR}" "${GLIC_ORIGINAL_METAL_AIR}"
+            -o "${GLIC_METALLIB}"
+        DEPENDS "${GLIC_METAL_AIR}" "${GLIC_ORIGINAL_METAL_AIR}"
         VERBATIM
     )
     add_custom_target(glic_metal_shaders DEPENDS "${GLIC_METALLIB}")
 
-    target_sources(glic_core PRIVATE src/realtime_metal.mm)
+    target_sources(glic_core PRIVATE src/realtime_metal.mm
+                                     src/original_realtime_metal.mm)
     set_source_files_properties(src/realtime_metal.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_source_files_properties(src/original_realtime_metal.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     add_dependencies(glic_core glic_metal_shaders)
     target_compile_definitions(glic_core PRIVATE
         GLIC_HAS_METAL=1
@@ -159,6 +178,13 @@ if(BUILD_TESTING)
         add_test(NAME glic_process_video_helpers
                  COMMAND "${Python3_EXECUTABLE}"
                          "${CMAKE_SOURCE_DIR}/tests/test_process_video_helpers.py")
+        add_test(NAME glic_original_metal_reference_analysis
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${CMAKE_SOURCE_DIR}/tests/test_compare_original_metal_reference.py")
+        add_test(NAME glic_original_metal_validation_adapter_selftest
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${CMAKE_SOURCE_DIR}/scripts/validate_original_metal_run.py"
+                         --selftest)
     endif()
 
     add_executable(glic_realtime_tests tests/realtime_tests.cpp)
@@ -185,6 +211,17 @@ if(BUILD_TESTING)
              COMMAND glic_original_realtime_tests)
 
     if(APPLE)
+        add_executable(glic_original_realtime_metal_tests
+                       tests/original_realtime_metal_tests.mm)
+        set_source_files_properties(tests/original_realtime_metal_tests.mm
+                                    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+        target_link_libraries(glic_original_realtime_metal_tests PRIVATE glic_core)
+        target_compile_definitions(glic_original_realtime_metal_tests PRIVATE
+            "GLIC_TEST_PRESETS_DIR=\"${CMAKE_SOURCE_DIR}/presets\""
+        )
+        add_test(NAME glic_original_realtime_metal_reference
+                 COMMAND glic_original_realtime_metal_tests)
+
         add_executable(glic_realtime_metal_interop_tests tests/realtime_metal_interop_tests.mm)
         set_source_files_properties(tests/realtime_metal_interop_tests.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
         target_link_libraries(glic_realtime_metal_interop_tests PRIVATE glic_core)
@@ -210,6 +247,7 @@ install(PROGRAMS scripts/run_search_supervisor.sh scripts/build_search_catalog.p
         scripts/run_ranking_watcher.sh scripts/certify_search_performance.py
         scripts/build_original_preset_catalog.py
         scripts/analyze_original_visual_tier.py
+        scripts/compare_original_metal_reference.py
         DESTINATION bin)
 install(DIRECTORY presets/
         DESTINATION share/glic-metal/presets)
