@@ -16,7 +16,7 @@ glic-metal/
 ├── output/preset-gallery/    committed generated comparison gallery
 ├── presets/                  144 SHA-256-pinned upstream presets
 ├── resources/                macOS bundle metadata
-├── scripts/                  video, analysis, search, ranking, and QA tools
+├── scripts/                  video, analysis, search, novelty selection, and QA tools
 ├── src/                      C++20, Objective-C++, and Metal implementation
 ├── tests/                    API consumer, C++, Objective-C++, and Python tests
 ├── tools/                    filtering, search, and certification CLIs

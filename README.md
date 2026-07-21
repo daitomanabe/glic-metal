@@ -189,6 +189,18 @@ scripts/build_ranked_catalog.sh search-runs/pilot
 
 `ranking.html`、全監査用の `ranking.json` / `ranking.csv`、Top 32の `shortlist.json`、Top 64の `selection.json` が生成されます。`performance-certifications.json` はarchive SHA、レシピSHA、認証binary・Metal shader library・入力・ハードウェアidentityと、各候補のmean/p95/p99/maxを保持します。未認証、CPU、誤解像度、120 frame未満、平均またはp95が33.333msを超える候補でTop枠を補完しません。`generation-directives.json` には過密な知覚cluster、類似出力が多いrecipe family、unique clusterが少ないarchive cellを保存します。画像解析と性能認証はcacheされ、archive世代不一致時には部分結果を公開せず直前のatomic reportを保持します。
 
+適度な複雑さに限定し、以前のランキング画像とも今回の選択内でも似ていない
+canonical presetを抽出するには、二段目の選別器を実行します。
+
+```bash
+python3 scripts/select_novel_moderate_presets.py search-runs/pilot \
+  --reference-ranking search-runs/previous/ranking.json --count 12
+```
+
+出力には再利用可能な`presets.json`、CSV、HTML、contact sheetと、分布確認用の
+`embedding-features.csv`が含まれます。複雑さの上下20%と、過去画像への距離の
+下位20%を除外してから、描画機構を横断するmax-min選択を行います。
+
 5時間の無人実行は、API credentialを子プロセスへ渡さず、`caffeinate`、空き容量監視、二重起動防止、signal checkpointを行うsupervisorから起動できます。ランキングは既定で5分ごとに更新され、終了後に安定したarchiveから最終生成されます。`status.json`、`supervisor-status.json`、`archive.json`、`candidates.ndjson` が進捗と復旧元です。同一入力・seed・backendだけが `--resume` でき、内容不一致は拒否されます。
 
 ```bash
@@ -618,6 +630,18 @@ scripts/build_ranked_catalog.sh search-runs/pilot
 ```
 
 The pipeline writes `ranking.html`, full-audit `ranking.json` / `ranking.csv`, Top-32 `shortlist.json`, Top-64 `selection.json`, and `performance-certifications.json`. The certification sidecar records archive/recipe identities, certifier binary, Metal shader library, input and hardware identities, plus mean/p95/p99/max timings for every elite. Performance and image-analysis caches only reuse matching identities. Missing rows, failed self-tests, or mismatched archive generations fail closed and preserve the previous atomic reports.
+
+Run the second-stage selector to keep middle-complexity canonical presets that
+remain visually distant from both a prior ranking and the current selection:
+
+```bash
+python3 scripts/select_novel_moderate_presets.py search-runs/pilot \
+  --reference-ranking search-runs/previous/ranking.json --count 12
+```
+
+It writes a runnable `presets.json` bank, CSV, HTML, contact sheet, and
+`embedding-features.csv`. The outer 20% complexity tails and the lowest 20%
+prior-novelty tail are removed before mechanism-aware max-min selection.
 
 For a five-hour unattended run, `run_search_supervisor.sh` adds `caffeinate`, disk-space checks, an atomic lock, credential-free child environment, logs, graceful checkpoints, five-minute ranking snapshots, and a final stable ranking. Resume is refused when the input content, seed, scale, or resolved backend differs from `run-config.json`.
 

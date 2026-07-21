@@ -290,6 +290,9 @@ if(BUILD_TESTING)
         add_test(NAME glic_fast_match_allowlist
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_build_fast_match_allowlist.py")
+        add_test(NAME glic_novel_moderate_preset_selector
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${PROJECT_SOURCE_DIR}/tests/test_select_novel_moderate_presets.py")
         add_test(NAME glic_original_metal_validation_adapter_selftest
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/scripts/validate_original_metal_run.py"
@@ -433,7 +436,8 @@ install(PROGRAMS scripts/process_video.py
         RENAME glic_process_video)
 install(PROGRAMS scripts/run_search_supervisor.sh scripts/build_search_catalog.py
         scripts/analyze_search_images.py scripts/perceptual_image_features.py
-        scripts/rank_search_results.py scripts/build_ranked_catalog.sh
+        scripts/rank_search_results.py scripts/select_novel_moderate_presets.py
+        scripts/build_ranked_catalog.sh
         scripts/run_ranking_watcher.sh scripts/certify_search_performance.py
         scripts/build_original_preset_catalog.py
         scripts/analyze_original_visual_tier.py
