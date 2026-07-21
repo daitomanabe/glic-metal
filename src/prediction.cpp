@@ -1,5 +1,6 @@
 #include "prediction.hpp"
 #include "planes.hpp"
+#include "processing_math.hpp"
 #include <cmath>
 #include <algorithm>
 #include <limits>
@@ -59,9 +60,9 @@ Vec2 getAngleRef(int i, int x, int y, float a, int w) {
     }
 
     if (xx > yy)
-        return {std::round(xx), -1};
+        return {static_cast<float>(processingRound(xx)), -1};
     else
-        return {-1, std::round(yy)};
+        return {-1, static_cast<float>(processingRound(yy))};
 }
 
 } // anonymous namespace

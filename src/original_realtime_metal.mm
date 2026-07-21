@@ -1,6 +1,8 @@
 #include "original_realtime_metal.hpp"
 
 #include "colorspaces.hpp"
+#include "processing_math.hpp"
+#include "processing_random.hpp"
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -10,11 +12,11 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <limits>
 #include <mutex>
-#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -28,6 +30,7 @@ namespace glic {
 namespace {
 
 using Clock = std::chrono::steady_clock;
+constexpr uint32_t kThreadgroupCdfMaxBlockSize = 32u;
 
 double milliseconds(Clock::time_point start, Clock::time_point stop) {
   return std::chrono::duration<double, std::milli>(stop - start).count();
@@ -118,6 +121,7 @@ public:
       scratchBuffer_ = nil;
       matrixBuffer_ = nil;
       planeBuffer_ = nil;
+      threadgroupCdfPipeline_ = nil;
       pipeline_ = nil;
       library_ = nil;
       queue_ = nil;
@@ -126,6 +130,11 @@ public:
   }
 
   bool initialize(std::string &error) {
+    const char *disableThreadgroupCdf =
+        std::getenv("GLIC_DISABLE_THREADGROUP_CDF");
+    threadgroupCdfEnabled_ =
+        disableThreadgroupCdf == nullptr ||
+        std::string_view(disableThreadgroupCdf) == "0";
     device_ = MTLCreateSystemDefaultDevice();
     if (device_ == nil) {
       error = "No Metal device is available";
@@ -166,8 +175,25 @@ public:
               metalErrorString(pipelineError);
       return false;
     }
+    id<MTLFunction> threadgroupCdfFunction =
+        [library_ newFunctionWithName:@"glicOriginalSegmentsThreadgroupCdf"];
+    if (threadgroupCdfFunction == nil) {
+      error =
+          "Metal library does not contain glicOriginalSegmentsThreadgroupCdf";
+      return false;
+    }
+    pipelineError = nil;
+    threadgroupCdfPipeline_ =
+        [device_ newComputePipelineStateWithFunction:threadgroupCdfFunction
+                                               error:&pipelineError];
+    if (threadgroupCdfPipeline_ == nil) {
+      error = "Failed to create glicOriginalSegmentsThreadgroupCdf pipeline: " +
+              metalErrorString(pipelineError);
+      return false;
+    }
     pipelineThreadLimit_ =
-        std::min<NSUInteger>(256, pipeline_.maxTotalThreadsPerThreadgroup);
+        std::min({NSUInteger(256), pipeline_.maxTotalThreadsPerThreadgroup,
+                  threadgroupCdfPipeline_.maxTotalThreadsPerThreadgroup});
     // The reduction assumes a power-of-two thread count.
     NSUInteger powerOfTwo = 1;
     while ((powerOfTwo << 1u) <= pipelineThreadLimit_)
@@ -186,6 +212,8 @@ public:
     @autoreleasepool {
       stopWorkers();
       prepared_ = false;
+      staticSchedule_ = false;
+      cachedScheduleStats_ = {};
       error.clear();
       if (width <= 0 || height <= 0) {
         error = "original-style Metal lane requires positive dimensions";
@@ -270,10 +298,7 @@ public:
                        config_.colorSpace);
       referenceValues_ = {getR(convertedReference), getG(convertedReference),
                           getB(convertedReference)};
-      for (std::size_t channel = 0; channel < segmentationRngs_.size();
-           ++channel)
-        segmentationRngs_[channel].seed(42u + static_cast<uint32_t>(channel) *
-                                                  0x9e3779b9u);
+      segmentationRng_.setSeed(42);
 
       MetalPresetUniform uniform;
       uniform.width = static_cast<uint32_t>(width_);
@@ -301,6 +326,21 @@ public:
         destination.compressionThreshold = source.transformCompressionThreshold;
       }
       std::memcpy(uniformBuffer_.contents, &uniform, sizeof(uniform));
+
+      staticSchedule_ = std::all_of(
+          config_.channels.begin(), config_.channels.end(),
+          [](const OriginalPresetChannel &channel) {
+            return channel.minBlockSize == channel.maxBlockSize;
+          });
+      if (staticSchedule_) {
+        // Fixed quadtree geometry is input-independent. Build its exact
+        // top/left frontier and descriptor order once, then reuse the same
+        // persistent mapped buffer for every frame.
+        for (int channel = 0; channel < 3; ++channel)
+          segmentChannel(channel, false);
+        if (!buildDispatchSchedule(cachedScheduleStats_, error))
+          return false;
+      }
 
       try {
         startWorkers();
@@ -337,9 +377,26 @@ public:
 
       const auto prepareStart = Clock::now();
       runWorkerPhase(WorkerPhase::ConvertInput, 6);
-      runWorkerPhase(WorkerPhase::Segment, 3);
-      if (!buildDispatchSchedule(frameStats, error))
-        return false;
+      if (staticSchedule_) {
+        // Cached geometry removes all per-frame tree work, but upstream still
+        // calls calcStdDev at every fixed-tree node. Advance the exact Java RNG
+        // state by those otherwise-unused samples for every frame.
+        for (const auto &channel : config_.channels)
+          segmentationRng_.discardNextFloats(
+              fixedSegmentationRandomDraws(channel.minBlockSize));
+        frameStats.segmentCounts = cachedScheduleStats_.segmentCounts;
+        frameStats.totalSegments = cachedScheduleStats_.totalSegments;
+        frameStats.dispatchLevels = cachedScheduleStats_.dispatchLevels;
+        frameStats.staticScheduleReused = true;
+      } else {
+        // Preserve the one evolving Processing RNG stream in original
+        // channel/DFS order. Metal reconstruction still runs every channel in
+        // parallel once these compact descriptors have been built.
+        for (int channel = 0; channel < 3; ++channel)
+          segmentChannel(channel);
+        if (!buildDispatchSchedule(frameStats, error))
+          return false;
+      }
       const auto prepareStop = Clock::now();
       frameStats.cpuPrepareMilliseconds =
           milliseconds(prepareStart, prepareStop);
@@ -353,7 +410,6 @@ public:
           error = "Failed to create original-style Metal command objects";
           return false;
         }
-        [encoder setComputePipelineState:pipeline_];
         [encoder setBuffer:planeBuffer_ offset:0 atIndex:0];
         [encoder setBuffer:matrixBuffer_ offset:0 atIndex:1];
         [encoder setBuffer:scratchBuffer_ offset:0 atIndex:2];
@@ -364,6 +420,8 @@ public:
         [encoder setThreadgroupMemoryLength:16u atIndex:0];
 
         std::size_t emitted = 0;
+        id<MTLComputePipelineState> activePipeline = nil;
+        id<MTLResource> dependencyResources[] = {planeBuffer_};
         for (std::size_t level = 0; level < frameStats.dispatchLevels;
              ++level) {
           const uint32_t count = levelCounts_[level];
@@ -388,15 +446,45 @@ public:
                                                  : 256u;
           }
           levelThreads = std::min(levelThreads, pipelineThreadLimit_);
-          [encoder setThreadgroupMemoryLength:levelThreads * sizeof(float)
+          const NSUInteger matrixFloats =
+              static_cast<NSUInteger>(maxBlockSize) * maxBlockSize;
+          const NSUInteger threadgroupWorkingBytes =
+              (matrixFloats + std::max(matrixFloats, NSUInteger(32))) *
+                  sizeof(float) +
+              2u * static_cast<NSUInteger>(maxBlockSize) * sizeof(int32_t);
+          const bool useThreadgroupCdf =
+              threadgroupCdfEnabled_ &&
+              maxBlockSize <= kThreadgroupCdfMaxBlockSize &&
+              threadgroupWorkingBytes <= device_.maxThreadgroupMemoryLength;
+          id<MTLComputePipelineState> desiredPipeline =
+              useThreadgroupCdf ? threadgroupCdfPipeline_ : pipeline_;
+          if (activePipeline != desiredPipeline) {
+            [encoder setComputePipelineState:desiredPipeline];
+            activePipeline = desiredPipeline;
+          }
+          [encoder setThreadgroupMemoryLength:
+                       useThreadgroupCdf
+                           ? threadgroupWorkingBytes
+                           : NSUInteger(128)
                                       atIndex:1];
           [encoder setBytes:&offset length:sizeof(offset) atIndex:5];
           [encoder dispatchThreadgroups:MTLSizeMake(count, 1, 1)
                   threadsPerThreadgroup:MTLSizeMake(levelThreads, 1, 1)];
           ++frameStats.gpuDispatches;
+          if (useThreadgroupCdf) {
+            ++frameStats.threadgroupPipelineDispatches;
+            frameStats.threadgroupPipelineSegments += count;
+          } else {
+            ++frameStats.globalPipelineDispatches;
+          }
           emitted += count;
-          if (emitted < frameStats.totalSegments)
-            [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+          if (emitted < frameStats.totalSegments) {
+            // Only reconstructed planes cross dependency frontiers. Transform
+            // workspaces are disjoint per quadtree leaf; segment/uniform data
+            // is read-only. Avoid fencing every bound buffer hundreds of times.
+            [encoder memoryBarrierWithResources:dependencyResources count:1];
+            ++frameStats.bufferBarriers;
+          }
         }
         [encoder endEncoding];
         [commandBuffer commit];
@@ -444,7 +532,7 @@ public:
     return "hybrid_cpu_colorspace_segmentation_gpu_reconstruction";
   }
   const char *numericPrecision() const noexcept override {
-    return "integer_prediction_precise_fp32_cdf97";
+    return "integer_prediction_float_float_cdf97_accumulation_fp32_storage";
   }
   bool isPixelExact() const noexcept override { return false; }
   bool isHardwareAccelerated() const noexcept override { return true; }
@@ -457,7 +545,7 @@ private:
     uint32_t dependencyLevel = 0;
   };
 
-  enum class WorkerPhase { Idle, ConvertInput, Segment, ConvertOutput };
+  enum class WorkerPhase { Idle, ConvertInput, ConvertOutput };
 
   int *planes() noexcept { return static_cast<int *>(planeBuffer_.contents); }
 
@@ -471,17 +559,19 @@ private:
   }
 
   float sampledStandardDeviation(int channel, int x, int y, int size) {
+#if defined(__clang__)
+#pragma clang fp contract(off)
+#endif
     const int limit =
         std::max(static_cast<int>(0.1f * static_cast<float>(size) *
                                   static_cast<float>(size)),
                  4);
-    std::uniform_int_distribution<int> position(0, size - 1);
     float average = 0.0f;
     float sum = 0.0f;
     for (int sample = 1; sample <= limit; ++sample) {
-      auto &rng = segmentationRngs_[static_cast<std::size_t>(channel)];
-      const int value =
-          planeValue(channel, x + position(rng), y + position(rng));
+      const int value = planeValue(
+          channel, x + segmentationRng_.nextPosition(size),
+          y + segmentationRng_.nextPosition(size));
       const float oldAverage = average;
       average +=
           (static_cast<float>(value) - average) / static_cast<float>(sample);
@@ -491,18 +581,49 @@ private:
     return std::sqrt(sum / static_cast<float>(limit - 1));
   }
 
-  void skipUnusedDeviationSamples(int channel, int size) {
-    // All certified block sizes are powers of two. libc++'s closed uniform
-    // distribution therefore consumes one mt19937 result per coordinate.
-    // Advancing the engine preserves the later adaptive decisions while
-    // avoiding plane reads, online variance arithmetic, and sqrt at nodes
-    // whose split/leaf result is already forced by the size bounds.
+  void skipUnusedDeviationSamples(int size) {
     const int limit =
         std::max(static_cast<int>(0.1f * static_cast<float>(size) *
                                   static_cast<float>(size)),
                  4);
-    segmentationRngs_[static_cast<std::size_t>(channel)].discard(
-        static_cast<unsigned long long>(limit) * 2ull);
+    segmentationRng_.discardNextFloats(static_cast<std::uint64_t>(limit) *
+                                       2u);
+  }
+
+  std::uint64_t fixedSegmentationRandomDraws(int blockSize) const noexcept {
+    std::uint64_t draws = 0;
+    for (int size = rootSize_;; size >>= 1) {
+      const std::uint64_t columns =
+          (static_cast<std::uint64_t>(width_) + size - 1u) /
+          static_cast<std::uint64_t>(size);
+      const std::uint64_t rows =
+          (static_cast<std::uint64_t>(height_) + size - 1u) /
+          static_cast<std::uint64_t>(size);
+      const std::uint64_t limit = static_cast<std::uint64_t>(std::max(
+          static_cast<int>(0.1f * static_cast<float>(size) *
+                           static_cast<float>(size)),
+          4));
+      draws += columns * rows * limit * 2u;
+      if (size <= blockSize)
+        break;
+    }
+    return draws;
+  }
+
+  void emitFixedSegmentsRecursive(int x, int y, int size, int blockSize,
+                                  std::vector<WorkingSegment> &segments) {
+    if (x >= width_ || y >= height_)
+      return;
+    if (size > blockSize) {
+      const int half = size / 2;
+      emitFixedSegmentsRecursive(x, y, half, blockSize, segments);
+      emitFixedSegmentsRecursive(x + half, y, half, blockSize, segments);
+      emitFixedSegmentsRecursive(x, y + half, half, blockSize, segments);
+      emitFixedSegmentsRecursive(x + half, y + half, half, blockSize,
+                                 segments);
+      return;
+    }
+    segments.push_back({x, y, size, 0});
   }
 
   void segmentChannelRecursive(int channel, int x, int y, int size, int minSize,
@@ -513,7 +634,7 @@ private:
     const bool forcedLeaf = size <= minSize;
     float deviation = 0.0f;
     if (forcedSplit || forcedLeaf)
-      skipUnusedDeviationSamples(channel, size);
+      skipUnusedDeviationSamples(size);
     else
       deviation = sampledStandardDeviation(channel, x, y, size);
     if (forcedSplit || (!forcedLeaf && deviation > threshold)) {
@@ -530,7 +651,7 @@ private:
     }
   }
 
-  void segmentChannel(int channel) {
+  void segmentChannel(int channel, bool consumeRandom = true) {
     auto &segments = segments_[static_cast<std::size_t>(channel)];
     auto &levelMap = dependencyLevels_[static_cast<std::size_t>(channel)];
     segments.clear();
@@ -540,11 +661,11 @@ private:
       // The sampled deviation cannot affect a fixed-size quadtree. Emitting
       // its regular leaves directly removes RNG/stddev work without changing
       // any reconstructed boundary dependency or output pixel.
-      const int size = channelConfig.minBlockSize;
-      for (int y = 0; y < height_; y += size) {
-        for (int x = 0; x < width_; x += size)
-          segments.push_back({x, y, size, 0});
-      }
+      emitFixedSegmentsRecursive(0, 0, rootSize_,
+                                 channelConfig.minBlockSize, segments);
+      if (consumeRandom)
+        segmentationRng_.discardNextFloats(
+            fixedSegmentationRandomDraws(channelConfig.minBlockSize));
     } else {
       segmentChannelRecursive(
           channel, 0, 0, rootSize_, channelConfig.minBlockSize,
@@ -573,12 +694,18 @@ private:
                        levelMap[row + static_cast<std::size_t>(segment.x + x)]);
       }
       segment.dependencyLevel = dependency + 1u;
-      for (int y = 0; y < usedHeight; ++y) {
-        const std::size_t row =
-            static_cast<std::size_t>(segment.y + y) * width_;
-        std::fill_n(levelMap.begin() + row + segment.x, usedWidth,
-                    segment.dependencyLevel);
-      }
+      // Future leaves can only touch this leaf through its bottom row or
+      // right column. Recording the full interior wrote O(size^2) values that
+      // are never queried; boundary-only state is exactly equivalent.
+      const std::size_t bottomRow =
+          static_cast<std::size_t>(segment.y + usedHeight - 1) * width_;
+      std::fill_n(levelMap.begin() + bottomRow + segment.x, usedWidth,
+                  segment.dependencyLevel);
+      const std::size_t rightColumn =
+          static_cast<std::size_t>(segment.x + usedWidth - 1);
+      for (int y = 0; y < usedHeight; ++y)
+        levelMap[static_cast<std::size_t>(segment.y + y) * width_ +
+                 rightColumn] = segment.dependencyLevel;
     }
   }
 
@@ -604,12 +731,8 @@ private:
     const int *values = planes();
     for (std::size_t index = begin; index < end; ++index) {
       output_[index] = fromColorSpace(
-          makeColor(static_cast<uint8_t>(std::clamp(values[index], 0, 255)),
-                    static_cast<uint8_t>(
-                        std::clamp(values[pixelCount_ + index], 0, 255)),
-                    static_cast<uint8_t>(
-                        std::clamp(values[pixelCount_ * 2u + index], 0, 255)),
-                    getA(input_[index])),
+          processingPackPlanes(values[index], values[pixelCount_ + index],
+                               values[pixelCount_ * 2u + index], input_[index]),
           config_.colorSpace);
     }
   }
@@ -618,9 +741,6 @@ private:
     switch (phase) {
     case WorkerPhase::ConvertInput:
       convertInputRange(part, partCount);
-      break;
-    case WorkerPhase::Segment:
-      segmentChannel(part);
       break;
     case WorkerPhase::ConvertOutput:
       convertOutputRange(part, partCount);
@@ -777,6 +897,7 @@ private:
   id<MTLCommandQueue> queue_ = nil;
   id<MTLLibrary> library_ = nil;
   id<MTLComputePipelineState> pipeline_ = nil;
+  id<MTLComputePipelineState> threadgroupCdfPipeline_ = nil;
   id<MTLBuffer> planeBuffer_ = nil;
   id<MTLBuffer> matrixBuffer_ = nil;
   id<MTLBuffer> scratchBuffer_ = nil;
@@ -793,7 +914,7 @@ private:
   std::array<int, 3> referenceValues_{};
   std::array<std::vector<WorkingSegment>, 3> segments_{};
   std::array<std::vector<uint32_t>, 3> dependencyLevels_{};
-  std::array<std::mt19937, 3> segmentationRngs_{};
+  ProcessingRandom segmentationRng_{42};
   std::vector<uint32_t> levelCounts_;
   std::vector<uint32_t> levelOffsets_;
   std::vector<uint32_t> levelCursors_;
@@ -811,6 +932,9 @@ private:
   uint64_t workerGeneration_ = 0;
   int pendingWorkers_ = 0;
   bool workerShutdown_ = false;
+  OriginalRealtimeMetalFrameStats cachedScheduleStats_{};
+  bool threadgroupCdfEnabled_ = true;
+  bool staticSchedule_ = false;
   bool prepared_ = false;
 };
 

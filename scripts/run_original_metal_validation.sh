@@ -81,6 +81,7 @@ bench="$build_dir/glic_original_realtime_bench"
 filter_bin="$build_dir/glic_original_visual_filter"
 validator="$script_dir/validate_original_metal_run.py"
 comparison="$script_dir/compare_original_metal_reference.py"
+manifest_writer="$script_dir/write_original_metal_manifest.py"
 cpu_json="$output_dir/benchmark-cpu-reference.json"
 normal_json="$output_dir/benchmark-metal-normal.json"
 noise_json="$output_dir/benchmark-metal-noise.json"
@@ -179,6 +180,14 @@ if [ "$skip_video_qa" -eq 0 ]; then
     "$python_bin" "$validator" --qa-report "$qa_json"
 else
   /bin/echo "[original-metal] video QA skipped explicitly"
+fi
+
+if [ "$skip_video_qa" -eq 0 ]; then
+  run_logged "write provenance manifest" "$output_dir/manifest.log" \
+    "$python_bin" "$manifest_writer" --repo-root "$repo_root" \
+    --output-dir "$output_dir" \
+    --input "normal=$normal_image" --input "noise=$noise_image" \
+    --input "video=$video_input"
 fi
 
 if [ "$skip_video_qa" -eq 0 ]; then

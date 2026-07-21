@@ -48,9 +48,19 @@ set(HEADERS
     src/realtime_metal.hpp
     src/original_realtime.hpp
     src/original_realtime_metal.hpp
+    src/processing_math.hpp
+    src/processing_random.hpp
 )
 
 add_library(glic_core STATIC ${CORE_SOURCES} ${HEADERS})
+
+# Processing/JWave evaluates source-level multiply and add operations
+# separately. Prevent host compiler contraction in the strict CPU oracle so an
+# ARM FMA cannot move an adaptive split or a CDF97 rounding boundary.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    set_source_files_properties(src/original_realtime.cpp
+        PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+endif()
 
 target_include_directories(glic_core
     PUBLIC ${CMAKE_SOURCE_DIR}/src
@@ -109,7 +119,8 @@ if(APPLE)
     target_sources(glic_core PRIVATE src/realtime_metal.mm
                                      src/original_realtime_metal.mm)
     set_source_files_properties(src/realtime_metal.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-    set_source_files_properties(src/original_realtime_metal.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_source_files_properties(src/original_realtime_metal.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc;-ffp-contract=off")
     add_dependencies(glic_core glic_metal_shaders)
     target_compile_definitions(glic_core PRIVATE
         GLIC_HAS_METAL=1

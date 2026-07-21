@@ -231,6 +231,10 @@ bool writeStats(const Options &options,
                 std::span<const double> cpuPrepareTimes,
                 std::span<const double> cpuOutputTimes,
                 double dependencyLevelTotal, double gpuDispatchTotal,
+                double threadgroupPipelineDispatchTotal,
+                double threadgroupPipelineSegmentTotal,
+                double globalPipelineDispatchTotal, double bufferBarrierTotal,
+                double staticScheduleReuseTotal,
                 double commandBufferTotal, double completionWaitTotal,
                 double mappedBufferCopyTotal, std::size_t initialTimingCapacity,
                 std::size_t timingCapacityGrowthEvents) {
@@ -293,8 +297,16 @@ bool writeStats(const Options &options,
          << (usesMetal ? "hybrid_cpu_colorspace_segmentation_gpu_reconstruction"
                        : "cpu_parallel_channels")
          << "\",\n"
+         << "  \"fidelity_lane\": \"upstream-colorspace-quadtree-fixed-"
+            "predictor-quantize-"
+         << (usesMetal
+                 ? "reconstruct-float-float-cdf97-fp32-storage-no-serialization"
+                 : "reconstruct-exact-cdf97-no-serialization")
+         << "\",\n"
          << "  \"cdf97_precision\": \""
-         << (usesMetal ? "float32-safe-math" : "float64") << "\",\n"
+         << (usesMetal ? "float-float-accumulation-fp32-storage-safe-math"
+                       : "float64")
+         << "\",\n"
          << "  \"fidelity_claim\": "
             "\"original-style-algorithmic-core-not-processing-pixel-exact\",\n"
          << "  \"processing_pixel_exact\": false,\n"
@@ -302,19 +314,22 @@ bool writeStats(const Options &options,
          << "  \"known_deviations\": [\n"
          << "    \"glic_serialization_and_entropy_encoding_omitted\",\n"
          << "    "
-            "\"cpp_colorspace_and_arithmetic_not_byte_certified_against_"
+            "\"colorspace_and_non_golden_arithmetic_not_byte_certified_against_"
             "processing_jvm\",\n"
          << "    "
-            "\"processing_global_rng_replaced_by_independent_seeded_mt19937_"
-            "per_channel\",\n"
+            "\"processing_rng_seed_fixed_to_42_while_original_sketch_default_"
+            "seed_is_unpinned\",\n"
          << "    "
             "\"cdf97_fwt_and_wpt_supported_other_wavelets_and_predictor_search_"
             "modes_rejected\"";
   if (usesMetal)
     output
-        << ",\n    \"metal_cdf97_float32_differs_from_cpu_float64_reference\"";
+        << ",\n    \"metal_cdf97_fp32_matrix_storage_differs_from_cpu_float64_reference\"";
   output
       << "\n  ],\n"
+      << "  \"processing_rounding_compatible\": true,\n"
+      << "  \"processing_raw_plane_pack_compatible\": true,\n"
+      << "  \"processing_rng_and_cross_channel_order_compatible\": true,\n"
       << "  \"width\": " << options.width << ",\n"
       << "  \"height\": " << options.height << ",\n"
       << "  \"target_fps\": " << options.targetFps << ",\n"
@@ -358,6 +373,36 @@ bool writeStats(const Options &options,
       << (kernelFrameTimes.empty()
               ? 0.0
               : gpuDispatchTotal / static_cast<double>(kernelFrameTimes.size()))
+      << ",\n"
+      << "  \"mean_threadgroup_pipeline_dispatches\": "
+      << (kernelFrameTimes.empty()
+              ? 0.0
+              : threadgroupPipelineDispatchTotal /
+                    static_cast<double>(kernelFrameTimes.size()))
+      << ",\n"
+      << "  \"mean_threadgroup_pipeline_segments\": "
+      << (kernelFrameTimes.empty()
+              ? 0.0
+              : threadgroupPipelineSegmentTotal /
+                    static_cast<double>(kernelFrameTimes.size()))
+      << ",\n"
+      << "  \"mean_global_pipeline_dispatches\": "
+      << (kernelFrameTimes.empty()
+              ? 0.0
+              : globalPipelineDispatchTotal /
+                    static_cast<double>(kernelFrameTimes.size()))
+      << ",\n"
+      << "  \"buffer_barriers_per_frame\": "
+      << (kernelFrameTimes.empty()
+              ? 0.0
+              : bufferBarrierTotal /
+                    static_cast<double>(kernelFrameTimes.size()))
+      << ",\n"
+      << "  \"static_schedule_reuse_ratio\": "
+      << (kernelFrameTimes.empty()
+              ? 0.0
+              : staticScheduleReuseTotal /
+                    static_cast<double>(kernelFrameTimes.size()))
       << ",\n"
       << "  \"command_buffers_per_frame\": "
       << (kernelFrameTimes.empty()
@@ -507,6 +552,11 @@ int main(int argc, char **argv) {
   std::array<double, 3> segmentTotals{};
   double dependencyLevelTotal = 0.0;
   double gpuDispatchTotal = 0.0;
+  double threadgroupPipelineDispatchTotal = 0.0;
+  double threadgroupPipelineSegmentTotal = 0.0;
+  double globalPipelineDispatchTotal = 0.0;
+  double bufferBarrierTotal = 0.0;
+  double staticScheduleReuseTotal = 0.0;
   double commandBufferTotal = 0.0;
   double completionWaitTotal = 0.0;
   double mappedBufferCopyTotal = 0.0;
@@ -560,6 +610,15 @@ int main(int argc, char **argv) {
       dependencyLevelTotal +=
           static_cast<double>(metalFrameStats.dispatchLevels);
       gpuDispatchTotal += static_cast<double>(metalFrameStats.gpuDispatches);
+      threadgroupPipelineDispatchTotal +=
+          static_cast<double>(metalFrameStats.threadgroupPipelineDispatches);
+      threadgroupPipelineSegmentTotal +=
+          static_cast<double>(metalFrameStats.threadgroupPipelineSegments);
+      globalPipelineDispatchTotal +=
+          static_cast<double>(metalFrameStats.globalPipelineDispatches);
+      bufferBarrierTotal +=
+          static_cast<double>(metalFrameStats.bufferBarriers);
+      staticScheduleReuseTotal += metalFrameStats.staticScheduleReused ? 1.0 : 0.0;
       commandBufferTotal +=
           static_cast<double>(metalFrameStats.commandBufferSubmissions);
       completionWaitTotal +=
@@ -587,7 +646,11 @@ int main(int argc, char **argv) {
   }
   if (!writeStats(options, kernelFrameTimes, streamFrameTimes, segmentTotals,
                   gpuFrameTimes, cpuPrepareTimes, cpuOutputTimes,
-                  dependencyLevelTotal, gpuDispatchTotal, commandBufferTotal,
+                  dependencyLevelTotal, gpuDispatchTotal,
+                  threadgroupPipelineDispatchTotal,
+                  threadgroupPipelineSegmentTotal,
+                  globalPipelineDispatchTotal, bufferBarrierTotal,
+                  staticScheduleReuseTotal, commandBufferTotal,
                   completionWaitTotal, mappedBufferCopyTotal,
                   initialTimingCapacity, timingCapacityGrowthEvents))
     return 7;

@@ -3,6 +3,7 @@
 #include "planes.hpp"
 #include "segment.hpp"
 #include "prediction.hpp"
+#include "processing_math.hpp"
 #include "quantization.hpp"
 #include "wavelet.hpp"
 #include "encoding.hpp"
@@ -120,7 +121,9 @@ std::vector<uint8_t> GlicCodec::encodeToBuffer(const Color* pixels, int width, i
                     // Store result as ints
                     for (int x = 0; x < seg.size; x++) {
                         for (int y = 0; y < seg.size; y++) {
-                            int val = static_cast<int>(std::round((tr[x][y] * chConfig.transformScale) / static_cast<float>(seg.size)));
+                            int val = processingRound(static_cast<float>(
+                                (tr[x][y] * chConfig.transformScale) /
+                                static_cast<float>(seg.size)));
                             planes.set(p, seg.x + x, seg.y + y, val);
                         }
                     }

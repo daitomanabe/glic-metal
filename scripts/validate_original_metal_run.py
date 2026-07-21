@@ -14,6 +14,25 @@ class ValidationError(RuntimeError):
     pass
 
 
+METAL_BACKEND = "metal-original-visual"
+METAL_EXECUTION_MODE = "hybrid_cpu_colorspace_segmentation_gpu_reconstruction"
+METAL_FIDELITY_LANE = (
+    "upstream-colorspace-quadtree-fixed-predictor-quantize-"
+    "reconstruct-float-float-cdf97-fp32-storage-no-serialization"
+)
+CPU_FIDELITY_LANE = (
+    "upstream-colorspace-quadtree-fixed-predictor-quantize-"
+    "reconstruct-exact-cdf97-no-serialization"
+)
+METAL_CDF97_PRECISION = "float-float-accumulation-fp32-storage-safe-math"
+FIDELITY_CLAIM = "original-style-algorithmic-core-not-processing-pixel-exact"
+PROCESSING_COMPATIBILITY_FIELDS = (
+    "processing_rounding_compatible",
+    "processing_raw_plane_pack_compatible",
+    "processing_rng_and_cross_channel_order_compatible",
+)
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise ValidationError(message)
@@ -43,6 +62,53 @@ def finite_number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def validate_strict_metadata(
+    payload: dict[str, Any], *, label: str, metal: bool
+) -> None:
+    require(
+        payload.get("backend") == (METAL_BACKEND if metal else "cpu-reference"),
+        f"{label}: wrong backend",
+    )
+    require(
+        payload.get("execution_mode")
+        == (METAL_EXECUTION_MODE if metal else "cpu_parallel_channels"),
+        f"{label}: wrong execution mode",
+    )
+    require(
+        payload.get("fidelity_lane")
+        == (METAL_FIDELITY_LANE if metal else CPU_FIDELITY_LANE),
+        f"{label}: stale or wrong fidelity lane",
+    )
+    require(
+        payload.get("fidelity_claim") == FIDELITY_CLAIM,
+        f"{label}: wrong fidelity claim",
+    )
+    require(
+        payload.get("processing_pixel_exact") is False,
+        f"{label}: invalid Processing pixel-exact claim",
+    )
+    require(
+        payload.get("cdf97_precision")
+        == (METAL_CDF97_PRECISION if metal else "float64"),
+        f"{label}: stale or wrong CDF97 precision",
+    )
+    for field in PROCESSING_COMPATIBILITY_FIELDS:
+        require(payload.get(field) is True, f"{label}: {field} is not certified")
+    deviations = payload.get("known_deviations")
+    require(isinstance(deviations, list), f"{label}: missing known deviations")
+    require(
+        "processing_rng_seed_fixed_to_42_while_original_sketch_default_seed_is_unpinned"
+        in deviations,
+        f"{label}: deterministic RNG seed deviation is not disclosed",
+    )
+    if metal:
+        require(
+            "metal_cdf97_fp32_matrix_storage_differs_from_cpu_float64_reference"
+            in deviations,
+            f"{label}: fp32 matrix-storage deviation is not disclosed",
+        )
+
+
 def validate_benchmark(
     payload: dict[str, Any],
     *,
@@ -53,6 +119,8 @@ def validate_benchmark(
     minimum_fps: float,
 ) -> None:
     require(payload.get("schema") == schema, f"{label}: wrong schema")
+    metal = schema == "glic-original-realtime-metal-benchmark-v1"
+    validate_strict_metadata(payload, label=label, metal=metal)
     require(int(payload.get("width", 0)) >= 960, f"{label}: width below 960")
     require(int(payload.get("height", 0)) >= 540, f"{label}: height below 540")
     require(int(payload.get("frames", 0)) >= 120, f"{label}: fewer than 120 measured frames")
@@ -81,6 +149,8 @@ def validate_benchmark(
         f"{label}: expected {expected_presets} results, found {len(results)}",
     )
     frame_budget = 1000.0 / minimum_fps
+    threadgroup_dispatch_total = 0.0
+    global_dispatch_total = 0.0
     for row in results:
         preset = row.get("preset") if isinstance(row, dict) else None
         require(isinstance(preset, str) and preset, f"{label}: invalid preset row")
@@ -106,6 +176,65 @@ def validate_benchmark(
                 p95_ms is not None and p95_ms <= frame_budget,
                 f"{label}/{preset}: p95 exceeds frame budget",
             )
+        if metal:
+            gpu_dispatches = finite_number(row.get("mean_gpu_dispatches"))
+            threadgroup_dispatches = finite_number(
+                row.get("mean_threadgroup_pipeline_dispatches")
+            )
+            threadgroup_segments = finite_number(
+                row.get("mean_threadgroup_pipeline_segments")
+            )
+            global_dispatches = finite_number(
+                row.get("mean_global_pipeline_dispatches")
+            )
+            barriers = finite_number(row.get("mean_buffer_barriers"))
+            reuse = finite_number(row.get("static_schedule_reuse_ratio"))
+            require(
+                gpu_dispatches is not None and gpu_dispatches >= 1.0,
+                f"{label}/{preset}: invalid GPU dispatch count",
+            )
+            require(
+                threadgroup_dispatches is not None
+                and threadgroup_dispatches >= 0.0
+                and threadgroup_segments is not None
+                and threadgroup_segments >= 0.0
+                and global_dispatches is not None
+                and global_dispatches >= 0.0,
+                f"{label}/{preset}: invalid local/global pipeline evidence",
+            )
+            require(
+                abs(
+                    gpu_dispatches
+                    - (threadgroup_dispatches + global_dispatches)
+                )
+                <= 0.01,
+                f"{label}/{preset}: local/global dispatch totals do not match",
+            )
+            require(
+                barriers is not None
+                and abs(barriers - max(0.0, gpu_dispatches - 1.0)) <= 0.01,
+                f"{label}/{preset}: plane-buffer barrier count is inconsistent",
+            )
+            require(
+                reuse is not None and 0.0 <= reuse <= 1.0,
+                f"{label}/{preset}: invalid fixed-schedule reuse ratio",
+            )
+            if row.get("min_block_size") == row.get("max_block_size"):
+                require(
+                    abs(reuse - 1.0) <= 1e-9,
+                    f"{label}/{preset}: fixed schedule was not reused",
+                )
+            threadgroup_dispatch_total += threadgroup_dispatches
+            global_dispatch_total += global_dispatches
+    if metal:
+        require(
+            threadgroup_dispatch_total > 0.0,
+            f"{label}: threadgroup pipeline was never exercised",
+        )
+        require(
+            global_dispatch_total > 0.0,
+            f"{label}: global pipeline was never exercised",
+        )
 
 
 def validate_comparison(
@@ -202,8 +331,8 @@ def validate_video(payload: dict[str, Any], *, minimum_fps: float) -> None:
 
     stats = payload.get("filter")
     require(isinstance(stats, dict), "video: missing filter statistics")
+    validate_strict_metadata(stats, label="video/filter", metal=True)
     require(stats.get("processing_mode") == "original_visual", "video: wrong processing mode")
-    require(stats.get("backend") == "metal-original-visual", "video: wrong backend")
     frames = int(stats.get("frames", 0))
     expected_frames = int(stats.get("expected_frames", 0))
     initial_capacity = int(stats.get("initial_timing_capacity", 0))
@@ -226,6 +355,41 @@ def validate_video(payload: dict[str, Any], *, minimum_fps: float) -> None:
             value is not None and abs(value - expected) <= 1e-9,
             f"video: {field} is not {expected:g}",
         )
+    gpu_dispatches = finite_number(stats.get("mean_gpu_dispatches"))
+    threadgroup_dispatches = finite_number(
+        stats.get("mean_threadgroup_pipeline_dispatches")
+    )
+    threadgroup_segments = finite_number(
+        stats.get("mean_threadgroup_pipeline_segments")
+    )
+    global_dispatches = finite_number(stats.get("mean_global_pipeline_dispatches"))
+    barriers = finite_number(stats.get("buffer_barriers_per_frame"))
+    reuse = finite_number(stats.get("static_schedule_reuse_ratio"))
+    require(
+        gpu_dispatches is not None
+        and gpu_dispatches >= 1.0
+        and threadgroup_dispatches is not None
+        and threadgroup_dispatches >= 0.0
+        and threadgroup_segments is not None
+        and threadgroup_segments >= 0.0
+        and global_dispatches is not None
+        and global_dispatches >= 0.0,
+        "video: invalid local/global pipeline evidence",
+    )
+    require(
+        abs(gpu_dispatches - (threadgroup_dispatches + global_dispatches))
+        <= 0.01,
+        "video: local/global dispatch totals do not match",
+    )
+    require(
+        barriers is not None
+        and abs(barriers - max(0.0, gpu_dispatches - 1.0)) <= 0.01,
+        "video: plane-buffer barrier count is inconsistent",
+    )
+    require(
+        reuse is not None and 0.0 <= reuse <= 1.0,
+        "video: invalid fixed-schedule reuse ratio",
+    )
 
 
 def validate_qa(payload: dict[str, Any]) -> None:
@@ -238,6 +402,21 @@ def validate_qa(payload: dict[str, Any]) -> None:
 
 
 def selftest() -> None:
+    strict_metal = {
+        "backend": METAL_BACKEND,
+        "execution_mode": METAL_EXECUTION_MODE,
+        "fidelity_lane": METAL_FIDELITY_LANE,
+        "fidelity_claim": FIDELITY_CLAIM,
+        "processing_pixel_exact": False,
+        "cdf97_precision": METAL_CDF97_PRECISION,
+        "processing_rounding_compatible": True,
+        "processing_raw_plane_pack_compatible": True,
+        "processing_rng_and_cross_channel_order_compatible": True,
+        "known_deviations": [
+            "processing_rng_seed_fixed_to_42_while_original_sketch_default_seed_is_unpinned",
+            "metal_cdf97_fp32_matrix_storage_differs_from_cpu_float64_reference",
+        ],
+    }
     row = {
         "preset": "test",
         "process_passed": True,
@@ -247,8 +426,17 @@ def selftest() -> None:
         "p95_ms": 12.0,
         "preset_config_fnv1a64": "1111111111111111",
         "output_preview_file_fnv1a64": "2222222222222222",
+        "mean_gpu_dispatches": 1.0,
+        "mean_threadgroup_pipeline_dispatches": 0.5,
+        "mean_threadgroup_pipeline_segments": 1.0,
+        "mean_global_pipeline_dispatches": 0.5,
+        "mean_buffer_barriers": 0.0,
+        "static_schedule_reuse_ratio": 1.0,
+        "min_block_size": 4,
+        "max_block_size": 4,
     }
     base = {
+        **strict_metal,
         "width": 960,
         "height": 540,
         "frames": 120,
@@ -302,8 +490,8 @@ def selftest() -> None:
             "filter_stream_realtime_30fps_passed": True,
             "filter_kernel_realtime_30fps_passed": True,
             "filter": {
+                **strict_metal,
                 "processing_mode": "original_visual",
-                "backend": "metal-original-visual",
                 "frames": 166,
                 "measured_frames": 156,
                 "expected_frames": 168,
@@ -312,28 +500,58 @@ def selftest() -> None:
                 "command_buffers_per_frame": 1.0,
                 "cpu_gpu_waits_per_frame": 1.0,
                 "mapped_buffer_copies_per_frame": 0.0,
+                "mean_gpu_dispatches": 374.0,
+                "mean_threadgroup_pipeline_dispatches": 374.0,
+                "mean_threadgroup_pipeline_segments": 97200.0,
+                "mean_global_pipeline_dispatches": 0.0,
+                "buffer_barriers_per_frame": 373.0,
+                "static_schedule_reuse_ratio": 1.0,
             },
         },
         minimum_fps=30.0,
     )
     validate_qa({"summary": {"total": 1, "pass": 1, "warn": 0, "fail": 0}})
+    def expect_failure(callback: Any, message: str) -> None:
+        try:
+            callback()
+        except ValidationError:
+            return
+        raise ValidationError(message)
+
     broken = {
         **base,
         "schema": "glic-original-realtime-metal-benchmark-v1",
         "results": [{**row, "performance_passed": False}],
     }
-    try:
-        validate_benchmark(
+    expect_failure(
+        lambda: validate_benchmark(
             broken,
             label="negative selftest",
             schema="glic-original-realtime-metal-benchmark-v1",
             expected_presets=1,
             require_performance=True,
             minimum_fps=30.0,
-        )
-    except ValidationError:
-        return
-    raise ValidationError("negative selftest did not fail")
+        ),
+        "performance negative selftest did not fail",
+    )
+    legacy = {
+        **base,
+        "schema": "glic-original-realtime-metal-benchmark-v1",
+        "cdf97_precision": "float32-safe-math",
+    }
+    for field in PROCESSING_COMPATIBILITY_FIELDS:
+        legacy.pop(field, None)
+    expect_failure(
+        lambda: validate_benchmark(
+            legacy,
+            label="legacy metadata negative selftest",
+            schema="glic-original-realtime-metal-benchmark-v1",
+            expected_presets=1,
+            require_performance=True,
+            minimum_fps=30.0,
+        ),
+        "legacy metadata negative selftest did not fail",
+    )
 
 
 def parse_args() -> argparse.Namespace:

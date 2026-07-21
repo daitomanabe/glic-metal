@@ -1,6 +1,7 @@
 #include "original_realtime.hpp"
 
 #include "colorspaces.hpp"
+#include "processing_math.hpp"
 #include "quantization.hpp"
 
 #include <algorithm>
@@ -110,6 +111,11 @@ evaluateOriginalRealtimeSupport(const OriginalPresetConfig &config) {
     if (value.originalWaveletId == 65 && value.transformScale <= 0) {
       support.reasons.push_back(prefix +
                                 "CDF97 transform scale must be positive");
+    }
+    if (!std::isfinite(value.transformCompress) ||
+        !std::isfinite(value.transformCompressionThreshold)) {
+      support.reasons.push_back(
+          prefix + "transform compression values must be finite");
     }
   }
 
@@ -234,13 +240,11 @@ bool OriginalRealtimeCpuLane::prepare(int width, int height,
       config_.colorSpace);
   referenceValues_ = {getR(convertedReference), getG(convertedReference),
                       getB(convertedReference)};
-  for (std::size_t channel = 0; channel < segmentationRngs_.size(); ++channel) {
-    // Upstream Processing uses one evolving global RNG. Independent fixed
-    // streams keep channel-parallel execution deterministic; sampled positions
-    // are therefore fidelity-equivalent in intent, not bit-identical RNG state.
-    segmentationRngs_[channel].seed(
-        42u + static_cast<uint32_t>(channel) * 0x9e3779b9u);
-  }
+  // Processing's randomSeed(42) semantics, shared by channel 0 -> 1 -> 2.
+  // The original sketch does not pin a seed; the deterministic seed here makes
+  // tests and video renders reproducible while retaining its exact RNG family
+  // and cross-channel consumption order.
+  segmentationRng_.setSeed(42);
   try {
     startWorkers();
   } catch (const std::exception &exception) {
@@ -265,17 +269,19 @@ int OriginalRealtimeCpuLane::planeValue(int channel, int x,
 
 float OriginalRealtimeCpuLane::sampledStandardDeviation(int channel, int x,
                                                          int y, int size) {
+#if defined(__clang__)
+#pragma clang fp contract(off)
+#endif
   const int limit = std::max(
       static_cast<int>(0.1f * static_cast<float>(size) *
                        static_cast<float>(size)),
       4);
-  std::uniform_int_distribution<int> position(0, size - 1);
   float average = 0.0f;
   float sum = 0.0f;
   for (int sample = 1; sample <= limit; ++sample) {
-    auto &rng = segmentationRngs_[static_cast<std::size_t>(channel)];
-    const int value =
-        planeValue(channel, x + position(rng), y + position(rng));
+    const int value = planeValue(channel,
+                                 x + segmentationRng_.nextPosition(size),
+                                 y + segmentationRng_.nextPosition(size));
     const float oldAverage = average;
     average += (static_cast<float>(value) - average) /
                static_cast<float>(sample);
@@ -285,14 +291,66 @@ float OriginalRealtimeCpuLane::sampledStandardDeviation(int channel, int x,
   return std::sqrt(sum / static_cast<float>(limit - 1));
 }
 
+void OriginalRealtimeCpuLane::skipUnusedDeviationSamples(int size) noexcept {
+  const int limit = std::max(
+      static_cast<int>(0.1f * static_cast<float>(size) *
+                       static_cast<float>(size)),
+      4);
+  segmentationRng_.discardNextFloats(static_cast<std::uint64_t>(limit) * 2u);
+}
+
+std::uint64_t
+OriginalRealtimeCpuLane::fixedSegmentationRandomDraws(int blockSize) const
+    noexcept {
+  std::uint64_t draws = 0;
+  for (int size = rootSegmentSize_;; size >>= 1) {
+    const std::uint64_t columns =
+        (static_cast<std::uint64_t>(width_) + size - 1u) /
+        static_cast<std::uint64_t>(size);
+    const std::uint64_t rows =
+        (static_cast<std::uint64_t>(height_) + size - 1u) /
+        static_cast<std::uint64_t>(size);
+    const std::uint64_t limit = static_cast<std::uint64_t>(std::max(
+        static_cast<int>(0.1f * static_cast<float>(size) *
+                         static_cast<float>(size)),
+        4));
+    draws += columns * rows * limit * 2u;
+    if (size <= blockSize)
+      break;
+  }
+  return draws;
+}
+
+void OriginalRealtimeCpuLane::emitFixedSegments(
+    int x, int y, int size, int blockSize,
+    std::vector<WorkingSegment> &segments) {
+  if (x >= width_ || y >= height_)
+    return;
+  if (size > blockSize) {
+    const int half = size / 2;
+    emitFixedSegments(x, y, half, blockSize, segments);
+    emitFixedSegments(x + half, y, half, blockSize, segments);
+    emitFixedSegments(x, y + half, half, blockSize, segments);
+    emitFixedSegments(x + half, y + half, half, blockSize, segments);
+    return;
+  }
+  segments.push_back({x, y, size});
+}
+
 void OriginalRealtimeCpuLane::segmentChannel(
     int channel, int x, int y, int size, int minSize, int maxSize,
     float threshold, std::vector<WorkingSegment> &segments) {
   if (x >= width_ || y >= height_)
     return;
 
-  const float deviation = sampledStandardDeviation(channel, x, y, size);
-  if (size > maxSize || (size > minSize && deviation > threshold)) {
+  const bool forcedSplit = size > maxSize;
+  const bool forcedLeaf = size <= minSize;
+  float deviation = 0.0f;
+  if (forcedSplit || forcedLeaf)
+    skipUnusedDeviationSamples(size);
+  else
+    deviation = sampledStandardDeviation(channel, x, y, size);
+  if (forcedSplit || (!forcedLeaf && deviation > threshold)) {
     const int half = size / 2;
     segmentChannel(channel, x, y, half, minSize, maxSize, threshold,
                    segments);
@@ -305,6 +363,22 @@ void OriginalRealtimeCpuLane::segmentChannel(
   } else {
     segments.push_back({x, y, size});
   }
+}
+
+void OriginalRealtimeCpuLane::prepareChannelSegments(int channel) {
+  const auto &channelConfig = config_.channels[channel];
+  auto &segments = segments_[static_cast<std::size_t>(channel)];
+  segments.clear();
+  if (channelConfig.minBlockSize == channelConfig.maxBlockSize) {
+    segmentationRng_.discardNextFloats(
+        fixedSegmentationRandomDraws(channelConfig.minBlockSize));
+    emitFixedSegments(0, 0, rootSegmentSize_, channelConfig.minBlockSize,
+                      segments);
+    return;
+  }
+  segmentChannel(channel, 0, 0, rootSegmentSize_,
+                 channelConfig.minBlockSize, channelConfig.maxBlockSize,
+                 channelConfig.segmentationPrecision, segments);
 }
 
 int OriginalRealtimeCpuLane::predictionValue(
@@ -512,8 +586,8 @@ void OriginalRealtimeCpuLane::processCdf97Segment(
                                     : residual;
       }
       if (quantization > 1.0f)
-        residual = static_cast<int>(
-            std::round(static_cast<float>(residual) / quantization));
+        residual =
+            processingRound(static_cast<float>(residual) / quantization);
       plane[planeIndex] = residual;
     }
   }
@@ -560,7 +634,10 @@ void OriginalRealtimeCpuLane::processCdf97Segment(
     for (int y = 0; y < usedHeight; ++y) {
       const std::size_t planeIndex =
           static_cast<std::size_t>(segment.y + y) * width_ + segment.x + x;
-      plane[planeIndex] = static_cast<int>(std::round(
+      // codec.pde narrows the transformed double coefficient to Processing
+      // float before round(). Preserve that boundary instead of treating the
+      // CPU double result as the upstream rounding input.
+      plane[planeIndex] = processingRound(static_cast<float>(
           matrix[static_cast<std::size_t>(x) * size + y] * scale / size));
     }
   }
@@ -584,15 +661,15 @@ void OriginalRealtimeCpuLane::processCdf97Segment(
     for (int y = 0; y < usedHeight; ++y) {
       const std::size_t planeIndex =
           static_cast<std::size_t>(segment.y + y) * width_ + segment.x + x;
-      int value = static_cast<int>(std::round(
+      // Planes.setSegment likewise performs its final round in float.
+      int value = processingRound(static_cast<float>(
           matrix[static_cast<std::size_t>(x) * size + y] * 255.0));
       if (channelConfig.clampMethod == ClampMethod::MOD256)
         value = std::clamp(value, 0, 255);
       else
         value = std::clamp(value, -255, 255);
       if (quantization > 1.0f)
-        value = static_cast<int>(
-            std::round(static_cast<float>(value) * quantization));
+        value = processingRound(static_cast<float>(value) * quantization);
       plane[planeIndex] = value;
     }
   }
@@ -622,10 +699,6 @@ void OriginalRealtimeCpuLane::processCdf97Segment(
 std::size_t OriginalRealtimeCpuLane::processPreparedChannel(int channel) {
   const auto &channelConfig = config_.channels[channel];
   auto &segments = segments_[static_cast<std::size_t>(channel)];
-  segments.clear();
-  segmentChannel(channel, 0, 0, rootSegmentSize_,
-                 channelConfig.minBlockSize, channelConfig.maxBlockSize,
-                 channelConfig.segmentationPrecision, segments);
 
   const float quantization = quantValue(channelConfig.quantizationValue);
   auto &plane = planes_[static_cast<std::size_t>(channel)];
@@ -666,9 +739,10 @@ std::size_t OriginalRealtimeCpuLane::processPreparedChannel(int channel) {
                                       : residual;
         }
         if (quantization > 1.0f) {
-          residual = static_cast<int>(std::round(
-              std::round(static_cast<float>(residual) / quantization) *
-              quantization));
+          residual = processingRound(
+              static_cast<float>(processingRound(
+                  static_cast<float>(residual) / quantization)) *
+              quantization);
         }
         int reconstructed = residual + prediction;
         if (channelConfig.clampMethod == ClampMethod::MOD256) {
@@ -711,6 +785,11 @@ bool OriginalRealtimeCpuLane::process(std::span<const Color> input,
     }
 
     OriginalRealtimeFrameStats frameStats;
+    // Upstream consumes one Processing RNG in channel order. Segmentation is
+    // kept sequential for that small fidelity-critical stage; reconstruction
+    // below remains parallel across all three channels.
+    for (int channel = 0; channel < 3; ++channel)
+      prepareChannelSegments(channel);
     {
       std::lock_guard lock(workerMutex_);
       workerErrors_ = {};
@@ -741,10 +820,8 @@ bool OriginalRealtimeCpuLane::process(std::span<const Color> input,
 
     for (std::size_t index = 0; index < required; ++index) {
       output[index] = fromColorSpace(
-          makeColor(static_cast<uint8_t>(std::clamp(planes_[0][index], 0, 255)),
-                    static_cast<uint8_t>(std::clamp(planes_[1][index], 0, 255)),
-                    static_cast<uint8_t>(std::clamp(planes_[2][index], 0, 255)),
-                    getA(input[index])),
+          processingPackPlanes(planes_[0][index], planes_[1][index],
+                               planes_[2][index], input[index]),
           config_.colorSpace);
     }
     if (stats)

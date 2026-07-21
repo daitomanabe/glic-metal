@@ -119,8 +119,19 @@ def main() -> int:
                 metal_stats["execution_mode"]
                 == "hybrid_cpu_colorspace_segmentation_gpu_reconstruction"
             )
-            assert metal_stats["cdf97_precision"] == "float32-safe-math"
+            assert (
+                metal_stats["cdf97_precision"]
+                == "float-float-accumulation-fp32-storage-safe-math"
+            )
+            assert metal_stats["processing_rounding_compatible"] is True
+            assert metal_stats["processing_raw_plane_pack_compatible"] is True
+            assert (
+                metal_stats["processing_rng_and_cross_channel_order_compatible"]
+                is True
+            )
             assert metal_stats["mean_gpu_dispatches"] >= 1
+            assert metal_stats["mean_threadgroup_pipeline_dispatches"] >= 1
+            assert metal_stats["mean_global_pipeline_dispatches"] == 0
             assert metal_stats["command_buffers_per_frame"] == 1
             assert metal_stats["cpu_gpu_waits_per_frame"] == 1
             assert metal_stats["mapped_buffer_copies_per_frame"] == 0

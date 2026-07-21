@@ -64,6 +64,12 @@ struct Result {
   double meanCpuPrepareMilliseconds = 0.0;
   double meanCpuOutputMilliseconds = 0.0;
   double meanDependencyLevels = 0.0;
+  double meanGpuDispatches = 0.0;
+  double meanThreadgroupPipelineDispatches = 0.0;
+  double meanThreadgroupPipelineSegments = 0.0;
+  double meanGlobalPipelineDispatches = 0.0;
+  double meanBufferBarriers = 0.0;
+  double staticScheduleReuseRatio = 0.0;
   bool usesCdf97 = false;
   int colorSpace = 0;
   int minBlockSize = 0;
@@ -348,7 +354,7 @@ bool writeJson(const Options &options, int width, int height,
       << "\",\n"
       << "  \"fidelity_lane\": "
          "\"upstream-colorspace-quadtree-fixed-predictor-quantize-"
-      << (usesMetal ? "reconstruct-float32-cdf97-no-serialization"
+      << (usesMetal ? "reconstruct-float-float-cdf97-fp32-storage-no-serialization"
                     : "reconstruct-exact-cdf97-no-serialization")
       << "\",\n"
       << "  \"fidelity_claim\": "
@@ -359,18 +365,21 @@ bool writeJson(const Options &options, int width, int height,
       << "    "
          "\"glic_header_payload_serialization_and_entropy_encoding_omitted\",\n"
       << "    "
-         "\"cpp_colorspace_and_arithmetic_not_byte_certified_against_"
+         "\"colorspace_and_non_golden_arithmetic_not_byte_certified_against_"
          "processing_jvm\",\n"
       << "    "
-         "\"processing_global_rng_replaced_by_independent_seeded_mt19937_per_"
-         "channel\",\n"
+         "\"processing_rng_seed_fixed_to_42_while_original_sketch_default_"
+         "seed_is_unpinned\",\n"
       << "    "
          "\"non_cdf97_wavelets_random_transforms_and_predictor_search_modes_"
          "rejected\"";
   if (usesMetal)
     output
-        << ",\n    \"metal_cdf97_float32_differs_from_cpu_float64_reference\"";
+        << ",\n    \"metal_cdf97_fp32_matrix_storage_differs_from_cpu_float64_reference\"";
   output << "\n  ],\n"
+         << "  \"processing_rounding_compatible\": true,\n"
+         << "  \"processing_raw_plane_pack_compatible\": true,\n"
+         << "  \"processing_rng_and_cross_channel_order_compatible\": true,\n"
          << "  \"backend\": \""
          << (usesMetal ? "metal-original-visual" : "cpu-reference") << "\",\n"
          << "  \"execution_mode\": \""
@@ -378,7 +387,9 @@ bool writeJson(const Options &options, int width, int height,
                        : "cpu_parallel_channels")
          << "\",\n"
          << "  \"cdf97_precision\": \""
-         << (usesMetal ? "float32-safe-math" : "float64") << "\",\n"
+         << (usesMetal ? "float-float-accumulation-fp32-storage-safe-math"
+                       : "float64")
+         << "\",\n"
          << "  \"input_path\": \""
          << jsonEscape(absoluteInputPath(options.input)) << "\",\n"
          << "  \"input_decoded_color_fnv1a64\": \"" << inputPixelHash << "\",\n"
@@ -458,6 +469,16 @@ bool writeJson(const Options &options, int width, int height,
            << ", \"mean_cpu_prepare_ms\": " << result.meanCpuPrepareMilliseconds
            << ", \"mean_cpu_output_ms\": " << result.meanCpuOutputMilliseconds
            << ", \"mean_dependency_levels\": " << result.meanDependencyLevels
+           << ", \"mean_gpu_dispatches\": " << result.meanGpuDispatches
+           << ", \"mean_threadgroup_pipeline_dispatches\": "
+           << result.meanThreadgroupPipelineDispatches
+           << ", \"mean_threadgroup_pipeline_segments\": "
+           << result.meanThreadgroupPipelineSegments
+           << ", \"mean_global_pipeline_dispatches\": "
+           << result.meanGlobalPipelineDispatches
+           << ", \"mean_buffer_barriers\": " << result.meanBufferBarriers
+           << ", \"static_schedule_reuse_ratio\": "
+           << result.staticScheduleReuseRatio
            << ", \"uses_cdf97\": " << (result.usesCdf97 ? "true" : "false")
            << ", \"color_space\": " << result.colorSpace
            << ", \"min_block_size\": " << result.minBlockSize
@@ -622,6 +643,12 @@ int main(int argc, char **argv) {
     double cpuPrepareTotal = 0.0;
     double cpuOutputTotal = 0.0;
     double dependencyLevelTotal = 0.0;
+    double gpuDispatchTotal = 0.0;
+    double threadgroupPipelineDispatchTotal = 0.0;
+    double threadgroupPipelineSegmentTotal = 0.0;
+    double globalPipelineDispatchTotal = 0.0;
+    double bufferBarrierTotal = 0.0;
+    double staticScheduleReuseTotal = 0.0;
     for (int frame = 0; processPassed && frame < options.frames; ++frame) {
       glic::OriginalRealtimeFrameStats cpuStats;
       glic::OriginalRealtimeMetalFrameStats metalStats;
@@ -643,6 +670,14 @@ int main(int argc, char **argv) {
           cpuPrepareTotal += metalStats.cpuPrepareMilliseconds;
           cpuOutputTotal += metalStats.cpuOutputMilliseconds;
           dependencyLevelTotal += metalStats.dispatchLevels;
+          gpuDispatchTotal += metalStats.gpuDispatches;
+          threadgroupPipelineDispatchTotal +=
+              metalStats.threadgroupPipelineDispatches;
+          threadgroupPipelineSegmentTotal +=
+              metalStats.threadgroupPipelineSegments;
+          globalPipelineDispatchTotal += metalStats.globalPipelineDispatches;
+          bufferBarrierTotal += metalStats.bufferBarriers;
+          staticScheduleReuseTotal += metalStats.staticScheduleReused ? 1.0 : 0.0;
         }
       }
     }
@@ -661,6 +696,16 @@ int main(int argc, char **argv) {
       result.meanCpuPrepareMilliseconds = cpuPrepareTotal / frameTimes.size();
       result.meanCpuOutputMilliseconds = cpuOutputTotal / frameTimes.size();
       result.meanDependencyLevels = dependencyLevelTotal / frameTimes.size();
+      result.meanGpuDispatches = gpuDispatchTotal / frameTimes.size();
+      result.meanThreadgroupPipelineDispatches =
+          threadgroupPipelineDispatchTotal / frameTimes.size();
+      result.meanThreadgroupPipelineSegments =
+          threadgroupPipelineSegmentTotal / frameTimes.size();
+      result.meanGlobalPipelineDispatches =
+          globalPipelineDispatchTotal / frameTimes.size();
+      result.meanBufferBarriers = bufferBarrierTotal / frameTimes.size();
+      result.staticScheduleReuseRatio =
+          staticScheduleReuseTotal / frameTimes.size();
       result.timingPassed =
           result.meanMilliseconds <= frameBudgetMilliseconds &&
           result.p95Milliseconds <= frameBudgetMilliseconds;

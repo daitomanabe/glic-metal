@@ -84,7 +84,7 @@ cmake --build .
 
 リアルタイムAPIは [src/realtime.hpp](src/realtime.hpp) にあります。CPU backendは3チャンネルを永続workerで並列処理し、解像度変更時以外はworkspaceを再利用します。Metal backendはCPU配列を扱う同期APIに加え、`MTLTexture`を直接渡すゼロコピーAPIと、呼び出し側の`MTLCommandBuffer`へ処理を追加する非同期APIを提供します。
 
-互換性レベル、上流GLICの20fps UI設定との違い、対応37 presetの境界は [docs/ORIGINAL_PRESET_REALTIME.md](docs/ORIGINAL_PRESET_REALTIME.md) にあります。M4 Maxでの隔離認証では、`original_metal_visual` は960×540、warm-up 10 + 計測120フレームで、通常画像・uniform-noiseの双方とも37/37件が平均/p95 30fps gateを通過しました。CPU数値参照とは34/37件が規定範囲内、残り3件もエッジ方向・エッジ量・粗い構造による原作スタイル形態gateを通過しています。全144名を処理する `compat_realtime` は引き続き明示的に別の視覚近似です。
+互換性レベル、上流GLICの20fps UI設定との違い、対応37 presetの境界は [docs/ORIGINAL_PRESET_REALTIME.md](docs/ORIGINAL_PRESET_REALTIME.md) にあります。2026-07-20のM4 Max隔離認証（commit `6e1d1f8`）では、`original_metal_visual` は960×540、warm-up 10 + 計測120フレームで、通常画像・uniform-noiseの双方とも37/37件が平均/p95 30fps gateを通過しました。CPU数値参照とは34/37件が規定範囲内、残り3件もエッジ方向・エッジ量・粗い構造による原作スタイル形態gateを通過しています。全144名を処理する `compat_realtime` は引き続き明示的に別の視覚近似です。
 
 リアルタイム経路には、従来のブロック破損に加えて、走査線ティア、RGBチャンネルシア、アナログ同期崩れ、ミラーフォールド、輪郭エコー、ビットプレーン・ディザ、波形ワープ、ポスタライズ／ソラリゼーションの9機構があります。いずれも1 passのCPU/Metal実装で、フレームごとの確保を行いません。`--strength` は `0`（無加工）から `2`（最大）で、`--effect-amount`、`--effect-scale`、`--effect-rate` で機構固有の形状を制御します。
 
@@ -105,7 +105,7 @@ python3 scripts/process_video.py input.mov output-original.mp4 \
   --width 960 --height 540 --fps 30 --overwrite
 ```
 
-`original_visual` は `compat_realtime` と別の原作スタイル再構成レーンです。Metal backendはCPUで色空間変換・原作準拠quadtree分割・依存frontier構築を並列実行し、Metalで3チャンネルの予測・量子化・CDF97 FWT/WPT・逆変換を処理します。1フレームにつきcommand buffer 1回、完了待ち1回、mapped buffer copy 0回で、全workspaceとworkerは `prepare()` で固定確保します。動画の総フレーム数を取得できる場合はtiming領域も開始前に一括確保し、長時間処理中のvector再確保を避けます。MetalのCDF97はprecise float32なのでCPU doubleとのpixel exactは主張しません。未対応waveletやpredictor探索は事前検査でfail-closedし、近似処理へ自動フォールバックしません。JSONの30fps判定は最初の10フレームを除いた最低120フレームについて、pipe待機・backpressureを含む平均とp95を対象にします。
+`original_visual` は `compat_realtime` と別の原作スタイル再構成レーンです。Metal backendはCPUで色空間を並列変換し、単一のProcessing互換48-bit RNGを原作のch0→ch1→ch2・DFS順で消費してquadtreeを作り、Metalで3チャンネルの予測・量子化・CDF97 FWT/WPT・逆変換を並列処理します。固定blockの分割／frontierは`prepare()`で一度だけ構築し、2〜32px leafは境界・matrix・scratchをthreadgroup memoryへ置きます。1フレームにつきcommand buffer 1回、完了待ち1回、mapped buffer copy 0回で、全workspaceとworkerを事前確保します。MetalのCDF97積和は分割係数と補償加算でfloat-float精度を確保しますが、中間行列はfp32なのでCPU doubleとのpixel exactは主張しません。Processing丸めと生のplane shift/OR packはgolden testで固定し、未対応waveletやpredictor探索はfail-closedします。JSONの30fps判定は最初の10フレームを除いた最低120フレームについて、pipe待機・backpressureを含む平均とp95を対象にします。
 
 探索結果の `ready_to_run_args` に含まれる `--canonical 'v2|...' --seed ...` を渡すと、preset名への変換を挟まず、評価した強度・機構・形状を動画上へ完全に再現できます。
 
@@ -444,7 +444,7 @@ cmake --build .
 
 The realtime API is declared in [src/realtime.hpp](src/realtime.hpp). The CPU backend reuses resolution-sized workspaces after preparation. The Metal backend provides a synchronous CPU-buffer API, an opaque zero-copy `MTLTexture` API, and a non-blocking API that appends work to the caller's `MTLCommandBuffer`.
 
-See [docs/ORIGINAL_PRESET_REALTIME.md](docs/ORIGINAL_PRESET_REALTIME.md) for compatibility levels and why upstream's 20 fps setting is a UI rate rather than codec throughput. In the isolated M4 Max certification, `original_metal_visual` passes the mean+p95 30 fps gate for all 37 supported presets on both the normal and uniform-noise inputs. Numeric CPU-reference comparison passes 34/37; the remaining three pass the separate blurred-structure and edge-morphology gate. The all-144 Metal path remains the separately labelled `compat_realtime` visual approximation.
+See [docs/ORIGINAL_PRESET_REALTIME.md](docs/ORIGINAL_PRESET_REALTIME.md) for compatibility levels and why upstream's 20 fps setting is a UI rate rather than codec throughput. In the previous isolated M4 Max certification (`6e1d1f8`, 2026-07-20), `original_metal_visual` passed the mean+p95 30 fps gate for all 37 supported presets on both the normal and uniform-noise inputs. Numeric CPU-reference comparison passed 34/37; the remaining three passed the separate blurred-structure and edge-morphology gate. The all-144 Metal path remains the separately labelled `compat_realtime` visual approximation.
 
 The realtime path has nine explicit glitch mechanisms. `legacy_block` preserves the preset-derived codec damage path; the other eight are independent RGB mechanisms so selecting a legacy preset cannot collapse them back into the same block topology.
 
@@ -499,7 +499,7 @@ requires a clean technical video-QA result. `--skip-video-qa` is available
 only for an isolated machine without the global QA skill; the returned video
 must then be checked separately before certification is complete.
 
-`original_visual` is separate from `compat_realtime`. Its Metal backend parallelizes CPU colorspace conversion, upstream-style quadtree segmentation, and dependency-frontier construction, then runs three-channel prediction, quantization, CDF97 FWT/WPT, and reconstruction on Metal. Each frame uses one command buffer, one completion wait, zero mapped-buffer copies, and workspaces allocated only by `prepare()`. When the source frame count is available, timing storage is also preallocated before streaming so long renders do not grow vectors mid-run. Metal CDF97 uses precise float32, so CPU-double pixel exactness is not claimed. Unsupported wavelets and predictor-search modes fail during preflight instead of falling back to an approximation. The JSON 30 fps gate covers 10 warm-up plus at least 120 measured frames, with both mean and p95 inside the frame budget.
+`original_visual` is separate from `compat_realtime`. Its Metal backend parallelizes CPU colorspace conversion, consumes one Processing-compatible 48-bit RNG in upstream channel/DFS order to build the quadtree, then runs three-channel prediction, quantization, CDF97 FWT/WPT, and reconstruction concurrently on Metal. Fixed-block schedules are built once by `prepare()`; 2--32 px leaves keep boundaries, matrix, and scratch in threadgroup memory. Each frame uses one command buffer, one completion wait, zero mapped-buffer copies, and preallocated workspaces. Metal CDF97 uses split coefficients and compensated float-float accumulation while retaining fp32 matrix storage, so CPU-double pixel exactness is not claimed. Processing rounding and raw plane packing have golden tests. Unsupported wavelets and predictor-search modes fail during preflight. The JSON 30 fps gate covers 10 warm-up plus at least 120 measured frames, with both mean and p95 inside the frame budget.
 
 Pass the exact `--canonical 'v2|...' --seed ...` values from a ranked row's
 `ready_to_run_args` to reproduce the evaluated mechanism and controls without

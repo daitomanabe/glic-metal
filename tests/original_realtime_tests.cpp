@@ -1,6 +1,8 @@
 #include "original_realtime.hpp"
 #include "planes.hpp"
 #include "prediction.hpp"
+#include "processing_math.hpp"
+#include "processing_random.hpp"
 #include "quantization.hpp"
 #include "segment.hpp"
 #include "wavelet.hpp"
@@ -10,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <set>
 #include <string>
 #include <vector>
@@ -49,9 +52,76 @@ std::vector<glic::Color> makeFixture() {
 
 int reconstructChannel(int value, int reference, float divisor) {
   const int residual = value - reference;
-  const int quantized =
-      static_cast<int>(std::round(std::round(residual / divisor) * divisor));
+  const int quantized = glic::processingRound(
+      static_cast<float>(glic::processingRound(residual / divisor)) * divisor);
   return std::clamp(quantized + reference, 0, 255);
+}
+
+bool testProcessingRoundGolden() {
+  struct Golden {
+    float input;
+    int output;
+  };
+  for (const Golden golden :
+       std::array<Golden, 6>{{{-43.5f, -43}, {-1.5f, -1}, {-0.5f, 0},
+                              {0.49f, 0}, {0.5f, 1}, {1.5f, 2}}}) {
+    if (glic::processingRound(golden.input) != golden.output) {
+      std::cerr << "Processing round golden mismatch for " << golden.input
+                << '\n';
+      return false;
+    }
+  }
+  if (glic::processingRound(std::numeric_limits<float>::quiet_NaN()) != 0 ||
+      glic::processingRound(std::numeric_limits<float>::infinity()) !=
+          std::numeric_limits<int>::max() ||
+      glic::processingRound(-std::numeric_limits<float>::infinity()) !=
+          std::numeric_limits<int>::min()) {
+    std::cerr << "Processing round special-value golden mismatch\n";
+    return false;
+  }
+  const auto packed = glic::processingPackPlanes(299, 0, 0, 0x7f000000u);
+  if (packed != 0x7f2b0000u || glic::getR(packed) != 43 ||
+      glic::getA(packed) != 127) {
+    std::cerr << "Processing raw plane packing golden mismatch\n";
+    return false;
+  }
+  return true;
+}
+
+bool testProcessingRandomGolden() {
+  glic::ProcessingRandom random(42);
+  constexpr std::array<int, 8> expected = {11, 0, 10, 0, 4, 15, 4, 11};
+  for (const int position : expected) {
+    const int actual = random.nextPosition(16);
+    if (actual != position) {
+      std::cerr << "Processing random golden mismatch: expected " << position
+                << " got " << actual << '\n';
+      return false;
+    }
+  }
+  if (random.state() != 0xb52c856dae6fULL) {
+    std::cerr << "Processing random state golden mismatch\n";
+    return false;
+  }
+
+  glic::ProcessingRandom sequential(42);
+  glic::ProcessingRandom skipped(42);
+  constexpr std::uint64_t skipCount = 12345;
+  for (std::uint64_t index = 0; index < skipCount; ++index)
+    (void)sequential.nextFloat();
+  skipped.discardNextFloats(skipCount);
+  if (sequential.state() != skipped.state() ||
+      sequential.nextFloat() != skipped.nextFloat()) {
+    std::cerr << "Processing random skip-ahead mismatch\n";
+    return false;
+  }
+  glic::ProcessingRandom fixedTree(42);
+  fixedTree.discardNextFloats(922208);
+  if (fixedTree.state() != 0x9deba58d7c27ULL) {
+    std::cerr << "Processing fixed-tree RNG state golden mismatch\n";
+    return false;
+  }
+  return true;
 }
 
 bool testFixedPredictorQuantization() {
@@ -113,6 +183,49 @@ bool testZeroQuantizationRoundTrip() {
   if (output != input) {
     std::cerr << "zero-quantization roundtrip changed pixels\n";
     return false;
+  }
+  return true;
+}
+
+bool testAdaptiveProcessingTreeGolden() {
+  constexpr int width = 8;
+  constexpr int height = 8;
+  std::vector<glic::Color> input;
+  input.reserve(width * height);
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      input.push_back(glic::makeColor(
+          (x * 17 + y * 5 + ((x ^ y) * 11)) & 255,
+          (x * 3 + y * 23 + ((x * y) >> 2)) & 255,
+          (x * 29 + y * 7 + ((x + y) * 13)) & 255));
+    }
+  }
+  auto config = makeSupportedConfig();
+  for (auto &channel : config.channels) {
+    channel.minBlockSize = 2;
+    channel.maxBlockSize = 8;
+    channel.segmentationPrecision = 40.0f;
+    channel.quantizationValue = 0;
+    channel.originalWaveletId = 0;
+  }
+
+  glic::OriginalRealtimeCpuLane lane;
+  std::vector<glic::Color> output(input.size());
+  std::string error;
+  if (!lane.prepare(width, height, config, error)) {
+    std::cerr << "adaptive Processing tree prepare failed: " << error << '\n';
+    return false;
+  }
+  for (const auto expected :
+       {std::array<std::size_t, 3>{1, 4, 10},
+        std::array<std::size_t, 3>{4, 4, 13}}) {
+    glic::OriginalRealtimeFrameStats stats;
+    if (!lane.process(input, output, &stats, error) ||
+        stats.segmentCounts != expected || output != input) {
+      std::cerr << "adaptive Processing tree/RNG golden mismatch: " << error
+                << '\n';
+      return false;
+    }
   }
   return true;
 }
@@ -294,7 +407,7 @@ slowCdf97Reference(const std::vector<glic::Color> &input,
     for (int x = 0; x < 4; ++x)
       for (int y = 0; y < 4; ++y)
         planes.set(channel, x, y,
-                   static_cast<int>(std::round(
+                   glic::processingRound(static_cast<float>(
                        coefficients[x][y] * channelConfig.transformScale /
                        4.0)));
 
@@ -409,8 +522,9 @@ bool testBufferValidation() {
 } // namespace
 
 int main() {
-  if (!testFixedPredictorQuantization() ||
-      !testZeroQuantizationRoundTrip() ||
+  if (!testProcessingRoundGolden() || !testProcessingRandomGolden() ||
+      !testFixedPredictorQuantization() ||
+      !testZeroQuantizationRoundTrip() || !testAdaptiveProcessingTreeGolden() ||
       !testEverySupportedPredictorMatchesReference() ||
       !testUnsupportedConfigurationsFailClosed() ||
       !testCdf97FwtAndWptMatchReference() ||

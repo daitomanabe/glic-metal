@@ -1,5 +1,6 @@
 #include "planes.hpp"
 #include "colorspaces.hpp"
+#include "processing_math.hpp"
 #include "segment.hpp"
 #include <cmath>
 #include <algorithm>
@@ -102,13 +103,11 @@ std::vector<Color> Planes::toPixels(const Color* originalPixels) const {
     for (int x = 0; x < w_; x++) {
         for (int y = 0; y < h_; y++) {
             int off = y * w_ + x;
-            uint8_t a = originalPixels ? getA(originalPixels[off]) : 255;
-            Color c = makeColor(
-                static_cast<uint8_t>(std::max(0, std::min(255, channels_[0][x][y]))),
-                static_cast<uint8_t>(std::max(0, std::min(255, channels_[1][x][y]))),
-                static_cast<uint8_t>(std::max(0, std::min(255, channels_[2][x][y]))),
-                a
-            );
+            const std::uint32_t alphaBits =
+                originalPixels ? originalPixels[off] : 0xff000000u;
+            Color c = processingPackPlanes(
+                channels_[0][x][y], channels_[1][x][y], channels_[2][x][y],
+                alphaBits);
             pixels[off] = fromColorSpace(c, cs_);
         }
     }
@@ -141,7 +140,9 @@ std::vector<std::vector<double>> Planes::getSegment(int channel, const Segment& 
 void Planes::setSegment(int channel, const Segment& s, const std::vector<std::vector<double>>& values, ClampMethod method) {
     for (int x = 0; x < s.size; x++) {
         for (int y = 0; y < s.size; y++) {
-            set(channel, x + s.x, y + s.y, clamp(method, static_cast<int>(std::round(values[x][y] * 255.0))));
+            set(channel, x + s.x, y + s.y,
+                clamp(method, processingRound(
+                                  static_cast<float>(values[x][y] * 255.0))));
         }
     }
 }

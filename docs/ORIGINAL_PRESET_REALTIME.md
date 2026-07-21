@@ -60,9 +60,10 @@ The `original_values_realtime` approximation gate is:
 - both mean and p95 processing time at or below 33.333 ms;
 - no processing failure or dropped output frame.
 
-The higher-fidelity `original_visual` lane has separate CPU-double and
-Metal-float32 implementations. Both use the same resolution, warm-up,
-measured-frame, mean, and p95 limits. Reports must identify
+The higher-fidelity `original_visual` lane has a CPU/JWave-double reference and
+a Metal implementation with compensated float-float CDF97 accumulation plus
+fp32 matrix storage. Both use the same resolution, warm-up, measured-frame,
+mean, and p95 limits. Reports must identify
 `cpu-reference` or `metal-original-visual`; timing from one backend is not
 evidence for the other. The Metal result for all 144 names still belongs only
 to the separately labelled `compat_realtime` visual approximation lane.
@@ -94,8 +95,9 @@ implementation.
 3. Implement `original_visual` first for the 16 no-wavelet, non-search
    prediction presets and fail closed for unsupported modes. This is retained
    below as the historical tier-one baseline.
-4. Add the exact CDF 9/7 FWT and WPT paths used by the largest deterministic
-   wavelet family in the corpus. This tier adds 21 supported presets.
+4. Add a JWave-double-equivalent CPU CDF 9/7 path and a separately
+   precision-labelled Metal CDF97 path for the 21 deterministic FWT/WPT
+   presets in the largest wavelet family in the corpus.
 5. Add the remaining wavelets, random transform and expensive
    REF/ANGLE/SAD/BSAD prediction modes only after separate 30 fps and
    visual-reference certification.
@@ -118,11 +120,13 @@ performs the following work for every input frame:
 6. conversion back to RGB with the source alpha channel.
 
 The implementation allocates its three contiguous planes, maximum-size segment
-workspaces and 512 x 512 transform workspaces in `prepare()`. Frame processing
-uses independent channel workspaces and runs all three channels in parallel.
-Two persistent workers are created in `prepare()` and sleep on a condition
-variable between generations; threads are not created per frame. The lane does
-not allocate a prediction or transform matrix for each quadtree leaf.
+workspaces and 512 x 512 transform workspaces in `prepare()`. Segmentation uses
+one Processing-compatible Java 48-bit RNG in the original channel 0 -> 1 -> 2
+and TL/TR/BL/BR DFS order. Reconstruction then uses independent channel
+workspaces and runs all three channels in parallel. Two persistent workers are
+created in `prepare()` and sleep on a condition variable between generations;
+threads are not created per frame. The lane does not allocate a prediction or
+transform matrix for each quadtree leaf.
 
 The CDF 9/7 coefficients come from the `CDF97` class in the exact
 `code/JWave.jar` bundled by upstream commit `460e61b`; its FWT, WPT and
@@ -148,13 +152,21 @@ This is an algorithmic-core fidelity claim, not a bit-identical Processing
 claim. The deviations are explicit:
 
 - `.glic` header/payload serialization and final entropy encoding are omitted;
-- the C++ colorspace and arithmetic port has not been byte-for-byte certified
-  against the Processing/JVM implementation;
-- Processing's evolving global random sampler is replaced by deterministic,
-  independent `mt19937` streams per channel so the channels can run safely in
-  parallel;
+- the colorspace port and arithmetic sites without explicit golden tests have
+  not been byte-for-byte certified against the Processing/JVM implementation;
+- the original sketch does not call `randomSeed`; this realtime lane fixes the
+  otherwise time-dependent Processing-compatible stream to seed 42 for
+  reproducible video and tests;
 - non-CDF97 wavelets, random transforms and predictor-search modes are
   unsupported rather than approximated.
+
+Processing/Java `round(float)` and `Planes.toPixels` raw shift/OR packing are
+matched explicitly, including negative-half rounding, NaN/infinity saturation,
+and unmasked cross-byte spill. Java RNG sequence and skip-ahead state have
+golden tests; forced quadtree nodes advance the state without unused image
+reads. Host compilation disables multiply/add contraction in the CPU oracle and
+Metal segmentation control pass so ARM FMA cannot move a Java float rounding
+boundary. A two-frame adaptive-tree golden checks cross-channel RNG progression.
 
 Fixed-predictor reconstruction is checked against the slower C++ reference for
 all 14 supported predictors and both clamp modes. The source quantization value
@@ -168,7 +180,8 @@ boundary while moving reconstruction to Metal:
 
 1. six persistent CPU slices convert input pixels into the upstream color
    space;
-2. three CPU channel workers run the seeded sampled quadtree independently;
+2. one small CPU control pass builds the sampled quadtree in original channel
+   and DFS order using the shared Java 48-bit RNG;
 3. each leaf receives a dependency level from the fully reconstructed top and
    left boundaries used by the fixed predictors;
 4. Metal dispatches each dependency frontier in order and processes all three
@@ -177,12 +190,17 @@ boundary while moving reconstruction to Metal:
    compression, inverse transform, and reconstruction inside one threadgroup;
 6. six persistent CPU slices convert the shared output planes back to BGRA.
 
-Fixed-block presets bypass standard-deviation sampling and generate the same
-regular leaf set directly. Adaptive nodes whose split or leaf result is forced
-by block-size bounds advance the RNG without doing unused plane sampling and
-variance work. Threadgroup size is selected from the current block size and
-frame segment density. Per-frame work uses one command-buffer submission, one
-completion wait, and no mapped-buffer copy on Apple unified memory.
+Fixed-block presets build the exact DFS leaf/frontier schedule once in
+`prepare()` and reuse it for every frame, while advancing the otherwise-unused
+RNG state by the original draw count in O(log N). Adaptive nodes whose split or
+leaf result is forced by block-size bounds likewise advance the RNG without
+unused plane sampling and variance work. Leaves up to 32 px use the dedicated
+threadgroup-memory pipeline with cached top/left boundaries, local matrix and
+scratch storage; larger leaves use the preallocated device workspaces.
+Dependency barriers fence only the reconstructed plane buffer. Threadgroup size
+is selected from the current block size and frame segment density. Per-frame
+work uses one command-buffer submission, one completion wait, and no
+mapped-buffer copy on Apple unified memory.
 
 Plane, segment, transform, scratch, uniform, dependency-map, and worker storage
 is allocated in `prepare()`. Frame processing does not grow those workspaces or
@@ -196,12 +214,16 @@ before streaming even when the container under-reports its frame count. The
 JSON report records the initial capacity and any unexpected growth event.
 
 Metal does not provide the fp64 arithmetic used by the CPU/JWave port. The
-Metal CDF97 kernel is compiled separately with safe math and precise fp32
-functions. No-wavelet reconstruction is integer-exact against the CPU lane.
-CDF97 follows the same stages and coefficients but is explicitly
-`processing_pixel_exact=false`. Tests cover fixed blocks 2 through 64, FWT and
-WPT, both small and large transform scales, every fixed predictor, adaptive
-segmentation parity, and all 37 preset preflights.
+Metal CDF97 kernel therefore splits each JWave coefficient into high and low
+fp32 components and uses compensated float-float product accumulation. The
+matrix remains fp32 between passes, so CDF97 is explicitly
+`processing_pixel_exact=false`. No-wavelet reconstruction is integer-exact
+against the CPU lane. Tests require bit-exact local/global Metal output for
+2--32 px FWT/WPT leaves, including 63 x 47 and 65 x 49 edge padding, mixed
+channel block sizes, and DC/JPEGLS/DIFF predictors. CPU-double deviation is
+bounded through 64 px, and all 37 supported presets are executed rather than
+only prepared. Reports expose local/global pipeline dispatches, plane-buffer
+barriers, and fixed-schedule reuse so the accelerated route can be verified.
 
 ### Certified local baseline
 
@@ -243,9 +265,9 @@ records resolution, sample counts, required fps and the mean-plus-p95 policy.
 Runs below those evidence minima can report `timing_passed`, but cannot report
 `performance_passed`.
 
-#### Current Metal baseline
+#### Previous certified Metal baseline (`6e1d1f8`, 2026-07-20)
 
-The current isolated baseline was measured on `rhizoma30`, a MacBook Pro
+The previous isolated baseline was measured on `rhizoma30`, a MacBook Pro
 `Mac16,5` with Apple M4 Max (16 CPU cores) and 128 GB RAM. At 960 x 540 with
 10 warm-up and 120 measured frames, `metal-original-visual` passed all 37
 supported presets. Both mean and p95 remained below 33.333 ms:
@@ -258,8 +280,10 @@ supported presets. Both mean and p95 remained below 33.333 ms:
 The CPU-reference image comparison has two explicit gates. Integer/no-wavelet
 presets must be pixel-exact. CDF97 presets first receive a numeric gate using
 RGB MAE, luma SSIM, and aligned-edge correlation; 34/37 passed that gate.
-`colour_mess2`, `colour_waves_sharp`, and `colour_waves_sharp2` amplify fp32
-rounding through later predictor boundaries. They fail numeric identity but
+`colour_mess2`, `colour_waves_sharp`, and `colour_waves_sharp2` retain fp32
+matrix storage between CDF97 passes. Remaining storage differences can cross
+integer-rounding boundaries and propagate through later predictors. They fail
+numeric identity but
 pass the separate original-style morphology gate based on blurred structure,
 aligned spatial-edge correlation, edge-orientation distribution, and
 edge-energy ratio. A negative-control test rejects spatially shuffled 32 px

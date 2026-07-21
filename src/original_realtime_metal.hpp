@@ -20,6 +20,11 @@ struct OriginalRealtimeMetalFrameStats {
   std::size_t totalSegments = 0;
   std::size_t dispatchLevels = 0;
   std::size_t gpuDispatches = 0;
+  std::size_t threadgroupPipelineDispatches = 0;
+  std::size_t threadgroupPipelineSegments = 0;
+  std::size_t globalPipelineDispatches = 0;
+  std::size_t bufferBarriers = 0;
+  bool staticScheduleReused = false;
   uint32_t commandBufferSubmissions = 0;
   uint32_t completionWaits = 0;
   uint32_t mappedBufferCopies = 0;

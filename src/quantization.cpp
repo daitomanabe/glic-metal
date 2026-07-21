@@ -1,4 +1,5 @@
 #include "quantization.hpp"
+#include "processing_math.hpp"
 #include <cmath>
 
 namespace glic {
@@ -16,7 +17,8 @@ void quantize(Planes& planes, int channel, const Segment& segment, float val, bo
                 col = col * val;
             }
 
-            planes.set(channel, x + segment.x, y + segment.y, static_cast<int>(std::round(col)));
+            planes.set(channel, x + segment.x, y + segment.y,
+                       processingRound(col));
         }
     }
 }

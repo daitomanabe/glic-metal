@@ -2,13 +2,13 @@
 
 #include "config.hpp"
 #include "preset_loader.hpp"
+#include "processing_random.hpp"
 
 #include <array>
 #include <cstddef>
 #include <condition_variable>
 #include <exception>
 #include <mutex>
-#include <random>
 #include <span>
 #include <string>
 #include <thread>
@@ -59,9 +59,14 @@ private:
 
   int planeValue(int channel, int x, int y) const noexcept;
   float sampledStandardDeviation(int channel, int x, int y, int size);
+  void skipUnusedDeviationSamples(int size) noexcept;
+  std::uint64_t fixedSegmentationRandomDraws(int blockSize) const noexcept;
+  void emitFixedSegments(int x, int y, int size, int blockSize,
+                         std::vector<WorkingSegment> &segments);
   void segmentChannel(int channel, int x, int y, int size, int minSize,
                       int maxSize, float threshold,
                       std::vector<WorkingSegment> &segments);
+  void prepareChannelSegments(int channel);
   int predictionValue(PredictionMethod method, int channel,
                       const WorkingSegment &segment, int x, int y,
                       int dcValue, int cornerValue) const noexcept;
@@ -89,7 +94,7 @@ private:
   std::array<std::vector<double>, 3> transformLines_{};
   std::array<std::vector<double>, 3> transformScratch_{};
   std::array<int, 3> referenceValues_{};
-  std::array<std::mt19937, 3> segmentationRngs_{};
+  ProcessingRandom segmentationRng_{42};
   std::array<std::jthread, 2> workers_{};
   std::mutex workerMutex_;
   std::condition_variable workerCondition_;

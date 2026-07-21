@@ -1,4 +1,5 @@
 #include "colorspaces.hpp"
+#include "processing_math.hpp"
 #include <cmath>
 #include <algorithm>
 
@@ -56,9 +57,9 @@ Color _fromXYZ(Color c, float xx, float yy, float zz) {
     float y = yy / 100.0f;
     float z = zz / 100.0f;
 
-    int r = static_cast<int>(std::round(255.0f * recorrectionxyz(x * 3.2406f + y * -1.5372f + z * -0.4986f)));
-    int g = static_cast<int>(std::round(255.0f * recorrectionxyz(x * -0.9689f + y * 1.8758f + z * 0.0415f)));
-    int b = static_cast<int>(std::round(255.0f * recorrectionxyz(x * 0.0557f + y * -0.2040f + z * 1.0570f)));
+    int r = processingRound(255.0f * recorrectionxyz(x * 3.2406f + y * -1.5372f + z * -0.4986f));
+    int g = processingRound(255.0f * recorrectionxyz(x * -0.9689f + y * 1.8758f + z * 0.0415f));
+    int b = processingRound(255.0f * recorrectionxyz(x * 0.0557f + y * -0.2040f + z * 1.0570f));
 
     return blendRGB(c, r, g, b);
 }
@@ -405,7 +406,8 @@ Color toLAB(Color c) {
     float a = 255.0f * (0.5f * (x - y) + 0.5f);
     float b = 255.0f * (0.5f * (y - z) + 0.5f);
 
-    return blendRGB(c, static_cast<int>(std::round(L)), static_cast<int>(std::round(a)), static_cast<int>(std::round(b)));
+    return blendRGB(c, processingRound(L), processingRound(a),
+                    processingRound(b));
 }
 
 Color fromLAB(Color c) {
@@ -453,7 +455,8 @@ Color toLUV(Color c) {
     u = (u + 134.0f) / 354.0f;
     v = (v + 140.0f) / 262.0f;
 
-    return blendRGB(c, static_cast<int>(std::round(L * 255)), static_cast<int>(std::round(u * 255)), static_cast<int>(std::round(v * 255)));
+    return blendRGB(c, processingRound(L * 255), processingRound(u * 255),
+                    processingRound(v * 255));
 }
 
 Color fromLUV(Color c) {
@@ -491,9 +494,9 @@ Color toHCL(Color c) {
     }
 
     return blendRGB(c,
-        static_cast<int>(std::round((h / 6.0f) * 255)),
-        static_cast<int>(std::round(chr * 255)),
-        static_cast<int>(std::round(255 * (0.298839f * r + 0.586811f * g + 0.114350f * b))));
+        processingRound((h / 6.0f) * 255), processingRound(chr * 255),
+        processingRound(255 *
+                        (0.298839f * r + 0.586811f * g + 0.114350f * b)));
 }
 
 Color fromHCL(Color c) {
@@ -512,9 +515,8 @@ Color fromHCL(Color c) {
 
     float m = l - (0.298839f * r + 0.586811f * g + 0.114350f * b);
     return blendRGB(c,
-        static_cast<int>(std::round(255 * (r + m))),
-        static_cast<int>(std::round(255 * (g + m))),
-        static_cast<int>(std::round(255 * (b + m))));
+        processingRound(255 * (r + m)), processingRound(255 * (g + m)),
+        processingRound(255 * (b + m)));
 }
 
 // YXY
