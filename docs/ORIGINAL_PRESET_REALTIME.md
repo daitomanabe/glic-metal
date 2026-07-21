@@ -213,10 +213,14 @@ is selected from the current block size and frame segment density. Per-frame
 work uses one command-buffer submission, one completion wait, and no
 mapped-buffer copy on Apple unified memory.
 
-Plane, segment, transform, scratch, uniform, dependency-map, and worker storage
-is allocated in `prepare()`. Frame processing does not grow those workspaces or
-create threads. The current API is a synchronous span/raw-video hybrid; it is
-not the zero-copy texture API used by `compat_realtime`.
+Dependency state is stored on an exact `minBlockSize` grid rather than one
+entry per pixel. Quadtree leaves and every queried boundary are aligned to that
+grid, so frontier ordering is unchanged while clears, strided writes, segment
+reserve capacity, and allocation size scale with the number of minimum leaves.
+Plane, segment, transform, scratch, uniform, dependency-grid, and worker
+storage is allocated in `prepare()`. Frame processing does not grow those
+workspaces or create threads. The current API is a synchronous span/raw-video
+hybrid; it is not the zero-copy texture API used by `compat_realtime`.
 
 Metal/Foundation initialization, repeated `prepare()`, and destruction each
 run inside an autorelease pool. The video wrapper reserves the larger of
@@ -228,9 +232,12 @@ Metal does not provide the fp64 arithmetic used by the CPU/JWave port. The
 Metal CDF97 kernel therefore splits each JWave coefficient into high and low
 fp32 components and uses compensated float-float product accumulation. Inverse
 passes iterate only taps matching the destination parity, preserving the exact
-ascending accumulation subsequence while removing rejected iterations. The
-matrix remains fp32 between passes, so CDF97 is explicitly
-`processing_pixel_exact=false`. No-wavelet reconstruction is integer-exact
+ascending accumulation subsequence while removing rejected iterations. WPT
+passes cover the full matrix, so forward and inverse passes alternate matrix
+and scratch buffers without copying every result back after each pass. FWT
+keeps the copy-back path because each level must preserve high-frequency bands
+emitted by earlier levels. The matrix remains fp32 between passes, so CDF97 is
+explicitly `processing_pixel_exact=false`. No-wavelet reconstruction is integer-exact
 against the CPU lane. Tests require bit-exact local/global Metal output for
 2--32 px FWT/WPT leaves, including 63 x 47 and 65 x 49 edge padding, mixed
 channel block sizes, and DC/JPEGLS/DIFF predictors. CPU-double deviation is

@@ -260,8 +260,8 @@ static uint originalPowerOfTwoShift(uint value) {
     return 31u - clz(value);
 }
 
-static void originalCdfPass(device float *matrix,
-                            device float *scratch,
+static void originalCdfPass(device float *source,
+                            device float *destination,
                             OriginalSegmentDescriptor segment,
                             constant OriginalPresetUniform &preset,
                             bool columns, bool reverse, uint length,
@@ -286,26 +286,27 @@ static void originalCdfPass(device float *matrix,
             bool high = output >= halfLength;
             uint coefficient = high ? output - halfLength : output;
             for (uint tap = 0u; tap < 9u; ++tap) {
-                uint source = packetOffset + ((coefficient * 2u + tap) & mask);
-                uint localX = columns ? source : line;
-                uint localY = columns ? line : source;
+                uint sourcePosition =
+                    packetOffset + ((coefficient * 2u + tap) & mask);
+                uint localX = columns ? sourcePosition : line;
+                uint localY = columns ? line : sourcePosition;
                 uint index = matrixBase + (segment.x + localX) * preset.rootSize +
                              segment.y + localY;
                 originalAccumulateCdfProduct(
-                    accumulator, matrix[index],
+                    accumulator, source[index],
                     high ? kOriginalCdf97Wavelet[tap]
                          : kOriginalCdf97Scaling[tap],
                     high ? kOriginalCdf97WaveletLow[tap]
                          : kOriginalCdf97ScalingLow[tap]);
             }
         } else {
-            uint destination = output;
+            uint destinationPosition = output;
             // The inverse branch accepts only taps with the destination's
             // parity. Step through exactly that ascending subsequence so the
             // compensated accumulation order is unchanged while eliminating
             // four/five dead loop iterations and branches per output.
-            for (uint tap = destination & 1u; tap < 9u; tap += 2u) {
-                uint delta = (destination - tap) & mask;
+            for (uint tap = destinationPosition & 1u; tap < 9u; tap += 2u) {
+                uint delta = (destinationPosition - tap) & mask;
                 uint coefficient = delta >> 1u;
                 uint lowPosition = packetOffset + coefficient;
                 uint highPosition = lowPosition + halfLength;
@@ -318,11 +319,11 @@ static void originalCdfPass(device float *matrix,
                 uint highIndex = matrixBase +
                     (segment.x + highX) * preset.rootSize + segment.y + highY;
                 originalAccumulateCdfProduct(
-                    accumulator, matrix[lowIndex],
+                    accumulator, source[lowIndex],
                     kOriginalCdf97Scaling[tap],
                     kOriginalCdf97ScalingLow[tap]);
                 originalAccumulateCdfProduct(
-                    accumulator, matrix[highIndex],
+                    accumulator, source[highIndex],
                     kOriginalCdf97Wavelet[tap],
                     kOriginalCdf97WaveletLow[tap]);
             }
@@ -332,20 +333,24 @@ static void originalCdfPass(device float *matrix,
         uint localY = columns ? line : packetOffset + output;
         uint index = matrixBase + (segment.x + localX) * preset.rootSize +
                      segment.y + localY;
-        scratch[index] = accumulator.x + accumulator.y;
+        destination[index] = accumulator.x + accumulator.y;
     }
     threadgroup_barrier(mem_flags::mem_device);
-
-    for (uint job = tid; job < jobs; job += threadCount) {
-        uint line = job >> transformedShift;
-        uint position = job & transformedMask;
-        uint localX = columns ? position : line;
-        uint localY = columns ? line : position;
-        uint index = matrixBase + (segment.x + localX) * preset.rootSize +
-                     segment.y + localY;
-        matrix[index] = scratch[index];
+    if (!allPackets) {
+        // FWT updates only the current low-frequency prefix. Preserve every
+        // already-emitted high-frequency band in the source matrix exactly as
+        // upstream does; WPT covers the full matrix and can ping-pong directly.
+        for (uint job = tid; job < jobs; job += threadCount) {
+            uint line = job >> transformedShift;
+            uint position = job & transformedMask;
+            uint localX = columns ? position : line;
+            uint localY = columns ? line : position;
+            uint index = matrixBase +
+                (segment.x + localX) * preset.rootSize + segment.y + localY;
+            source[index] = destination[index];
+        }
+        threadgroup_barrier(mem_flags::mem_device);
     }
-    threadgroup_barrier(mem_flags::mem_device);
 }
 
 kernel void glicOriginalSegments(
@@ -460,12 +465,31 @@ kernel void glicOriginalSegments(
     threadgroup_barrier(mem_flags::mem_device);
 
     bool allPackets = config.transformType == 1u;
-    for (uint length = segment.size; length >= 2u; length >>= 1u)
-        originalCdfPass(matrix, scratch, segment, preset, false, false,
-                        length, allPackets, tid, threadCount);
-    for (uint length = segment.size; length >= 2u; length >>= 1u)
-        originalCdfPass(matrix, scratch, segment, preset, true, false,
-                        length, allPackets, tid, threadCount);
+    device float *cdfSource = matrix;
+    device float *cdfDestination = scratch;
+    if (allPackets) {
+        for (uint length = segment.size; length >= 2u; length >>= 1u) {
+            originalCdfPass(cdfSource, cdfDestination, segment, preset,
+                            false, false, length, true, tid, threadCount);
+            device float *swap = cdfSource;
+            cdfSource = cdfDestination;
+            cdfDestination = swap;
+        }
+        for (uint length = segment.size; length >= 2u; length >>= 1u) {
+            originalCdfPass(cdfSource, cdfDestination, segment, preset, true,
+                            false, length, true, tid, threadCount);
+            device float *swap = cdfSource;
+            cdfSource = cdfDestination;
+            cdfDestination = swap;
+        }
+    } else {
+        for (uint length = segment.size; length >= 2u; length >>= 1u)
+            originalCdfPass(matrix, scratch, segment, preset, false, false,
+                            length, false, tid, threadCount);
+        for (uint length = segment.size; length >= 2u; length >>= 1u)
+            originalCdfPass(matrix, scratch, segment, preset, true, false,
+                            length, false, tid, threadCount);
+    }
 
     if (config.transformCompress > 0.0f) {
         // The previous parallel reduction changed addition order with the
@@ -481,7 +505,7 @@ kernel void glicOriginalSegments(
                 uint y = job & segmentMask;
                 uint index = matrixBase + (segment.x + x) * preset.rootSize +
                              segment.y + y;
-                float corrected = abs(matrix[index]) - compensation;
+                float corrected = abs(cdfSource[index]) - compensation;
                 float next = magnitude + corrected;
                 compensation = (next - magnitude) - corrected;
                 magnitude = next;
@@ -496,7 +520,7 @@ kernel void glicOriginalSegments(
                 uint y = job & segmentMask;
                 uint index = matrixBase + (segment.x + x) * preset.rootSize +
                              segment.y + y;
-                float corrected = abs(matrix[index]) - compensation;
+                float corrected = abs(cdfSource[index]) - compensation;
                 float next = magnitude + corrected;
                 compensation = (next - magnitude) - corrected;
                 magnitude = next;
@@ -521,7 +545,7 @@ kernel void glicOriginalSegments(
             uint y = job & segmentMask;
             uint index = matrixBase + (segment.x + x) * preset.rootSize +
                          segment.y + y;
-            if (abs(matrix[index]) < cutoff) matrix[index] = 0.0f;
+            if (abs(cdfSource[index]) < cutoff) cdfSource[index] = 0.0f;
         }
         threadgroup_barrier(mem_flags::mem_device);
     }
@@ -535,7 +559,7 @@ kernel void glicOriginalSegments(
         uint matrixIndex = matrixBase + (segment.x + x) * preset.rootSize +
                            segment.y + y;
         planes[planeIndex] = originalProcessingRound(
-            matrix[matrixIndex] * scale / float(segment.size));
+            cdfSource[matrixIndex] * scale / float(segment.size));
     }
     threadgroup_barrier(mem_flags::mem_device);
 
@@ -555,12 +579,31 @@ kernel void glicOriginalSegments(
     }
     threadgroup_barrier(mem_flags::mem_device);
 
-    for (uint length = 2u; length <= segment.size; length <<= 1u)
-        originalCdfPass(matrix, scratch, segment, preset, true, true,
-                        length, allPackets, tid, threadCount);
-    for (uint length = 2u; length <= segment.size; length <<= 1u)
-        originalCdfPass(matrix, scratch, segment, preset, false, true,
-                        length, allPackets, tid, threadCount);
+    cdfSource = matrix;
+    cdfDestination = scratch;
+    if (allPackets) {
+        for (uint length = 2u; length <= segment.size; length <<= 1u) {
+            originalCdfPass(cdfSource, cdfDestination, segment, preset, true,
+                            true, length, true, tid, threadCount);
+            device float *swap = cdfSource;
+            cdfSource = cdfDestination;
+            cdfDestination = swap;
+        }
+        for (uint length = 2u; length <= segment.size; length <<= 1u) {
+            originalCdfPass(cdfSource, cdfDestination, segment, preset,
+                            false, true, length, true, tid, threadCount);
+            device float *swap = cdfSource;
+            cdfSource = cdfDestination;
+            cdfDestination = swap;
+        }
+    } else {
+        for (uint length = 2u; length <= segment.size; length <<= 1u)
+            originalCdfPass(matrix, scratch, segment, preset, true, true,
+                            length, false, tid, threadCount);
+        for (uint length = 2u; length <= segment.size; length <<= 1u)
+            originalCdfPass(matrix, scratch, segment, preset, false, true,
+                            length, false, tid, threadCount);
+    }
 
     for (uint job = tid; job < usedPixels; job += threadCount) {
         uint x = job % usedWidth;
@@ -569,7 +612,7 @@ kernel void glicOriginalSegments(
                           segment.x + x;
         uint matrixIndex = matrixBase + (segment.x + x) * preset.rootSize +
                            segment.y + y;
-        int value = originalProcessingRound(matrix[matrixIndex] * 255.0f);
+        int value = originalProcessingRound(cdfSource[matrixIndex] * 255.0f);
         value = config.clampMethod == 1u ? clamp(value, 0, 255)
                                          : clamp(value, -255, 255);
         if (quantization > 1.0f)
@@ -602,8 +645,8 @@ kernel void glicOriginalSegments(
 // split coefficients, and compensated float-float accumulation intentionally
 // match originalCdfPass above.
 static void originalCdfPassThreadgroup(
-    threadgroup float *matrix,
-    threadgroup float *scratch,
+    threadgroup float *source,
+    threadgroup float *destination,
     uint size, bool columns, bool reverse, uint length,
     bool allPackets, uint tid, uint threadCount) {
     uint transformedPositions = allPackets ? size : length;
@@ -624,20 +667,21 @@ static void originalCdfPassThreadgroup(
             bool high = output >= halfLength;
             uint coefficient = high ? output - halfLength : output;
             for (uint tap = 0u; tap < 9u; ++tap) {
-                uint source = packetOffset + ((coefficient * 2u + tap) & mask);
-                uint localX = columns ? source : line;
-                uint localY = columns ? line : source;
+                uint sourcePosition =
+                    packetOffset + ((coefficient * 2u + tap) & mask);
+                uint localX = columns ? sourcePosition : line;
+                uint localY = columns ? line : sourcePosition;
                 originalAccumulateCdfProduct(
-                    accumulator, matrix[localX * size + localY],
+                    accumulator, source[localX * size + localY],
                     high ? kOriginalCdf97Wavelet[tap]
                          : kOriginalCdf97Scaling[tap],
                     high ? kOriginalCdf97WaveletLow[tap]
                          : kOriginalCdf97ScalingLow[tap]);
             }
         } else {
-            uint destination = output;
-            for (uint tap = destination & 1u; tap < 9u; tap += 2u) {
-                uint delta = (destination - tap) & mask;
+            uint destinationPosition = output;
+            for (uint tap = destinationPosition & 1u; tap < 9u; tap += 2u) {
+                uint delta = (destinationPosition - tap) & mask;
                 uint coefficient = delta >> 1u;
                 uint lowPosition = packetOffset + coefficient;
                 uint highPosition = lowPosition + halfLength;
@@ -646,11 +690,11 @@ static void originalCdfPassThreadgroup(
                 uint highX = columns ? highPosition : line;
                 uint highY = columns ? line : highPosition;
                 originalAccumulateCdfProduct(
-                    accumulator, matrix[lowX * size + lowY],
+                    accumulator, source[lowX * size + lowY],
                     kOriginalCdf97Scaling[tap],
                     kOriginalCdf97ScalingLow[tap]);
                 originalAccumulateCdfProduct(
-                    accumulator, matrix[highX * size + highY],
+                    accumulator, source[highX * size + highY],
                     kOriginalCdf97Wavelet[tap],
                     kOriginalCdf97WaveletLow[tap]);
             }
@@ -658,19 +702,20 @@ static void originalCdfPassThreadgroup(
 
         uint localX = columns ? packetOffset + output : line;
         uint localY = columns ? line : packetOffset + output;
-        scratch[localX * size + localY] = accumulator.x + accumulator.y;
+        destination[localX * size + localY] = accumulator.x + accumulator.y;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
-
-    for (uint job = tid; job < jobs; job += threadCount) {
-        uint line = job >> transformedShift;
-        uint position = job & transformedMask;
-        uint localX = columns ? position : line;
-        uint localY = columns ? line : position;
-        matrix[localX * size + localY] =
-            scratch[localX * size + localY];
+    if (!allPackets) {
+        for (uint job = tid; job < jobs; job += threadCount) {
+            uint line = job >> transformedShift;
+            uint position = job & transformedMask;
+            uint localX = columns ? position : line;
+            uint localY = columns ? line : position;
+            source[localX * size + localY] =
+                destination[localX * size + localY];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
 }
 
 kernel void glicOriginalSegmentsThreadgroupCdf(
@@ -709,19 +754,19 @@ kernel void glicOriginalSegmentsThreadgroupCdf(
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    if (tid == 0u) {
-        int dc = 0;
-        if (config.predictionMethod == 4 || config.predictionMethod == 5) {
+    if (config.predictionMethod == 4 || config.predictionMethod == 5) {
+        if (tid == 0u) {
+            int dc = 0;
             for (uint offset = 0u; offset < segment.size; ++offset) {
                 dc += leftBoundary[offset];
                 dc += topBoundary[offset];
             }
             dc += corner;
             dc /= int(segment.size * 2u + 1u);
+            dcValue = dc;
         }
-        dcValue = dc;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
 
     float quantization = float(config.quantizationValue) * 0.5f;
     if (config.originalWaveletId == 0u) {
@@ -795,19 +840,40 @@ kernel void glicOriginalSegmentsThreadgroupCdf(
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     bool allPackets = config.transformType == 1u;
-    for (uint length = size; length >= 2u; length >>= 1u)
-        originalCdfPassThreadgroup(matrix, scratch, size, false, false,
-                                   length, allPackets, tid, threadCount);
-    for (uint length = size; length >= 2u; length >>= 1u)
-        originalCdfPassThreadgroup(matrix, scratch, size, true, false,
-                                   length, allPackets, tid, threadCount);
+    threadgroup float *cdfSource = matrix;
+    threadgroup float *cdfDestination = scratch;
+    if (allPackets) {
+        for (uint length = size; length >= 2u; length >>= 1u) {
+            originalCdfPassThreadgroup(cdfSource, cdfDestination, size,
+                                       false, false, length, true, tid,
+                                       threadCount);
+            threadgroup float *swap = cdfSource;
+            cdfSource = cdfDestination;
+            cdfDestination = swap;
+        }
+        for (uint length = size; length >= 2u; length >>= 1u) {
+            originalCdfPassThreadgroup(cdfSource, cdfDestination, size, true,
+                                       false, length, true, tid,
+                                       threadCount);
+            threadgroup float *swap = cdfSource;
+            cdfSource = cdfDestination;
+            cdfDestination = swap;
+        }
+    } else {
+        for (uint length = size; length >= 2u; length >>= 1u)
+            originalCdfPassThreadgroup(matrix, scratch, size, false, false,
+                                       length, false, tid, threadCount);
+        for (uint length = size; length >= 2u; length >>= 1u)
+            originalCdfPassThreadgroup(matrix, scratch, size, true, false,
+                                       length, false, tid, threadCount);
+    }
 
     if (config.transformCompress > 0.0f) {
         if (logicalPixels <= 32u && tid == 0u) {
             float magnitude = 0.0f;
             float compensation = 0.0f;
             for (uint job = 0u; job < logicalPixels; ++job) {
-                float corrected = abs(matrix[job]) - compensation;
+                float corrected = abs(cdfSource[job]) - compensation;
                 float next = magnitude + corrected;
                 compensation = (next - magnitude) - corrected;
                 magnitude = next;
@@ -818,7 +884,7 @@ kernel void glicOriginalSegmentsThreadgroupCdf(
             float magnitude = 0.0f;
             float compensation = 0.0f;
             for (uint job = tid; job < logicalPixels; job += 32u) {
-                float corrected = abs(matrix[job]) - compensation;
+                float corrected = abs(cdfSource[job]) - compensation;
                 float next = magnitude + corrected;
                 compensation = (next - magnitude) - corrected;
                 magnitude = next;
@@ -839,7 +905,7 @@ kernel void glicOriginalSegmentsThreadgroupCdf(
         }
         float cutoff = reduction[0];
         for (uint job = tid; job < logicalPixels; job += threadCount) {
-            if (abs(matrix[job]) < cutoff) matrix[job] = 0.0f;
+            if (abs(cdfSource[job]) < cutoff) cdfSource[job] = 0.0f;
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
@@ -851,7 +917,7 @@ kernel void glicOriginalSegmentsThreadgroupCdf(
         uint planeIndex = planeBase + (segment.y + y) * preset.width +
                           segment.x + x;
         planes[planeIndex] = originalProcessingRound(
-            matrix[x * size + y] * scale / float(size));
+            cdfSource[x * size + y] * scale / float(size));
     }
     threadgroup_barrier(mem_flags::mem_device);
 
@@ -869,19 +935,39 @@ kernel void glicOriginalSegmentsThreadgroupCdf(
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    for (uint length = 2u; length <= size; length <<= 1u)
-        originalCdfPassThreadgroup(matrix, scratch, size, true, true,
-                                   length, allPackets, tid, threadCount);
-    for (uint length = 2u; length <= size; length <<= 1u)
-        originalCdfPassThreadgroup(matrix, scratch, size, false, true,
-                                   length, allPackets, tid, threadCount);
+    cdfSource = matrix;
+    cdfDestination = scratch;
+    if (allPackets) {
+        for (uint length = 2u; length <= size; length <<= 1u) {
+            originalCdfPassThreadgroup(cdfSource, cdfDestination, size, true,
+                                       true, length, true, tid, threadCount);
+            threadgroup float *swap = cdfSource;
+            cdfSource = cdfDestination;
+            cdfDestination = swap;
+        }
+        for (uint length = 2u; length <= size; length <<= 1u) {
+            originalCdfPassThreadgroup(cdfSource, cdfDestination, size,
+                                       false, true, length, true, tid,
+                                       threadCount);
+            threadgroup float *swap = cdfSource;
+            cdfSource = cdfDestination;
+            cdfDestination = swap;
+        }
+    } else {
+        for (uint length = 2u; length <= size; length <<= 1u)
+            originalCdfPassThreadgroup(matrix, scratch, size, true, true,
+                                       length, false, tid, threadCount);
+        for (uint length = 2u; length <= size; length <<= 1u)
+            originalCdfPassThreadgroup(matrix, scratch, size, false, true,
+                                       length, false, tid, threadCount);
+    }
 
     for (uint job = tid; job < usedPixels; job += threadCount) {
         uint x = job % usedWidth;
         uint y = job / usedWidth;
         uint planeIndex = planeBase + (segment.y + y) * preset.width +
                           segment.x + x;
-        int value = originalProcessingRound(matrix[x * size + y] * 255.0f);
+        int value = originalProcessingRound(cdfSource[x * size + y] * 255.0f);
         value = config.clampMethod == 1u ? clamp(value, 0, 255)
                                          : clamp(value, -255, 255);
         if (quantization > 1.0f)

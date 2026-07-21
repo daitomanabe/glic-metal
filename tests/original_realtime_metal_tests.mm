@@ -274,6 +274,38 @@ bool testNoWaveletExact() {
   return true;
 }
 
+bool testMixedMinBlockDependencyGridExact() {
+  constexpr int width = 67;
+  constexpr int height = 53;
+  const auto input = makeInput(width, height);
+  auto config = makeConfig();
+  const std::array<int, 3> minimumBlocks = {2, 4, 8};
+  const std::array<glic::PredictionMethod, 3> predictors = {
+      glic::PredictionMethod::JPEGLS, glic::PredictionMethod::PAETH,
+      glic::PredictionMethod::DIFF};
+  for (std::size_t channel = 0; channel < config.channels.size(); ++channel) {
+    config.channels[channel].minBlockSize = minimumBlocks[channel];
+    config.channels[channel].maxBlockSize = 32;
+    config.channels[channel].segmentationPrecision = 12.0f;
+    config.channels[channel].predictionMethod = predictors[channel];
+  }
+  Difference delta;
+  glic::OriginalRealtimeMetalFrameStats stats;
+  std::string error;
+  if (!processPair(config, input, width, height, delta, &stats, error)) {
+    std::cerr << "mixed min-block dependency grid failed: " << error << '\n';
+    return false;
+  }
+  if (delta.maximum != 0 || delta.exactRatio != 1.0 ||
+      stats.dispatchLevels == 0 || !stats.pipelineAccountingPassed) {
+    std::cerr << "mixed min-block dependency grid lost exact parity: mae="
+              << delta.mae << " max=" << delta.maximum
+              << " exact=" << delta.exactRatio << '\n';
+    return false;
+  }
+  return true;
+}
+
 bool testCdf97FixedParity() {
   constexpr int width = 64;
   constexpr int height = 64;
@@ -432,6 +464,7 @@ bool testSupportedCorpusPrepares() {
 
 int main() {
   if (!testNoWaveletExact() ||
+      !testMixedMinBlockDependencyGridExact() ||
       !testThreadgroupCdfMatchesGlobalBitExactly() ||
       !testCdf97FixedParity() ||
       !testAdaptiveCdf97BoundedDeviation() || !testFailClosed() ||

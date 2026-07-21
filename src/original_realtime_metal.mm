@@ -279,12 +279,19 @@ public:
         return false;
       }
 
-      for (auto &segments : segments_) {
-        segments.clear();
-        segments.reserve(pixelCount_);
+      for (std::size_t channel = 0; channel < segments_.size(); ++channel) {
+        const int unit = config_.channels[channel].minBlockSize;
+        const std::size_t gridWidth =
+            (static_cast<std::size_t>(width_) + unit - 1u) /
+            static_cast<std::size_t>(unit);
+        const std::size_t gridHeight =
+            (static_cast<std::size_t>(height_) + unit - 1u) /
+            static_cast<std::size_t>(unit);
+        dependencyGridWidths_[channel] = gridWidth;
+        dependencyGrids_[channel].assign(gridWidth * gridHeight, 0u);
+        segments_[channel].clear();
+        segments_[channel].reserve(gridWidth * gridHeight);
       }
-      for (auto &map : dependencyLevels_)
-        map.assign(pixelCount_, 0u);
       // A left/top dependency chain cannot exceed width + height leaves.
       const std::size_t levelCapacity = static_cast<std::size_t>(width_) +
                                         static_cast<std::size_t>(height_) + 2u;
@@ -745,43 +752,56 @@ private:
 
   void buildChannelDependencyLevels(int channel) {
     auto &segments = segments_[static_cast<std::size_t>(channel)];
-    auto &levelMap = dependencyLevels_[static_cast<std::size_t>(channel)];
-    std::fill(levelMap.begin(), levelMap.end(), 0u);
+    auto &levelGrid = dependencyGrids_[static_cast<std::size_t>(channel)];
+    std::fill(levelGrid.begin(), levelGrid.end(), 0u);
+    const int unit = config_.channels[static_cast<std::size_t>(channel)]
+                         .minBlockSize;
+    const std::size_t gridWidth =
+        dependencyGridWidths_[static_cast<std::size_t>(channel)];
 
     // Preserve codec.pde's DFS reconstruction semantics. A leaf can run only
     // after every leaf touching its full top and left boundaries has finished.
+    // Quadtree leaves and boundaries are aligned to minBlockSize, so one grid
+    // cell per minimum leaf is exactly equivalent to the former per-pixel map.
     for (auto &segment : segments) {
       const int usedWidth = std::min(segment.size, width_ - segment.x);
       const int usedHeight = std::min(segment.size, height_ - segment.y);
+      const std::size_t gridX =
+          static_cast<std::size_t>(segment.x / unit);
+      const std::size_t gridY =
+          static_cast<std::size_t>(segment.y / unit);
+      const std::size_t usedGridWidth =
+          (static_cast<std::size_t>(usedWidth) + unit - 1u) /
+          static_cast<std::size_t>(unit);
+      const std::size_t usedGridHeight =
+          (static_cast<std::size_t>(usedHeight) + unit - 1u) /
+          static_cast<std::size_t>(unit);
       uint32_t dependency = 0;
       if (segment.x > 0) {
-        for (int y = 0; y < usedHeight; ++y)
+        for (std::size_t y = 0; y < usedGridHeight; ++y)
           dependency = std::max(
               dependency,
-              levelMap[static_cast<std::size_t>(segment.y + y) * width_ +
-                       static_cast<std::size_t>(segment.x - 1)]);
+              levelGrid[(gridY + y) * gridWidth + gridX - 1u]);
       }
       if (segment.y > 0) {
-        const std::size_t row =
-            static_cast<std::size_t>(segment.y - 1) * width_;
-        for (int x = 0; x < usedWidth; ++x)
+        const std::size_t row = (gridY - 1u) * gridWidth;
+        for (std::size_t x = 0; x < usedGridWidth; ++x)
           dependency =
-              std::max(dependency,
-                       levelMap[row + static_cast<std::size_t>(segment.x + x)]);
+              std::max(dependency, levelGrid[row + gridX + x]);
       }
       segment.dependencyLevel = dependency + 1u;
       // Future leaves can only touch this leaf through its bottom row or
-      // right column. Recording the full interior wrote O(size^2) values that
-      // are never queried; boundary-only state is exactly equivalent.
+      // right column. Each grid cell represents a constant minBlockSize-wide
+      // boundary run, reducing clears and strided writes without approximation.
       const std::size_t bottomRow =
-          static_cast<std::size_t>(segment.y + usedHeight - 1) * width_;
-      std::fill_n(levelMap.begin() + bottomRow + segment.x, usedWidth,
+          (gridY + usedGridHeight - 1u) * gridWidth;
+      std::fill_n(levelGrid.begin() + bottomRow + gridX, usedGridWidth,
                   segment.dependencyLevel);
       const std::size_t rightColumn =
-          static_cast<std::size_t>(segment.x + usedWidth - 1);
-      for (int y = 0; y < usedHeight; ++y)
-        levelMap[static_cast<std::size_t>(segment.y + y) * width_ +
-                 rightColumn] = segment.dependencyLevel;
+          gridX + usedGridWidth - 1u;
+      for (std::size_t y = 0; y < usedGridHeight; ++y)
+        levelGrid[(gridY + y) * gridWidth + rightColumn] =
+            segment.dependencyLevel;
     }
   }
 
@@ -1049,7 +1069,8 @@ private:
   OriginalPresetConfig config_{};
   std::array<int, 3> referenceValues_{};
   std::array<std::vector<WorkingSegment>, 3> segments_{};
-  std::array<std::vector<uint32_t>, 3> dependencyLevels_{};
+  std::array<std::vector<uint32_t>, 3> dependencyGrids_{};
+  std::array<std::size_t, 3> dependencyGridWidths_{};
   ProcessingRandom segmentationRng_{42};
   std::size_t earlyTerminatedNodes_ = 0;
   std::size_t earlySkippedSamples_ = 0;
