@@ -127,6 +127,41 @@ if(APPLE)
         "GLIC_METALLIB_PATH=\"${GLIC_METALLIB}\""
     )
     target_link_libraries(glic_core PUBLIC "-framework Foundation" "-framework Metal")
+
+    add_executable(glic_webcam_preview MACOSX_BUNDLE
+                   apps/glic_webcam_preview.mm)
+    set_source_files_properties(apps/glic_webcam_preview.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc;-ffp-contract=off")
+    target_compile_definitions(glic_webcam_preview PRIVATE
+        "GLIC_SOURCE_PRESETS_DIR=\"${CMAKE_SOURCE_DIR}/presets\"")
+    target_link_libraries(glic_webcam_preview PRIVATE
+        glic_core
+        "-framework Accelerate"
+        "-framework AppKit"
+        "-framework AVFoundation"
+        "-framework CoreMedia"
+        "-framework CoreVideo"
+        "-framework QuartzCore")
+    set_target_properties(glic_webcam_preview PROPERTIES
+        OUTPUT_NAME "GLIC Webcam Preview"
+        MACOSX_BUNDLE_BUNDLE_NAME "GLIC Webcam Preview"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "ws.daito.glic-metal.webcam-preview"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.0"
+        MACOSX_BUNDLE_INFO_PLIST
+            "${CMAKE_SOURCE_DIR}/resources/GLICWebcamPreview-Info.plist")
+    add_custom_command(TARGET glic_webcam_preview POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${GLIC_METALLIB}"
+            "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/glic_realtime.metallib"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/presets"
+            "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/Presets"
+        COMMAND /usr/bin/codesign --force --sign -
+            "$<TARGET_BUNDLE_DIR:glic_webcam_preview>"
+        VERBATIM)
 endif()
 
 add_executable(glic src/main.cpp)
@@ -229,6 +264,9 @@ if(BUILD_TESTING)
              COMMAND glic_original_realtime_tests)
 
     if(APPLE)
+        add_test(NAME glic_webcam_preview_selftest
+                 COMMAND glic_webcam_preview --self-test)
+
         add_executable(glic_original_realtime_metal_tests
                        tests/original_realtime_metal_tests.mm)
         set_source_files_properties(tests/original_realtime_metal_tests.mm
@@ -256,6 +294,9 @@ install(TARGETS glic glic_realtime_bench glic_realtime_filter
                 glic_realtime_search
                 glic_realtime_certify
         RUNTIME DESTINATION bin)
+if(APPLE)
+    install(TARGETS glic_webcam_preview BUNDLE DESTINATION .)
+endif()
 install(PROGRAMS scripts/process_video.py
         DESTINATION bin
         RENAME glic_process_video)

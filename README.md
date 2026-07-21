@@ -90,6 +90,21 @@ cmake --build .
 
 macOSでMetal shaderをビルドする際はFull Xcodeが必要です。CMakeはデフォルトで `/Applications/Xcode.app/Contents/Developer` を使用するため、システムの`xcode-select`設定を変更する必要はありません。
 
+### Webカメラ・リアルタイムプレビュー
+
+macOS版は`GLIC Webcam Preview.app`を生成します。内蔵または外付けカメラを
+960×540・30fpsで取得し、`original_visual` Metal laneで処理します。画面上部の
+ポップアップ、またはメニューバーの`Preset`から、対応済み37プリセットを実行中に
+切り替えられます。処理時間、GPU時間、入力fps、drop数を画面上で確認できます。
+
+```bash
+cmake --build build --target glic_webcam_preview --parallel
+open "build/GLIC Webcam Preview.app"
+```
+
+初回起動時はmacOSのカメラ使用許可を承認してください。アプリは背面でもApp Napを
+避けて処理を継続しますが、他のアプリを強制的に最前面へ移動しません。
+
 ### 動画処理
 
 `process_video.py` はFFmpegで動画をBGRAフレームへデコードし、1つのリアルタイムbackendを全フレームで再利用します。処理後は元動画の音声を戻し、H.264 MP4とJSON性能レポートを出力します。
@@ -463,6 +478,22 @@ The realtime path has nine explicit glitch mechanisms. `legacy_block` preserves 
 `--strength` ranges from `0` (off) to `2` (maximum). The explicit families also expose normalized `amount`, `scale`, and `rate` controls. Corruption patterns use a reproducible 32-bit seed and are held for several frames according to `rate`.
 
 Full Xcode is required to compile the Metal shader on macOS. CMake uses `/Applications/Xcode.app/Contents/Developer` by default, so it does not need to change the system `xcode-select` setting.
+
+### Realtime webcam preview
+
+The macOS build produces `GLIC Webcam Preview.app`. It captures a built-in or
+external camera at 960×540/30 fps and processes frames through the
+`original_visual` Metal lane. Switch among all 37 supported presets from the
+popup at the top of the window or the `Preset` application menu. Live capture
+fps, total processing time, GPU time, and dropped frames remain visible.
+
+```bash
+cmake --build build --target glic_webcam_preview --parallel
+open "build/GLIC Webcam Preview.app"
+```
+
+Approve camera access on first launch. The realtime loop opts out of App Nap
+when the app is behind other software, without forcing its window to the front.
 
 ### Video processing
 
