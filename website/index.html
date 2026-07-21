@@ -1,120 +1,173 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>glic-metal</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="GLIC Metal — realtime glitch image processing with C++20 and Metal.">
+  <title>GLIC Metal</title>
   <style>
     :root {
-      --canvas-bg: #000;
-      --canvas-text: #fff;
-      --panel-border: rgba(255,255,255,0.2);
-      --text-muted: rgba(255,255,255,0.72);
-      --accent: rgba(255,255,255,0.9);
-      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: Menlo, Monaco, Consolas, monospace;
+      color-scheme: dark;
+      --bg: #090909;
+      --panel: #111;
+      --line: #303030;
+      --text: #f4f4ef;
+      --muted: #a8a8a0;
+      --signal: #d8ff45;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: radial-gradient(circle at top, rgba(255,255,255,0.12), transparent 30%), #000;
-      color: var(--canvas-text);
-      font-family: var(--font-sans);
+      background:
+        linear-gradient(90deg, transparent 49.8%, rgba(255,255,255,.025) 50%, transparent 50.2%),
+        var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
     }
+    a { color: inherit; text-underline-offset: .25em; }
     nav {
       position: sticky;
       top: 0;
+      z-index: 2;
       display: flex;
+      align-items: center;
       justify-content: space-between;
-      padding: 1.25rem 1.5rem;
-      backdrop-filter: blur(12px);
-      background: rgba(0,0,0,0.72);
-      border-bottom: 1px solid var(--panel-border);
+      padding: 1rem clamp(1rem, 4vw, 3rem);
+      background: rgba(9,9,9,.88);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(14px);
     }
+    .wordmark, code, .metric strong { font-family: var(--mono); }
+    .wordmark { letter-spacing: .08em; }
     button {
+      border: 1px solid var(--line);
+      border-radius: 999px;
       background: transparent;
-      color: var(--canvas-text);
-      border: 1px solid var(--panel-border);
-      padding: 0.45rem 0.8rem;
+      color: var(--text);
+      padding: .45rem .8rem;
       cursor: pointer;
     }
-    main {
-      width: min(980px, calc(100vw - 2rem));
-      margin: 0 auto;
-      padding: 4rem 0 6rem;
+    main { width: min(1180px, calc(100% - 2rem)); margin: 0 auto; }
+    header { padding: clamp(5rem, 13vw, 10rem) 0 5rem; }
+    .eyebrow {
+      color: var(--signal);
+      font: .75rem var(--mono);
+      letter-spacing: .15em;
+      text-transform: uppercase;
     }
     h1 {
-      font-size: clamp(3rem, 8vw, 6.5rem);
-      font-weight: 200;
-      margin: 0 0 1rem;
-      letter-spacing: -0.04em;
+      max-width: 10ch;
+      margin: .7rem 0 1.5rem;
+      font-size: clamp(4.25rem, 14vw, 10rem);
+      font-weight: 250;
+      line-height: .82;
+      letter-spacing: -.08em;
     }
-    h2 {
-      margin-top: 3rem;
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-      font-size: 0.92rem;
-      color: var(--text-muted);
+    .lead { max-width: 720px; color: var(--muted); font-size: clamp(1.05rem, 2vw, 1.35rem); line-height: 1.65; }
+    .actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 2rem; }
+    .action {
+      border: 1px solid var(--line);
+      padding: .75rem 1rem;
+      text-decoration: none;
+      font: .82rem var(--mono);
     }
-    p, li {
-      color: var(--text-muted);
-      line-height: 1.75;
-    }
-    .grid {
-      display: grid;
-      gap: 1.5rem;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    }
-    .panel {
-      border: 1px solid var(--panel-border);
-      padding: 1rem;
-      min-height: 100%;
-    }
-    code {
-      font-family: var(--font-mono);
-      color: var(--accent);
+    .action.primary { background: var(--signal); color: #111; border-color: var(--signal); }
+    section { padding: 4rem 0; border-top: 1px solid var(--line); }
+    h2 { margin: 0 0 2rem; font-size: clamp(1.7rem, 4vw, 3rem); font-weight: 350; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+    .card { min-height: 210px; padding: 1.4rem; background: var(--panel); }
+    .card span { color: var(--signal); font: .72rem var(--mono); }
+    .card h3 { margin: 2.3rem 0 .7rem; font-size: 1.2rem; font-weight: 500; }
+    .card p, .note { color: var(--muted); line-height: 1.65; }
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); }
+    .metric { padding: 1.4rem; border-right: 1px solid var(--line); }
+    .metric:last-child { border: 0; }
+    .metric strong { display: block; color: var(--signal); font-size: clamp(1.6rem, 3vw, 2.5rem); }
+    .metric small { color: var(--muted); }
+    pre { overflow-x: auto; margin: 1.5rem 0 0; padding: 1.25rem; background: #050505; border: 1px solid var(--line); color: #ddd; line-height: 1.7; }
+    footer { padding: 3rem 0 5rem; color: var(--muted); font-size: .85rem; border-top: 1px solid var(--line); }
+    @media (max-width: 760px) {
+      .grid { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: 1fr 1fr; }
+      .metric:nth-child(2) { border-right: 0; }
+      .metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
     }
   </style>
 </head>
 <body>
   <nav>
-    <div>glic-metal</div>
-    <button id="toggle">EN</button>
+    <div class="wordmark">GLIC—METAL</div>
+    <button id="language" type="button" aria-label="Switch language">EN</button>
   </nav>
   <main>
-    <section>
-      <h1 data-ja="glic-metal" data-en="glic-metal">glic-metal</h1>
-      <p data-ja="cmake_minimum_required(VERSION 3.16)" data-en="cmake_minimum_required(VERSION 3.16)">cmake_minimum_required(VERSION 3.16)</p>
+    <header>
+      <div class="eyebrow">C++20 / Metal Compute / Realtime</div>
+      <h1>GLIC Metal</h1>
+      <p class="lead" data-ja="GlitchCodec/GLICの構造をC++20とMetalへ移植し、映像入力をリアルタイムに破壊・再構成する実験的なオープンソース実装です。原作準拠と高速な視覚近似を、明示的に別の処理モードとして提供します。" data-en="An experimental open-source C++20 and Metal port that breaks and reconstructs live video using the structure of GlitchCodec/GLIC. Original-style fidelity and fast visual approximation are exposed as explicitly separate modes.">GlitchCodec/GLICの構造をC++20とMetalへ移植し、映像入力をリアルタイムに破壊・再構成する実験的なオープンソース実装です。原作準拠と高速な視覚近似を、明示的に別の処理モードとして提供します。</p>
+      <div class="actions">
+        <a class="action primary" href="../output/preset-gallery/index.html" data-ja="プリセットを見る" data-en="View presets">プリセットを見る</a>
+        <a class="action" href="../README.md" data-ja="ソースと使い方" data-en="Source &amp; usage">ソースと使い方</a>
+        <a class="action" href="../docs/ORIGINAL_PRESET_REALTIME.md" data-ja="互換性レポート" data-en="Fidelity report">互換性レポート</a>
+      </div>
+    </header>
+
+    <section aria-labelledby="modes-title">
+      <h2 id="modes-title" data-ja="3つの実行モード" data-en="Three execution modes">3つの実行モード</h2>
+      <div class="grid">
+        <article class="card">
+          <span>01 / STRICT</span>
+          <h3 data-ja="原作スタイル" data-en="Original style">原作スタイル</h3>
+          <p data-ja="Processing互換の乱数順序、四分木分割、予測、量子化、CDF 9/7再構成を優先する37プリセットの高忠実度経路。" data-en="A 37-preset high-fidelity lane prioritizing Processing-compatible RNG order, quadtree segmentation, prediction, quantization, and CDF 9/7 reconstruction.">Processing互換の乱数順序、四分木分割、予測、量子化、CDF 9/7再構成を優先する37プリセットの高忠実度経路。</p>
+        </article>
+        <article class="card">
+          <span>02 / FAST MATCH</span>
+          <h3 data-ja="解析済み高速化" data-en="Analyzed acceleration">解析済み高速化</h3>
+          <p data-ja="視覚差と処理時間の両方を評価し、安全なプリセットだけに近似とキャッシュを適用。毎フレームの確保を避けます。" data-en="Applies approximation and caching only to presets that pass both visual-difference and timing gates, while avoiding per-frame allocation.">視覚差と処理時間の両方を評価し、安全なプリセットだけに近似とキャッシュを適用。毎フレームの確保を避けます。</p>
+        </article>
+        <article class="card">
+          <span>03 / COMPAT</span>
+          <h3 data-ja="全144プリセット" data-en="All 144 presets">全144プリセット</h3>
+          <p data-ja="上流プリセットの意味を読み込み、リアルタイム向けの別系統の視覚表現として処理。原作とのピクセル一致は主張しません。" data-en="Loads upstream preset semantics into a separate realtime visual lane. It does not claim pixel equivalence with the original application.">上流プリセットの意味を読み込み、リアルタイム向けの別系統の視覚表現として処理。原作とのピクセル一致は主張しません。</p>
+        </article>
+      </div>
     </section>
-    <section class="grid">
-      <article class="panel">
-        <h2 data-ja="役割" data-en="Role">役割</h2>
-        <p data-ja="repo" data-en="repo">repo</p>
-      </article>
-      <article class="panel">
-        <h2 data-ja="ルート" data-en="Root">ルート</h2>
-        <p><code>../glic-metal</code></p>
-      </article>
+
+    <section aria-labelledby="numbers-title">
+      <h2 id="numbers-title" data-ja="公開仕様" data-en="Public specification">公開仕様</h2>
+      <div class="metrics">
+        <div class="metric"><strong>144</strong><small data-ja="固定上流プリセット" data-en="pinned upstream presets">固定上流プリセット</small></div>
+        <div class="metric"><strong>37</strong><small data-ja="原作スタイル対応" data-en="original-style presets">原作スタイル対応</small></div>
+        <div class="metric"><strong>960×540</strong><small data-ja="最低リアルタイム解像度" data-en="minimum realtime resolution">最低リアルタイム解像度</small></div>
+        <div class="metric"><strong>20 fps</strong><small data-ja="許容性能フロア" data-en="acceptance performance floor">許容性能フロア</small></div>
+      </div>
+      <p class="note" data-ja="30fpsの認証結果は個別のベンチマーク条件とともに記録します。リアルタイム合格を原作との完全一致とは扱いません。" data-en="30 fps certifications are recorded together with their exact benchmark conditions. A realtime pass is not treated as proof of pixel equivalence with the original.">30fpsの認証結果は個別のベンチマーク条件とともに記録します。リアルタイム合格を原作との完全一致とは扱いません。</p>
     </section>
-    <section>
-      <h2 data-ja="主要項目" data-en="Key Paths">主要項目</h2>
-      <ul><li><code>.cache/</code></li><li><code>.claude/</code></li><li><code>.DS_Store</code></li><li><code>AGENTS.md</code></li><li><code>build/</code></li><li><code>CMakeLists.txt</code></li><li><code>daito-testimage.png</code></li><li><code>examples/</code></li><li><code>external/</code></li><li><code>output/</code></li><li><code>presets/</code></li><li><code>README.md</code></li><li><code>src/</code></li><li><code>website/</code></li></ul>
+
+    <section aria-labelledby="start-title">
+      <h2 id="start-title" data-ja="ビルド" data-en="Build">ビルド</h2>
+      <p class="note" data-ja="サブモジュールを含めて取得し、CMakeでビルドします。MetalとWebカメラアプリにはmacOSとFull Xcodeが必要です。" data-en="Clone with submodules and build with CMake. Metal and the webcam application require macOS and full Xcode.">サブモジュールを含めて取得し、CMakeでビルドします。MetalとWebカメラアプリにはmacOSとFull Xcodeが必要です。</p>
+      <pre><code>git clone --recurse-submodules &lt;repository-url&gt;
+cd glic-metal
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure</code></pre>
     </section>
-    <section>
-      <h2 data-ja="Submodules" data-en="Submodules">Submodules</h2>
-      <ul><li><code>external/stb</code></li></ul>
-    </section>
+
+    <footer>
+      <span data-ja="MIT License。GlitchCodec/GLICを基にした独立メンテナンスの移植であり、公式リリースではありません。" data-en="MIT License. An independently maintained port based on GlitchCodec/GLIC; not an official release.">MIT License。GlitchCodec/GLICを基にした独立メンテナンスの移植であり、公式リリースではありません。</span>
+    </footer>
   </main>
   <script>
-    const toggle = document.getElementById('toggle');
-    let current = 'ja';
-    toggle.addEventListener('click', () => {
-      current = current === 'ja' ? 'en' : 'ja';
-      toggle.textContent = current === 'ja' ? 'EN' : 'JA';
-      for (const node of document.querySelectorAll('[data-ja][data-en]')) {
-        node.textContent = node.dataset[current];
-      }
-      document.documentElement.lang = current;
+    const button = document.querySelector('#language');
+    button.addEventListener('click', () => {
+      const next = document.documentElement.lang === 'ja' ? 'en' : 'ja';
+      document.documentElement.lang = next;
+      button.textContent = next === 'ja' ? 'EN' : 'JA';
+      document.querySelectorAll('[data-ja][data-en]').forEach((node) => {
+        node.textContent = node.dataset[next];
+      });
     });
   </script>
 </body>

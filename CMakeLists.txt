@@ -151,7 +151,9 @@ if(APPLE)
         MACOSX_BUNDLE_INFO_PLIST
             "${CMAKE_SOURCE_DIR}/resources/GLICWebcamPreview-Info.plist")
     set_property(TARGET glic_webcam_preview APPEND PROPERTY LINK_DEPENDS
-        "${CMAKE_SOURCE_DIR}/config/fast-match-allowlist.json")
+        "${CMAKE_SOURCE_DIR}/config/fast-match-allowlist.json"
+        "${CMAKE_SOURCE_DIR}/LICENSE"
+        "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md")
     add_custom_command(TARGET glic_webcam_preview POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources"
@@ -164,6 +166,12 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/config/fast-match-allowlist.json"
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/fast-match-allowlist.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/LICENSE"
+            "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/LICENSE"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+            "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/THIRD_PARTY_NOTICES.md"
         COMMAND /usr/bin/codesign --force --sign -
             "$<TARGET_BUNDLE_DIR:glic_webcam_preview>"
         VERBATIM)
@@ -242,6 +250,10 @@ if(BUILD_TESTING)
         add_test(NAME glic_original_metal_manifest_dirty_source
                  COMMAND "${Python3_EXECUTABLE}"
                          "${CMAKE_SOURCE_DIR}/tests/test_write_original_metal_manifest.py")
+        add_test(NAME glic_public_release_layout
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${CMAKE_SOURCE_DIR}/scripts/check_public_release.py"
+                         --source "${CMAKE_SOURCE_DIR}")
     endif()
 
     add_executable(glic_realtime_tests tests/realtime_tests.cpp)
@@ -321,6 +333,8 @@ install(DIRECTORY presets/
         DESTINATION share/glic-metal/presets)
 install(FILES presets.upstream.sha256
         DESTINATION share/glic-metal)
+install(FILES README.md LICENSE THIRD_PARTY_NOTICES.md
+        DESTINATION share/doc/glic-metal)
 if(APPLE)
     install(FILES "${GLIC_METALLIB}" DESTINATION lib/glic)
 endif()

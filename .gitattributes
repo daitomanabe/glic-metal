@@ -1,0 +1,11 @@
+# Keep generated preset artifacts out of language statistics and code review.
+output/preset-gallery/** linguist-generated=true
+output/preset-gallery/**/*.png binary
+output/preset-gallery/**/*.glic binary
+presets/** linguist-generated=true
+
+# Preserve shell scripts and manifests consistently across platforms.
+*.sh text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+*.md text eol=lf

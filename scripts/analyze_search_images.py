@@ -521,13 +521,8 @@ def load_cache(path: Path, analyzer_fingerprint: str) -> dict[str, dict[str, Any
 
 
 def parse_args() -> argparse.Namespace:
-    default_runner = Path.home() / ".codex/skills/visual-liveliness/scripts/run.sh"
-    default_feature_python = Path(
-        os.environ.get(
-            "VISUAL_LIVELINESS_PYTHON",
-            str(Path.home() / ".cache/visual-liveliness/venv/bin/python"),
-        )
-    )
+    runner_from_environment = os.environ.get("VISUAL_LIVELINESS_RUNNER")
+    default_feature_python = Path(os.environ.get("VISUAL_LIVELINESS_PYTHON", sys.executable))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--archive", type=Path)
@@ -536,7 +531,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--runner",
         type=Path,
-        default=Path(os.environ.get("VISUAL_LIVELINESS_RUNNER", str(default_runner))),
+        default=Path(runner_from_environment) if runner_from_environment else None,
+        required=runner_from_environment is None,
+        help="visual-liveliness run.sh (or set VISUAL_LIVELINESS_RUNNER)",
     )
     parser.add_argument("--feature-python", type=Path, default=default_feature_python)
     parser.add_argument(

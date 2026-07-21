@@ -299,7 +299,7 @@ Runs below those evidence minima can report `timing_passed`, but cannot report
 
 #### Previous certified Metal baseline (`6e1d1f8`, 2026-07-20)
 
-The previous isolated baseline was measured on `rhizoma30`, a MacBook Pro
+The previous isolated baseline was measured on a dedicated MacBook Pro
 `Mac16,5` with Apple M4 Max (16 CPU cores) and 128 GB RAM. At 960 x 540 with
 10 warm-up and 120 measured frames, `metal-original-visual` passed all 37
 supported presets. Both mean and p95 remained below 33.333 ms:

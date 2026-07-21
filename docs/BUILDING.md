@@ -1,0 +1,63 @@
+# Building GLIC Metal
+
+## Requirements
+
+- CMake 3.16 or newer
+- A C++20 compiler
+- Python 3 for analysis scripts and test adapters
+- The `external/stb` Git submodule
+- Full Xcode in `/Applications/Xcode.app` for Metal and the webcam app
+
+Python image-analysis workflows additionally use the packages in
+`requirements-qa.txt`.
+
+## Clone and build
+
+```bash
+git clone --recurse-submodules <repository-url>
+cd glic-metal
+python3 -m pip install -r requirements-qa.txt
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+```
+
+If the repository was cloned without submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
+## macOS application
+
+```bash
+cmake --build build --target glic_webcam_preview --parallel
+open "build/GLIC Webcam Preview.app"
+```
+
+The first launch requests camera permission. The generated application is
+ad-hoc signed for local testing. Distribution outside the local machine needs
+an appropriate Developer ID signature and notarization.
+
+## Install tree
+
+```bash
+cmake --install build --prefix dist
+```
+
+This installs command-line tools, presets, scripts, the macOS application when
+available, and the project/third-party license notices.
+
+## Optional ranking pipeline
+
+The ranking workflow intentionally does not bundle the visual-liveliness
+measurement tool. Point to a compatible runner explicitly:
+
+```bash
+export VISUAL_LIVELINESS_RUNNER=/absolute/path/to/visual-liveliness/scripts/run.sh
+export GLIC_REALTIME_CERTIFIER="$PWD/build/glic_realtime_certify"
+scripts/build_ranked_catalog.sh search-runs/<run-name>
+```
+
+Generated videos, search runs, build trees, and local test inputs are ignored
+by Git.

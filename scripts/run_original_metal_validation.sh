@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Reproducible original-style Metal certification on explicit test assets.
-# Video QA uses the global video-render-qa skill unless --skip-video-qa is set.
+# Video QA uses tools below AGENT_SKILLS_ROOT unless --skip-video-qa is set.
 
 set -u
 
@@ -165,7 +165,8 @@ run_logged "validate visible dry/wet difference" "$output_dir/validate-effect-di
   "$python_bin" "$validator" --effect-difference "$effect_json"
 
 if [ "$skip_video_qa" -eq 0 ]; then
-  skills_root="${AGENT_SKILLS_ROOT:-${HOME}/.codex/skills}"
+  skills_root="${AGENT_SKILLS_ROOT:-}"
+  [ -n "$skills_root" ] || fail "set AGENT_SKILLS_ROOT or pass --skip-video-qa"
   qa_guard="$skills_root/video-render-qa-python-env/scripts/ensure_video_render_qa_python.py"
   qa_evaluator="$skills_root/video-render-qa/scripts/evaluate_video_render.py"
   [ -f "$qa_guard" ] || fail "video-render-qa Python guard was not found: $qa_guard"

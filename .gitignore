@@ -65,9 +65,6 @@ cmake-build-*/
 __pycache__/
 *.py[cod]
 # workspace-repo-normalizer: end
-# Local-only structure notes
-FILE-STRUCTURE.md
-
 # Committed preset effect gallery
 !output/
 output/*

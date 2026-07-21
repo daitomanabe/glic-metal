@@ -1,31 +1,41 @@
-        # AGENTS.md
+# Repository guidance
 
-        ## Repository Role
+## Role
 
-        - Name: `glic-metal`
-        - Role: `repo`
-        - Original source path: `GLIC/implementation/glic-cpp`
-- Public surface: website/
+- Repository: `glic-metal`
+- Upstream: `GlitchCodec/GLIC`
+- Public overview: `README.md` and `website/`
+- This directory is the canonical Git root.
 
-        ## Working Rules
+## Working rules
 
-        - This root is the canonical git root for this repository.
-        - Nested repositories must stay as submodules, never as raw nested `.git` directories.
-        - Do not merge sibling repositories back into this tree.
-        - Preserve generated bilingual documentation unless you are intentionally updating it.
+- Keep nested repositories as submodules; never commit nested `.git`
+  directories.
+- Preserve the distinction between the file codec, `original_visual`, and
+  `compat_realtime` in code and documentation.
+- Preserve bilingual public documentation when changing user-facing behavior.
+- Keep generated videos, camera captures, search runs, and build trees out of
+  Git. `output/preset-gallery/` is the only intentional tracked-output area.
+- Never commit credentials, environment files, personal input media, or
+  machine-specific absolute paths.
 
-        ## Important Paths
+## Important paths
 
-        - `README.md` is the human-facing overview.
-        - `FILE-STRUCTURE.md` documents the normalized layout.
-        - Public materials live in `website/`, `webpage/`, `ui/`, or root `index.html`.
+- `FILE-STRUCTURE.md` maps the normalized public layout.
+- `docs/BUILDING.md` is the reproducible build entry point.
+- `docs/ORIGINAL_PRESET_REALTIME.md` defines compatibility claims.
+- `docs/PUBLIC_RELEASE.md` contains the publication gate.
+- `presets.upstream.sha256` pins the upstream preset corpus.
 
-        ## Submodules
+## Validation
 
-        - `external/stb`
+Before committing a public-facing change, run:
 
-        ## Safe Changes
+```bash
+python3 scripts/check_public_release.py --source .
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+```
 
-        - Update `.gitignore` by appending to the generated block when needed.
-        - Keep vendor dependencies isolated as submodules.
-        - Prefer small, repo-local commits.
+Metal and webcam changes require macOS validation. Prefer small, repository-
+local commits, and update `CHANGELOG.md` for user-visible behavior.

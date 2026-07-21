@@ -9,7 +9,7 @@ set -u
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 run_dir="${1:-}"
 python_bin="${RANKING_PYTHON:-/usr/bin/python3}"
-liveliness_runner="${VISUAL_LIVELINESS_RUNNER:-${HOME}/.codex/skills/visual-liveliness/scripts/run.sh}"
+liveliness_runner="${VISUAL_LIVELINESS_RUNNER:-}"
 certification_runner="${PERFORMANCE_CERTIFICATION_RUNNER:-${script_dir}/certify_search_performance.py}"
 certifier_bin="${GLIC_REALTIME_CERTIFIER:-}"
 
@@ -25,8 +25,8 @@ if [ ! -x "$python_bin" ]; then
   /bin/echo "Ranking Python is not executable: ${python_bin}" >&2
   exit 2
 fi
-if [ ! -f "$liveliness_runner" ]; then
-  /bin/echo "visual-liveliness runner was not found: ${liveliness_runner}" >&2
+if [ -z "$liveliness_runner" ] || [ ! -f "$liveliness_runner" ]; then
+  /bin/echo "Set VISUAL_LIVELINESS_RUNNER to the visual-liveliness run.sh path" >&2
   exit 2
 fi
 if [ ! -f "$certification_runner" ]; then
@@ -37,7 +37,6 @@ fi
 if [ -z "$certifier_bin" ]; then
   for candidate in \
     "${script_dir}/glic_realtime_certify" \
-    "${script_dir}/../build-rhizoma/glic_realtime_certify" \
     "${script_dir}/../build/glic_realtime_certify"; do
     if [ -x "$candidate" ]; then
       certifier_bin="$candidate"

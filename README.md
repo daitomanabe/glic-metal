@@ -2,6 +2,16 @@
 
 [日本語](#日本語) | [English](#english)
 
+**Status: pre-release.** The source, tests, and macOS application are under
+active development; no stable binary release has been tagged yet.
+
+[Build guide](docs/BUILDING.md) ·
+[Original-preset fidelity](docs/ORIGINAL_PRESET_REALTIME.md) ·
+[Preset catalog](docs/original-preset-catalog.md) ·
+[Repository structure](FILE-STRUCTURE.md) ·
+[Release checklist](docs/PUBLIC_RELEASE.md) ·
+[Contributing](CONTRIBUTING.md)
+
 ---
 
 ## 日本語
@@ -22,7 +32,7 @@ C++20とMetal ComputeによるGLIC (GLitch Image Codec) のリアルタイム映
 
 - C++20によるファイルcodecと、CPU / Metalリアルタイム処理
 - モダンC++機能を活用（`std::ranges`, `std::span`, `std::bit_cast`, `[[likely]]`属性など）
-- クロスプラットフォーム対応 (macOS, Linux, Windows)
+- CPU経路はmacOS / LinuxをCI対象とし、Windowsは設計対象・未認証
 - コマンドラインインターフェース
 - **上流144プリセットを意味変換・互換性分類**（SHA-256固定コーパス）
 - 24種類の予測アルゴリズム（8種類追加）
@@ -411,7 +421,8 @@ The port keeps the file codec, original parameter semantics, realtime visual app
 
 - C++20 file codec plus CPU / Metal realtime processing
 - Modern C++ features (`std::ranges`, `std::span`, `std::bit_cast`, `[[likely]]` attributes, etc.)
-- Cross-platform support (macOS, Linux, Windows)
+- CPU paths are CI-tested on macOS and Linux; Windows is designed for but not
+  yet covered by the public CI matrix
 - Command-line interface
 - **All 144 upstream presets decoded and compatibility-classified** from a SHA-256-pinned corpus
 - 24 prediction algorithms (+8 new)
@@ -769,7 +780,9 @@ Haar, Daubechies (DB2-DB10), Symlet (SYM2-SYM10), Coiflet (COIF1-COIF5)
 
 ## License
 
-MIT License
+MIT License. See [LICENSE](LICENSE) and
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This is an independently
+maintained port and is not an official GlitchCodec release.
 
 ## Acknowledgments
 
