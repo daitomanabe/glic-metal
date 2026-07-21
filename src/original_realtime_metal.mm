@@ -53,8 +53,12 @@ std::string metalErrorString(NSError *error) {
                          ?: "Unknown Metal error");
 }
 
-NSArray<NSString *> *metalLibraryCandidates() {
+NSArray<NSString *> *
+metalLibraryCandidates(const std::string &explicitLibraryPath) {
   NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+  if (!explicitLibraryPath.empty())
+    [candidates addObject:
+                    [NSString stringWithUTF8String:explicitLibraryPath.c_str()]];
   NSString *environmentPath =
       NSProcessInfo.processInfo.environment[@"GLIC_METALLIB_PATH"];
   if (environmentPath.length > 0)
@@ -142,7 +146,9 @@ public:
     threadgroupCdfEnabled_ =
         disableThreadgroupCdf == nullptr ||
         std::string_view(disableThreadgroupCdf) == "0";
-    device_ = MTLCreateSystemDefaultDevice();
+    device_ = options_.metalDevice != nullptr
+                  ? (__bridge id<MTLDevice>)options_.metalDevice
+                  : MTLCreateSystemDefaultDevice();
     if (device_ == nil) {
       error = "No Metal device is available";
       return false;
@@ -154,7 +160,8 @@ public:
     }
 
     NSError *libraryError = nil;
-    for (NSString *candidate in metalLibraryCandidates()) {
+    for (NSString *candidate in
+         metalLibraryCandidates(options_.metalLibraryPath)) {
       if (![NSFileManager.defaultManager fileExistsAtPath:candidate])
         continue;
       library_ = [device_ newLibraryWithURL:[NSURL fileURLWithPath:candidate]

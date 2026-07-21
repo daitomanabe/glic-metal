@@ -46,7 +46,14 @@ cmake --install build --prefix dist
 ```
 
 This installs command-line tools, presets, scripts, the macOS application when
-available, and the project/third-party license notices.
+available, the `GlicMetal::GlicMetal` CMake package, public embedding headers,
+and the project/third-party license notices. See
+[EMBEDDING.md](EMBEDDING.md) for host-application integration.
+
+When included with `add_subdirectory()`, the project only builds the library by
+default. Set `GLIC_BUILD_STANDALONE=ON` to also build the CLI, benchmarks,
+tests, examples, and webcam application. `GLIC_INSTALL` controls installation
+rules independently.
 
 ## Optional ranking pipeline
 

@@ -32,8 +32,12 @@ std::string errorString(NSError *error) {
                          ?: "Unknown Metal error");
 }
 
-NSArray<NSString *> *metalLibraryCandidates() {
+NSArray<NSString *> *
+metalLibraryCandidates(const std::string &explicitLibraryPath) {
   NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+  if (!explicitLibraryPath.empty())
+    [candidates addObject:
+                    [NSString stringWithUTF8String:explicitLibraryPath.c_str()]];
   NSString *environmentPath =
       NSProcessInfo.processInfo.environment[@"GLIC_METALLIB_PATH"];
   if (environmentPath.length > 0)
@@ -62,8 +66,13 @@ NSArray<NSString *> *metalLibraryCandidates() {
 
 class MetalRealtimeBackend final : public RealtimeBackend {
 public:
+  explicit MetalRealtimeBackend(RealtimeBackendCreateOptions createOptions)
+      : createOptions_(std::move(createOptions)) {}
+
   bool initialize(std::string &error) {
-    device_ = MTLCreateSystemDefaultDevice();
+    device_ = createOptions_.metalDevice != nullptr
+                  ? (__bridge id<MTLDevice>)createOptions_.metalDevice
+                  : MTLCreateSystemDefaultDevice();
     if (device_ == nil) {
       error = "No Metal device is available";
       return false;
@@ -77,7 +86,8 @@ public:
 
     NSError *libraryError = nil;
     NSString *loadedPath = nil;
-    for (NSString *candidate in metalLibraryCandidates()) {
+    for (NSString *candidate in
+         metalLibraryCandidates(createOptions_.metalLibraryPath)) {
       if (![NSFileManager.defaultManager fileExistsAtPath:candidate])
         continue;
       library_ = [device_ newLibraryWithURL:[NSURL fileURLWithPath:candidate]
@@ -248,6 +258,15 @@ public:
 private:
   bool processTextureObjects(id<MTLTexture> input, id<MTLTexture> output,
                              uint64_t frameIndex, std::string &error) {
+    if (input.device != device_ || output.device != device_) {
+      error = "Metal textures must belong to the configured Metal device";
+      return false;
+    }
+    if (input.pixelFormat != MTLPixelFormatBGRA8Unorm ||
+        output.pixelFormat != MTLPixelFormatBGRA8Unorm) {
+      error = "Metal texture interop requires BGRA8Unorm textures";
+      return false;
+    }
     if (input.width != static_cast<NSUInteger>(options_.width) ||
         input.height != static_cast<NSUInteger>(options_.height) ||
         output.width != static_cast<NSUInteger>(options_.width) ||
@@ -286,6 +305,17 @@ private:
   bool encodeTextureObjects(id<MTLCommandBuffer> commandBuffer,
                             id<MTLTexture> input, id<MTLTexture> output,
                             uint64_t frameIndex, std::string &error) {
+    if (commandBuffer.device != device_ || input.device != device_ ||
+        output.device != device_) {
+      error = "Metal command buffer and textures must use the configured "
+              "Metal device";
+      return false;
+    }
+    if (input.pixelFormat != MTLPixelFormatBGRA8Unorm ||
+        output.pixelFormat != MTLPixelFormatBGRA8Unorm) {
+      error = "Metal texture interop requires BGRA8Unorm textures";
+      return false;
+    }
     if (input.width != static_cast<NSUInteger>(options_.width) ||
         input.height != static_cast<NSUInteger>(options_.height) ||
         output.width != static_cast<NSUInteger>(options_.width) ||
@@ -337,6 +367,7 @@ private:
   id<MTLTexture> outputTexture_ = nil;
 
   RealtimePrepareOptions options_{};
+  RealtimeBackendCreateOptions createOptions_{};
   realtime::MetalPresetUniform presetUniform_{};
   RealtimeFrameStats lastStats_{};
   bool prepared_ = false;
@@ -346,7 +377,13 @@ private:
 
 std::unique_ptr<RealtimeBackend>
 createMetalRealtimeBackend(std::string &error) {
-  auto backend = std::make_unique<MetalRealtimeBackend>();
+  return createMetalRealtimeBackend(RealtimeBackendCreateOptions{}, error);
+}
+
+std::unique_ptr<RealtimeBackend>
+createMetalRealtimeBackend(const RealtimeBackendCreateOptions &options,
+                           std::string &error) {
+  auto backend = std::make_unique<MetalRealtimeBackend>(options);
   if (!backend->initialize(error))
     return nullptr;
   return backend;

@@ -15,6 +15,9 @@ semantic versioning for tagged releases.
   unattended search tooling.
 - Public release layout check, CI workflow, licensing, contribution, and
   security documentation.
+- Versioned C embedding API with preallocated BGRA/RGBA frame processing,
+  host-device Metal texture interop, an installable CMake package, and external
+  consumer tests.
 
 ### Changed
 

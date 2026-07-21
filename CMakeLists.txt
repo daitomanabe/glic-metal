@@ -1,5 +1,23 @@
 cmake_minimum_required(VERSION 3.16)
-project(glic_metal VERSION 1.0.0 LANGUAGES CXX)
+project(glic_metal VERSION 1.0.0 LANGUAGES C CXX)
+
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+    set(GLIC_TOP_LEVEL_DEFAULT ON)
+else()
+    set(GLIC_TOP_LEVEL_DEFAULT OFF)
+endif()
+option(GLIC_BUILD_STANDALONE
+       "Build GLIC command-line tools, benchmarks, tests, and macOS app"
+       ${GLIC_TOP_LEVEL_DEFAULT})
+option(GLIC_INSTALL "Install GLIC Metal and its CMake package"
+       ${GLIC_TOP_LEVEL_DEFAULT})
+
+set(GLIC_METAL_PRESETS_DIR "${PROJECT_SOURCE_DIR}/presets" CACHE PATH
+    "Runtime directory containing GLIC preset files")
+include(cmake/GlicMetalResources.cmake)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,6 +37,7 @@ set(CORE_SOURCES
     src/encoding.cpp
     src/bitio.cpp
     src/effects.cpp
+    src/glic_metal_c.cpp
     src/preset_loader.cpp
     src/realtime.cpp
     src/realtime_certification.cpp
@@ -53,6 +72,13 @@ set(HEADERS
 )
 
 add_library(glic_core STATIC ${CORE_SOURCES} ${HEADERS})
+add_library(GlicMetal::GlicMetal ALIAS glic_core)
+set_target_properties(glic_core PROPERTIES
+    EXPORT_NAME GlicMetal
+    OUTPUT_NAME glic_metal
+    POSITION_INDEPENDENT_CODE ON)
+target_compile_definitions(glic_core PRIVATE
+    "GLIC_METAL_VERSION_STRING=\"${PROJECT_VERSION}\"")
 
 # Processing/JWave evaluates source-level multiply and add operations
 # separately. Prevent host compiler contraction in the strict CPU oracle so an
@@ -63,11 +89,17 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
 endif()
 
 target_include_directories(glic_core
-    PUBLIC ${CMAKE_SOURCE_DIR}/src
+    PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/external/stb
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/external/stb
 )
+
+find_package(Threads REQUIRED)
+target_link_libraries(glic_core PUBLIC Threads::Threads)
 
 if(APPLE)
     enable_language(OBJCXX)
@@ -78,18 +110,20 @@ if(APPLE)
         message(FATAL_ERROR "Full Xcode is required for the Metal backend: ${GLIC_XCODE_DEVELOPER_DIR}")
     endif()
 
-    set(GLIC_METAL_AIR "${CMAKE_BINARY_DIR}/glic_realtime.air")
+    set(GLIC_METAL_AIR "${PROJECT_BINARY_DIR}/glic_realtime.air")
     set(GLIC_ORIGINAL_METAL_AIR
-        "${CMAKE_BINARY_DIR}/glic_original_realtime.air")
-    set(GLIC_METALLIB "${CMAKE_BINARY_DIR}/glic_realtime.metallib")
+        "${PROJECT_BINARY_DIR}/glic_original_realtime.air")
+    set(GLIC_METALLIB "${PROJECT_BINARY_DIR}/glic_realtime.metallib")
+    set(GLIC_METAL_METALLIB "${GLIC_METALLIB}" CACHE FILEPATH
+        "Compiled GLIC Metal shader library")
     add_custom_command(
         OUTPUT "${GLIC_METAL_AIR}"
         COMMAND ${CMAKE_COMMAND} -E env
             "DEVELOPER_DIR=${GLIC_XCODE_DEVELOPER_DIR}"
             /usr/bin/xcrun -sdk macosx metal -std=metal3.1
-            -c "${CMAKE_SOURCE_DIR}/src/glic_realtime.metal"
+            -c "${PROJECT_SOURCE_DIR}/src/glic_realtime.metal"
             -o "${GLIC_METAL_AIR}"
-        DEPENDS "${CMAKE_SOURCE_DIR}/src/glic_realtime.metal"
+        DEPENDS "${PROJECT_SOURCE_DIR}/src/glic_realtime.metal"
         VERBATIM
     )
     add_custom_command(
@@ -99,9 +133,9 @@ if(APPLE)
             /usr/bin/xcrun -sdk macosx metal -std=metal3.1
             -fmetal-math-mode=safe
             -fmetal-math-fp32-functions=precise
-            -c "${CMAKE_SOURCE_DIR}/src/original_realtime_metal_kernel.metal"
+            -c "${PROJECT_SOURCE_DIR}/src/original_realtime_metal_kernel.metal"
             -o "${GLIC_ORIGINAL_METAL_AIR}"
-        DEPENDS "${CMAKE_SOURCE_DIR}/src/original_realtime_metal_kernel.metal"
+        DEPENDS "${PROJECT_SOURCE_DIR}/src/original_realtime_metal_kernel.metal"
         VERBATIM
     )
     add_custom_command(
@@ -128,12 +162,13 @@ if(APPLE)
     )
     target_link_libraries(glic_core PUBLIC "-framework Foundation" "-framework Metal")
 
-    add_executable(glic_webcam_preview MACOSX_BUNDLE
-                   apps/glic_webcam_preview.mm)
+    if(GLIC_BUILD_STANDALONE)
+      add_executable(glic_webcam_preview MACOSX_BUNDLE
+                     apps/glic_webcam_preview.mm)
     set_source_files_properties(apps/glic_webcam_preview.mm
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc;-ffp-contract=off")
     target_compile_definitions(glic_webcam_preview PRIVATE
-        "GLIC_SOURCE_PRESETS_DIR=\"${CMAKE_SOURCE_DIR}/presets\"")
+        "GLIC_SOURCE_PRESETS_DIR=\"${PROJECT_SOURCE_DIR}/presets\"")
     target_link_libraries(glic_webcam_preview PRIVATE
         glic_core
         "-framework Accelerate"
@@ -149,11 +184,11 @@ if(APPLE)
         MACOSX_BUNDLE_BUNDLE_VERSION "1"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.0"
         MACOSX_BUNDLE_INFO_PLIST
-            "${CMAKE_SOURCE_DIR}/resources/GLICWebcamPreview-Info.plist")
+            "${PROJECT_SOURCE_DIR}/resources/GLICWebcamPreview-Info.plist")
     set_property(TARGET glic_webcam_preview APPEND PROPERTY LINK_DEPENDS
-        "${CMAKE_SOURCE_DIR}/config/fast-match-allowlist.json"
-        "${CMAKE_SOURCE_DIR}/LICENSE"
-        "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md")
+        "${PROJECT_SOURCE_DIR}/config/fast-match-allowlist.json"
+        "${PROJECT_SOURCE_DIR}/LICENSE"
+        "${PROJECT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md")
     add_custom_command(TARGET glic_webcam_preview POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources"
@@ -161,22 +196,24 @@ if(APPLE)
             "${GLIC_METALLIB}"
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/glic_realtime.metallib"
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_SOURCE_DIR}/presets"
+            "${PROJECT_SOURCE_DIR}/presets"
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/Presets"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/config/fast-match-allowlist.json"
+            "${PROJECT_SOURCE_DIR}/config/fast-match-allowlist.json"
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/fast-match-allowlist.json"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/LICENSE"
+            "${PROJECT_SOURCE_DIR}/LICENSE"
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/LICENSE"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+            "${PROJECT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/THIRD_PARTY_NOTICES.md"
         COMMAND /usr/bin/codesign --force --sign -
             "$<TARGET_BUNDLE_DIR:glic_webcam_preview>"
         VERBATIM)
+    endif()
 endif()
 
+if(GLIC_BUILD_STANDALONE)
 add_executable(glic src/main.cpp)
 target_link_libraries(glic PRIVATE glic_core)
 
@@ -199,17 +236,27 @@ target_link_libraries(glic_realtime_search PRIVATE glic_core)
 add_executable(glic_realtime_certify tools/realtime_certify.cpp)
 target_link_libraries(glic_realtime_certify PRIVATE glic_core)
 
+add_executable(glic_embed_example examples/embed_c.c)
+set_target_properties(glic_embed_example PROPERTIES LINKER_LANGUAGE CXX)
+target_link_libraries(glic_embed_example PRIVATE GlicMetal::GlicMetal)
+endif()
+
 # Compiler warnings
 if(MSVC)
     target_compile_options(glic_core PRIVATE /W4)
-    target_compile_options(glic_realtime_search PRIVATE /W4)
-    target_compile_options(glic_realtime_certify PRIVATE /W4)
+    if(GLIC_BUILD_STANDALONE)
+        target_compile_options(glic_realtime_search PRIVATE /W4)
+        target_compile_options(glic_realtime_certify PRIVATE /W4)
+    endif()
 else()
     target_compile_options(glic_core PRIVATE -Wall -Wextra -O3)
-    target_compile_options(glic_realtime_search PRIVATE -Wall -Wextra -Wpedantic)
-    target_compile_options(glic_realtime_certify PRIVATE -Wall -Wextra -Wpedantic)
+    if(GLIC_BUILD_STANDALONE)
+        target_compile_options(glic_realtime_search PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_options(glic_realtime_certify PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
 endif()
 
+if(GLIC_BUILD_STANDALONE)
 include(CTest)
 if(BUILD_TESTING)
     add_test(NAME glic_realtime_certifier_selftest
@@ -219,54 +266,54 @@ if(BUILD_TESTING)
     if(Python3_Interpreter_FOUND)
         add_test(NAME glic_performance_certification_adapter_selftest
                  COMMAND "${Python3_EXECUTABLE}"
-                         "${CMAKE_SOURCE_DIR}/scripts/certify_search_performance.py"
+                         "${PROJECT_SOURCE_DIR}/scripts/certify_search_performance.py"
                          --selftest)
         add_test(NAME glic_search_ranking
-                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/test_search_ranking.py")
+                 COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/test_search_ranking.py")
         add_test(NAME glic_original_visual_stream_filter
                  COMMAND "${Python3_EXECUTABLE}"
-                         "${CMAKE_SOURCE_DIR}/tests/test_original_visual_filter.py"
+                         "${PROJECT_SOURCE_DIR}/tests/test_original_visual_filter.py"
                          --filter "$<TARGET_FILE:glic_original_visual_filter>"
-                         --presets "${CMAKE_SOURCE_DIR}/presets")
+                         --presets "${PROJECT_SOURCE_DIR}/presets")
         add_test(NAME glic_original_preset_catalog
                  COMMAND "${Python3_EXECUTABLE}"
-                         "${CMAKE_SOURCE_DIR}/tests/test_original_preset_catalog.py")
+                         "${PROJECT_SOURCE_DIR}/tests/test_original_preset_catalog.py")
         add_test(NAME glic_original_visual_tier_analysis
                  COMMAND "${Python3_EXECUTABLE}"
-                         "${CMAKE_SOURCE_DIR}/tests/test_analyze_original_visual_tier.py")
+                         "${PROJECT_SOURCE_DIR}/tests/test_analyze_original_visual_tier.py")
         add_test(NAME glic_process_video_helpers
                  COMMAND "${Python3_EXECUTABLE}"
-                         "${CMAKE_SOURCE_DIR}/tests/test_process_video_helpers.py")
+                         "${PROJECT_SOURCE_DIR}/tests/test_process_video_helpers.py")
         add_test(NAME glic_original_metal_reference_analysis
                  COMMAND "${Python3_EXECUTABLE}"
-                         "${CMAKE_SOURCE_DIR}/tests/test_compare_original_metal_reference.py")
+                         "${PROJECT_SOURCE_DIR}/tests/test_compare_original_metal_reference.py")
         add_test(NAME glic_fast_match_allowlist
                  COMMAND "${Python3_EXECUTABLE}"
-                         "${CMAKE_SOURCE_DIR}/tests/test_build_fast_match_allowlist.py")
+                         "${PROJECT_SOURCE_DIR}/tests/test_build_fast_match_allowlist.py")
         add_test(NAME glic_original_metal_validation_adapter_selftest
                  COMMAND "${Python3_EXECUTABLE}"
-                         "${CMAKE_SOURCE_DIR}/scripts/validate_original_metal_run.py"
+                         "${PROJECT_SOURCE_DIR}/scripts/validate_original_metal_run.py"
                          --selftest)
         add_test(NAME glic_original_metal_manifest_dirty_source
                  COMMAND "${Python3_EXECUTABLE}"
-                         "${CMAKE_SOURCE_DIR}/tests/test_write_original_metal_manifest.py")
+                         "${PROJECT_SOURCE_DIR}/tests/test_write_original_metal_manifest.py")
         add_test(NAME glic_public_release_layout
                  COMMAND "${Python3_EXECUTABLE}"
-                         "${CMAKE_SOURCE_DIR}/scripts/check_public_release.py"
-                         --source "${CMAKE_SOURCE_DIR}")
+                         "${PROJECT_SOURCE_DIR}/scripts/check_public_release.py"
+                         --source "${PROJECT_SOURCE_DIR}")
     endif()
 
     add_executable(glic_realtime_tests tests/realtime_tests.cpp)
     target_link_libraries(glic_realtime_tests PRIVATE glic_core)
     target_compile_definitions(glic_realtime_tests PRIVATE
-        "GLIC_TEST_PRESETS_DIR=\"${CMAKE_SOURCE_DIR}/presets\""
+        "GLIC_TEST_PRESETS_DIR=\"${PROJECT_SOURCE_DIR}/presets\""
     )
     add_test(NAME glic_realtime_all_presets COMMAND glic_realtime_tests)
 
     add_executable(glic_preset_loader_tests tests/preset_loader_tests.cpp)
     target_link_libraries(glic_preset_loader_tests PRIVATE glic_core)
     target_compile_definitions(glic_preset_loader_tests PRIVATE
-        "GLIC_TEST_PRESETS_DIR=\"${CMAKE_SOURCE_DIR}/presets\""
+        "GLIC_TEST_PRESETS_DIR=\"${PROJECT_SOURCE_DIR}/presets\""
     )
     add_test(NAME glic_preset_loader_golden COMMAND glic_preset_loader_tests)
 
@@ -274,7 +321,7 @@ if(BUILD_TESTING)
                    tests/original_realtime_tests.cpp)
     target_link_libraries(glic_original_realtime_tests PRIVATE glic_core)
     target_compile_definitions(glic_original_realtime_tests PRIVATE
-        "GLIC_TEST_PRESETS_DIR=\"${CMAKE_SOURCE_DIR}/presets\""
+        "GLIC_TEST_PRESETS_DIR=\"${PROJECT_SOURCE_DIR}/presets\""
     )
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(glic_original_realtime_tests PRIVATE
@@ -282,6 +329,29 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME glic_original_realtime_cpu_reference
              COMMAND glic_original_realtime_tests)
+
+    add_executable(glic_embed_c_api_tests tests/embed_c_api_tests.c)
+    set_target_properties(glic_embed_c_api_tests PROPERTIES LINKER_LANGUAGE CXX)
+    target_link_libraries(glic_embed_c_api_tests PRIVATE GlicMetal::GlicMetal)
+    target_compile_definitions(glic_embed_c_api_tests PRIVATE
+        "GLIC_TEST_PRESETS_DIR=\"${PROJECT_SOURCE_DIR}/presets\"")
+    add_test(NAME glic_embed_c_api COMMAND glic_embed_c_api_tests)
+
+    add_test(NAME glic_installed_consumer
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DGLIC_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+                     "-DGLIC_BINARY_DIR=${PROJECT_BINARY_DIR}"
+                     "-DGLIC_GENERATOR=${CMAKE_GENERATOR}"
+                     "-DGLIC_BUILD_CONFIG=$<CONFIG>"
+                     -P "${PROJECT_SOURCE_DIR}/tests/run_installed_consumer.cmake")
+
+    add_test(NAME glic_subdirectory_consumer
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DGLIC_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+                     "-DGLIC_BINARY_DIR=${PROJECT_BINARY_DIR}"
+                     "-DGLIC_GENERATOR=${CMAKE_GENERATOR}"
+                     "-DGLIC_BUILD_CONFIG=$<CONFIG>"
+                     -P "${PROJECT_SOURCE_DIR}/tests/run_subdirectory_consumer.cmake")
 
     if(APPLE)
         add_test(NAME glic_webcam_preview_selftest
@@ -293,7 +363,7 @@ if(BUILD_TESTING)
                                     PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
         target_link_libraries(glic_original_realtime_metal_tests PRIVATE glic_core)
         target_compile_definitions(glic_original_realtime_metal_tests PRIVATE
-            "GLIC_TEST_PRESETS_DIR=\"${CMAKE_SOURCE_DIR}/presets\""
+            "GLIC_TEST_PRESETS_DIR=\"${PROJECT_SOURCE_DIR}/presets\""
         )
         add_test(NAME glic_original_realtime_metal_reference
                  COMMAND glic_original_realtime_metal_tests)
@@ -302,13 +372,54 @@ if(BUILD_TESTING)
         set_source_files_properties(tests/realtime_metal_interop_tests.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
         target_link_libraries(glic_realtime_metal_interop_tests PRIVATE glic_core)
         target_compile_definitions(glic_realtime_metal_interop_tests PRIVATE
-            "GLIC_TEST_PRESETS_DIR=\"${CMAKE_SOURCE_DIR}/presets\""
+            "GLIC_TEST_PRESETS_DIR=\"${PROJECT_SOURCE_DIR}/presets\""
         )
         add_test(NAME glic_realtime_metal_texture_interop COMMAND glic_realtime_metal_interop_tests)
+
+        add_executable(glic_embed_metal_api_tests
+                       tests/embed_metal_api_tests.mm)
+        set_source_files_properties(tests/embed_metal_api_tests.mm
+                                    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+        target_link_libraries(glic_embed_metal_api_tests PRIVATE glic_core)
+        target_compile_definitions(glic_embed_metal_api_tests PRIVATE
+            "GLIC_TEST_PRESETS_DIR=\"${PROJECT_SOURCE_DIR}/presets\""
+            "GLIC_TEST_METALLIB=\"${GLIC_METALLIB}\"")
+        add_test(NAME glic_embed_metal_api COMMAND glic_embed_metal_api_tests)
     endif()
+endif()
 endif()
 
 # Installation
+if(GLIC_INSTALL)
+install(TARGETS glic_core
+        EXPORT GlicMetalTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(DIRECTORY include/
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(EXPORT GlicMetalTargets
+        FILE GlicMetalTargets.cmake
+        NAMESPACE GlicMetal::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/GlicMetal)
+configure_package_config_file(
+        cmake/GlicMetalConfig.cmake.in
+        "${PROJECT_BINARY_DIR}/GlicMetalConfig.cmake"
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/GlicMetal
+        PATH_VARS CMAKE_INSTALL_INCLUDEDIR CMAKE_INSTALL_DATADIR
+                  CMAKE_INSTALL_LIBDIR)
+write_basic_package_version_file(
+        "${PROJECT_BINARY_DIR}/GlicMetalConfigVersion.cmake"
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion)
+install(FILES
+        "${PROJECT_BINARY_DIR}/GlicMetalConfig.cmake"
+        "${PROJECT_BINARY_DIR}/GlicMetalConfigVersion.cmake"
+        cmake/GlicMetalResources.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/GlicMetal)
+
+if(GLIC_BUILD_STANDALONE)
 install(TARGETS glic glic_realtime_bench glic_realtime_filter
                 glic_original_visual_filter glic_original_realtime_bench
                 glic_realtime_search
@@ -329,12 +440,15 @@ install(PROGRAMS scripts/run_search_supervisor.sh scripts/build_search_catalog.p
         scripts/compare_original_metal_reference.py
         scripts/build_fast_match_allowlist.py
         DESTINATION bin)
+endif()
 install(DIRECTORY presets/
-        DESTINATION share/glic-metal/presets)
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/glic-metal/presets)
 install(FILES presets.upstream.sha256
-        DESTINATION share/glic-metal)
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/glic-metal)
 install(FILES README.md LICENSE THIRD_PARTY_NOTICES.md
-        DESTINATION share/doc/glic-metal)
+              docs/BUILDING.md docs/EMBEDDING.md
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/glic-metal)
 if(APPLE)
-    install(FILES "${GLIC_METALLIB}" DESTINATION lib/glic)
+    install(FILES "${GLIC_METALLIB}" DESTINATION ${CMAKE_INSTALL_LIBDIR}/glic)
+endif()
 endif()

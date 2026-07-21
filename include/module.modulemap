@@ -1,0 +1,4 @@
+module GlicMetal {
+  header "glic_metal/glic_metal.h"
+  export *
+}

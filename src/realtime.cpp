@@ -14,11 +14,19 @@ namespace glic {
 
 std::unique_ptr<RealtimeBackend>
 createRealtimeBackend(RealtimeBackendKind requested, std::string &error) {
+  return createRealtimeBackend(requested, RealtimeBackendCreateOptions{},
+                               error);
+}
+
+std::unique_ptr<RealtimeBackend>
+createRealtimeBackend(RealtimeBackendKind requested,
+                      const RealtimeBackendCreateOptions &options,
+                      std::string &error) {
 #if defined(GLIC_HAS_METAL)
   if (requested == RealtimeBackendKind::AUTO ||
       requested == RealtimeBackendKind::METAL) {
     std::string metalError;
-    if (auto backend = createMetalRealtimeBackend(metalError)) {
+    if (auto backend = createMetalRealtimeBackend(options, metalError)) {
       error.clear();
       return backend;
     }

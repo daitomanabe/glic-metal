@@ -45,6 +45,14 @@ struct RealtimeFrameStats {
   uint64_t frameIndex = 0;
 };
 
+// Optional host-owned Metal objects for embedded integrations. metalDevice is
+// an id<MTLDevice> bridged without transferring ownership. An empty library
+// path retains bundle/environment/executable-relative discovery.
+struct RealtimeBackendCreateOptions {
+  void *metalDevice = nullptr;
+  std::string metalLibraryPath;
+};
+
 // Visual-only realtime processing backend. Unlike GlicCodec, this API does not
 // serialize a .glic stream and immediately decode it again. It applies the
 // preset's prediction, quantization and transform character directly to a
@@ -93,6 +101,11 @@ public:
 
 std::unique_ptr<RealtimeBackend>
 createRealtimeBackend(RealtimeBackendKind requested, std::string &error);
+
+std::unique_ptr<RealtimeBackend>
+createRealtimeBackend(RealtimeBackendKind requested,
+                      const RealtimeBackendCreateOptions &options,
+                      std::string &error);
 
 RealtimeBackendKind realtimeBackendKindFromName(const std::string &name);
 const char *realtimeBackendKindName(RealtimeBackendKind kind) noexcept;

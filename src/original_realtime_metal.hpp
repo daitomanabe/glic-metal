@@ -55,6 +55,10 @@ struct OriginalRealtimeMetalOptions {
   // One preserves per-frame adaptive segmentation. Larger values reuse the
   // latest adaptive tree and its dependency schedule for this many frames.
   uint32_t segmentationReuseFrames = 1;
+  // Optional host id<MTLDevice>, bridged without transferring ownership.
+  void *metalDevice = nullptr;
+  // Optional explicit metallib path. Empty retains normal discovery.
+  std::string metalLibraryPath;
 };
 
 class OriginalRealtimeMetalLane {

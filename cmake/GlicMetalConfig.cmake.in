@@ -1,0 +1,18 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+
+include("${CMAKE_CURRENT_LIST_DIR}/GlicMetalTargets.cmake")
+
+set_and_check(GLIC_METAL_INCLUDE_DIR "@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@")
+set_and_check(GLIC_METAL_PRESETS_DIR
+              "@PACKAGE_CMAKE_INSTALL_DATADIR@/glic-metal/presets")
+if(APPLE)
+  set_and_check(GLIC_METAL_METALLIB
+                "@PACKAGE_CMAKE_INSTALL_LIBDIR@/glic/glic_realtime.metallib")
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/GlicMetalResources.cmake")
+
+check_required_components(GlicMetal)

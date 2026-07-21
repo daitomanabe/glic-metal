@@ -6,6 +6,7 @@
 active development; no stable binary release has been tagged yet.
 
 [Build guide](docs/BUILDING.md) ·
+[Embedding guide](docs/EMBEDDING.md) ·
 [Original-preset fidelity](docs/ORIGINAL_PRESET_REALTIME.md) ·
 [Preset catalog](docs/original-preset-catalog.md) ·
 [Repository structure](FILE-STRUCTURE.md) ·
@@ -31,6 +32,7 @@ C++20とMetal ComputeによるGLIC (GLitch Image Codec) のリアルタイム映
 ### 特徴
 
 - C++20によるファイルcodecと、CPU / Metalリアルタイム処理
+- C / C++ / Objective-C / Swiftから利用できる安定C ABIとCMake package
 - モダンC++機能を活用（`std::ranges`, `std::span`, `std::bit_cast`, `[[likely]]`属性など）
 - CPU経路はmacOS / LinuxをCI対象とし、Windowsは設計対象・未認証
 - コマンドラインインターフェース
@@ -420,6 +422,7 @@ The port keeps the file codec, original parameter semantics, realtime visual app
 ### Features
 
 - C++20 file codec plus CPU / Metal realtime processing
+- Stable C ABI and installable CMake package for C, C++, Objective-C, and Swift
 - Modern C++ features (`std::ranges`, `std::span`, `std::bit_cast`, `[[likely]]` attributes, etc.)
 - CPU paths are CI-tested on macOS and Linux; Windows is designed for but not
   yet covered by the public CI matrix

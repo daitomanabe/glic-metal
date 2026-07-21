@@ -11,12 +11,14 @@ glic-metal/
 ├── docs/                     build, fidelity, catalog, and release documents
 ├── examples/                 small preset/code examples
 ├── external/stb/             pinned image-I/O Git submodule
+├── include/glic_metal/       stable C and Objective-C embedding API
+├── cmake/                    installed CMake package configuration
 ├── output/preset-gallery/    committed generated comparison gallery
 ├── presets/                  144 SHA-256-pinned upstream presets
 ├── resources/                macOS bundle metadata
 ├── scripts/                  video, analysis, search, ranking, and QA tools
 ├── src/                      C++20, Objective-C++, and Metal implementation
-├── tests/                    C++, Objective-C++, and Python regression tests
+├── tests/                    API consumer, C++, Objective-C++, and Python tests
 ├── tools/                    filtering, search, and certification CLIs
 ├── website/                  static public project introduction
 ├── CMakeLists.txt            build, test, install, and bundle rules
