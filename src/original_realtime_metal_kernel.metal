@@ -59,9 +59,16 @@ constant float kOriginalCdf97WaveletLow[9] = {
     1.10592852e-09f, -2.41610941e-09f, 0.0f,
 };
 
+// Strict and Fast Match are specialized into distinct pipeline states.
+constant bool kOriginalFastCdf97 [[function_constant(0)]];
+
 static void originalAccumulateCdfProduct(thread float2 &sum, float value,
                                          float coefficientHigh,
                                          float coefficientLow) {
+    if (kOriginalFastCdf97) {
+        sum.x = fma(value, coefficientHigh + coefficientLow, sum.x);
+        return;
+    }
     float productHigh = value * coefficientHigh;
     float productLow = fma(value, coefficientHigh, -productHigh) +
                        value * coefficientLow;

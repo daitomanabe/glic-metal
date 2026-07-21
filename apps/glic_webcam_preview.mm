@@ -10,6 +10,7 @@
 #import <QuartzCore/QuartzCore.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -18,10 +19,12 @@
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #ifndef GLIC_SOURCE_PRESETS_DIR
@@ -32,7 +35,52 @@ namespace {
 
 constexpr int kProcessingWidth = 960;
 constexpr int kProcessingHeight = 540;
-constexpr double kTargetFramesPerSecond = 30.0;
+constexpr double kMinimumFramesPerSecond = 20.0;
+constexpr double kRealtimeBudgetMilliseconds =
+    1000.0 / kMinimumFramesPerSecond;
+constexpr double kGovernorHighWaterMilliseconds = 45.0;
+constexpr double kGovernorLowWaterMilliseconds = 30.0;
+
+enum class QualityMode : int {
+  Strict = 0,
+  FastMatch = 1,
+  Auto20 = 2,
+};
+
+enum class FrameSlotState {
+  Empty,
+  Capturing,
+  Ready,
+  Processing,
+};
+
+struct FrameSlot {
+  std::vector<glic::Color> input;
+  std::vector<glic::Color> output;
+  uint64_t sequence = 0;
+  FrameSlotState state = FrameSlotState::Empty;
+};
+
+const char *qualityModeName(QualityMode mode) {
+  switch (mode) {
+  case QualityMode::Strict:
+    return "Strict";
+  case QualityMode::FastMatch:
+    return "Fast Match";
+  case QualityMode::Auto20:
+    return "Auto 20fps";
+  }
+  return "Unknown";
+}
+
+glic::OriginalRealtimeMetalOptions laneOptions(QualityMode mode) {
+  glic::OriginalRealtimeMetalOptions options;
+  if (mode != QualityMode::Strict) {
+    options.fidelity = glic::OriginalRealtimeMetalFidelity::FastMatch;
+    options.segmentationReuseFrames = 2;
+  }
+  return options;
+}
 
 struct PresetChoice {
   std::string name;
@@ -151,6 +199,29 @@ int runSelfTest() {
                 static_cast<int>(name.size()), name.data(),
                 stats.totalMilliseconds, stats.gpuMilliseconds);
   }
+  glic::OriginalRealtimeMetalOptions fastOptions;
+  fastOptions.fidelity = glic::OriginalRealtimeMetalFidelity::FastMatch;
+  fastOptions.segmentationReuseFrames = 2;
+  auto fastLane = glic::createOriginalRealtimeMetalLane(fastOptions, error);
+  const int adaptiveIndex = findPresetIndex(choices, "colour_mess2");
+  glic::OriginalRealtimeMetalFrameStats firstFastStats;
+  glic::OriginalRealtimeMetalFrameStats secondFastStats;
+  if (!fastLane || adaptiveIndex < 0 ||
+      !fastLane->prepare(
+          kProcessingWidth, kProcessingHeight,
+          choices[static_cast<std::size_t>(adaptiveIndex)].config, error) ||
+      !fastLane->process(input, output, 0, &firstFastStats, error) ||
+      !fastLane->process(input, output, 1, &secondFastStats, error) ||
+      !firstFastStats.fastCdf97 || !secondFastStats.fastCdf97 ||
+      !secondFastStats.adaptiveScheduleReused ||
+      secondFastStats.adaptiveScheduleAge != 1u) {
+    std::fprintf(stderr, "FAIL Fast Match lane: %s\n", error.c_str());
+    return 7;
+  }
+  std::printf("fast_match=reuse%d first_ms=%.3f second_ms=%.3f\n",
+              secondFastStats.adaptiveScheduleReused ? 1 : 0,
+              firstFastStats.totalMilliseconds,
+              secondFastStats.totalMilliseconds);
   std::printf("PASS webcam preview Metal lane presets=%zu resolution=%dx%d\n",
               choices.size(), kProcessingWidth, kProcessingHeight);
   return 0;
@@ -204,25 +275,36 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   NSWindow *_window;
   GLICPreviewView *_previewView;
   NSPopUpButton *_presetPopup;
+  NSPopUpButton *_qualityPopup;
   NSTextField *_statusLabel;
   NSTextField *_metricsLabel;
   NSMenu *_presetMenu;
+  NSMenu *_qualityMenu;
 
   AVCaptureSession *_captureSession;
   AVCaptureVideoDataOutput *_captureOutput;
   dispatch_queue_t _captureQueue;
+  dispatch_queue_t _processingQueue;
   CVPixelBufferPoolRef _displayPixelBufferPool;
   CMVideoFormatDescriptionRef _displayFormatDescription;
 
   std::filesystem::path _presetDirectory;
   std::vector<PresetChoice> _presets;
+  std::unordered_set<std::string> _fastMatchAllowlist;
   std::unique_ptr<glic::OriginalRealtimeMetalLane> _lane;
-  std::vector<glic::Color> _inputPixels;
-  std::vector<glic::Color> _outputPixels;
+  std::array<FrameSlot, 3> _frameSlots;
+  std::mutex _frameSlotMutex;
+  uint64_t _captureSequence;
   std::atomic<int> _pendingPresetIndex;
+  std::atomic<int> _pendingQualityMode;
+  std::atomic<bool> _processingScheduled;
+  std::atomic<bool> _stopping;
   std::atomic<bool> _displayEnqueuePending;
   std::atomic<uint64_t> _droppedCaptureFrames;
   int _activePresetIndex;
+  QualityMode _activeQualityMode;
+  bool _activeFastMatch;
+  uint32_t _governorReuseFrames;
   uint64_t _frameIndex;
   uint64_t _rateFrameCount;
   std::chrono::steady_clock::time_point _rateStart;
@@ -239,10 +321,19 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   if (self != nil) {
     _captureQueue = dispatch_queue_create("ws.daito.glic.webcam.capture",
                                            DISPATCH_QUEUE_SERIAL);
+    _processingQueue = dispatch_queue_create("ws.daito.glic.webcam.processing",
+                                              DISPATCH_QUEUE_SERIAL);
     _pendingPresetIndex.store(-1);
+    _pendingQualityMode.store(static_cast<int>(QualityMode::Auto20));
+    _processingScheduled.store(false);
+    _stopping.store(false);
     _displayEnqueuePending.store(false);
     _droppedCaptureFrames.store(0);
     _activePresetIndex = -1;
+    _activeQualityMode = QualityMode::Auto20;
+    _activeFastMatch = false;
+    _governorReuseFrames = 2;
+    _captureSequence = 0;
     _frameIndex = 0;
     _rateFrameCount = 0;
     _rateStart = std::chrono::steady_clock::now();
@@ -273,14 +364,16 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
   (void)notification;
+  _stopping.store(true, std::memory_order_release);
   if (_captureQueue != nil) {
     dispatch_sync(_captureQueue, ^{
       if (self->_captureSession.running)
         [self->_captureSession stopRunning];
       [self->_captureOutput setSampleBufferDelegate:nil queue:nullptr];
-      self->_lane.reset();
     });
   }
+  if (_processingQueue != nil)
+    dispatch_sync(_processingQueue, ^{ self->_lane.reset(); });
   if (_displayFormatDescription != nullptr) {
     CFRelease(_displayFormatDescription);
     _displayFormatDescription = nullptr;
@@ -327,13 +420,21 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   _presetPopup.action = @selector(selectPreset:);
   _presetPopup.toolTip = @"Original GLIC preset";
 
+  _qualityPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+  _qualityPopup.translatesAutoresizingMaskIntoConstraints = NO;
+  [_qualityPopup addItemsWithTitles:@[ @"Strict", @"Fast Match", @"Auto 20fps" ]];
+  [_qualityPopup selectItemAtIndex:static_cast<NSInteger>(QualityMode::Auto20)];
+  _qualityPopup.target = self;
+  _qualityPopup.action = @selector(selectQuality:);
+  _qualityPopup.toolTip = @"Strict fidelity or realtime Fast Match policy";
+
   _statusLabel = [NSTextField labelWithString:@"Starting…"];
   _statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
   _statusLabel.font = [NSFont monospacedSystemFontOfSize:12
                                                  weight:NSFontWeightMedium];
   _statusLabel.alignment = NSTextAlignmentRight;
 
-  _metricsLabel = [NSTextField labelWithString:@"960×540 · 30 fps"];
+  _metricsLabel = [NSTextField labelWithString:@"960×540 · ≥20 fps"];
   _metricsLabel.translatesAutoresizingMaskIntoConstraints = NO;
   _metricsLabel.font = [NSFont monospacedDigitSystemFontOfSize:11
                                                      weight:NSFontWeightRegular];
@@ -350,6 +451,7 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
 
   [header addSubview:title];
   [header addSubview:_presetPopup];
+  [header addSubview:_qualityPopup];
   [header addSubview:rightStack];
 
   _previewView = [[GLICPreviewView alloc] initWithFrame:NSZeroRect];
@@ -369,11 +471,15 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
                                                 constant:18],
     [_presetPopup.centerYAnchor constraintEqualToAnchor:header.centerYAnchor],
     [_presetPopup.widthAnchor constraintEqualToConstant:250],
+    [_qualityPopup.leadingAnchor constraintEqualToAnchor:_presetPopup.trailingAnchor
+                                                 constant:10],
+    [_qualityPopup.centerYAnchor constraintEqualToAnchor:header.centerYAnchor],
+    [_qualityPopup.widthAnchor constraintEqualToConstant:128],
     [rightStack.trailingAnchor constraintEqualToAnchor:header.trailingAnchor
                                                constant:-18],
     [rightStack.centerYAnchor constraintEqualToAnchor:header.centerYAnchor],
     [rightStack.leadingAnchor constraintGreaterThanOrEqualToAnchor:
-                                  _presetPopup.trailingAnchor
+                                  _qualityPopup.trailingAnchor
                                                          constant:18],
     [_previewView.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
     [_previewView.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
@@ -402,7 +508,55 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   [mainMenu addItem:presetItem];
   _presetMenu = [[NSMenu alloc] initWithTitle:@"Preset"];
   presetItem.submenu = _presetMenu;
+
+  NSMenuItem *qualityItem = [[NSMenuItem alloc] initWithTitle:@"Quality"
+                                                      action:nil
+                                               keyEquivalent:@""];
+  [mainMenu addItem:qualityItem];
+  _qualityMenu = [[NSMenu alloc] initWithTitle:@"Quality"];
+  for (NSInteger index = 0; index < 3; ++index) {
+    NSMenuItem *item = [[NSMenuItem alloc]
+        initWithTitle:@[ @"Strict", @"Fast Match", @"Auto 20fps" ][index]
+               action:@selector(selectQuality:)
+        keyEquivalent:@""];
+    item.target = self;
+    item.tag = index;
+    [_qualityMenu addItem:item];
+  }
+  qualityItem.submenu = _qualityMenu;
   NSApp.mainMenu = mainMenu;
+}
+
+- (void)loadFastMatchAllowlist {
+  _fastMatchAllowlist.clear();
+  NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+  NSString *bundlePath = [NSBundle.mainBundle
+      pathForResource:@"fast-match-allowlist"
+               ofType:@"json"];
+  if (bundlePath != nil)
+    [candidates addObject:bundlePath];
+  [candidates addObject:@"config/fast-match-allowlist.json"];
+  for (NSString *path in candidates) {
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (data == nil)
+      continue;
+    NSError *jsonError = nil;
+    id root = [NSJSONSerialization JSONObjectWithData:data
+                                              options:0
+                                                error:&jsonError];
+    if (![root isKindOfClass:NSDictionary.class] || jsonError != nil)
+      continue;
+    NSDictionary *dictionary = (NSDictionary *)root;
+    if (![dictionary[@"schema"]
+            isEqualToString:@"glic-fast-match-allowlist-v1"] ||
+        ![dictionary[@"allowlist"] isKindOfClass:NSArray.class])
+      continue;
+    for (id value in (NSArray *)dictionary[@"allowlist"]) {
+      if ([value isKindOfClass:NSString.class])
+        _fastMatchAllowlist.emplace([(NSString *)value UTF8String]);
+    }
+    return;
+  }
 }
 
 - (void)loadPresetMenu {
@@ -414,6 +568,7 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   }
   _presetDirectory = *directory;
   _presets = loadSupportedPresets(_presetDirectory);
+  [self loadFastMatchAllowlist];
   if (_presets.empty()) {
     [self showStatus:@"No supported presets" error:YES];
     _presetPopup.enabled = NO;
@@ -450,6 +605,20 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   [_presetPopup selectItemAtIndex:index];
   _pendingPresetIndex.store(static_cast<int>(index), std::memory_order_release);
   [self showStatus:@"Switching preset…" error:NO];
+}
+
+- (void)selectQuality:(id)sender {
+  NSInteger index = -1;
+  if ([sender isKindOfClass:NSPopUpButton.class])
+    index = [(NSPopUpButton *)sender indexOfSelectedItem];
+  else if ([sender isKindOfClass:NSMenuItem.class])
+    index = [(NSMenuItem *)sender tag];
+  if (index < 0 || index > static_cast<NSInteger>(QualityMode::Auto20))
+    return;
+  [_qualityPopup selectItemAtIndex:index];
+  _pendingQualityMode.store(static_cast<int>(index),
+                            std::memory_order_release);
+  [self showStatus:@"Switching quality…" error:NO];
 }
 
 - (void)requestCameraAccessAndStart {
@@ -581,8 +750,11 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
 
   const std::size_t pixelCount =
       static_cast<std::size_t>(kProcessingWidth) * kProcessingHeight;
-  _inputPixels.resize(pixelCount);
-  _outputPixels.resize(pixelCount);
+  for (auto &slot : _frameSlots) {
+    slot.input.resize(pixelCount);
+    slot.output.resize(pixelCount);
+    slot.state = FrameSlotState::Empty;
+  }
   _captureSession = session;
   _captureOutput = output;
   [session startRunning];
@@ -593,14 +765,27 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
 
 - (bool)activatePendingPreset:(std::string &)error {
   const int pending = _pendingPresetIndex.load(std::memory_order_acquire);
-  if (pending < 0 || pending == _activePresetIndex)
+  const int pendingQuality =
+      _pendingQualityMode.load(std::memory_order_acquire);
+  if (pending < 0)
+    return false;
+  const auto requestedQuality = static_cast<QualityMode>(pendingQuality);
+  if (pending == _activePresetIndex && requestedQuality == _activeQualityMode)
     return _lane != nullptr;
   if (static_cast<std::size_t>(pending) >= _presets.size()) {
     error = "Preset index is out of range";
     return false;
   }
 
-  auto candidate = glic::createOriginalRealtimeMetalLane(error);
+  const std::string &presetName =
+      _presets[static_cast<std::size_t>(pending)].name;
+  const bool useFastMatch =
+      requestedQuality == QualityMode::FastMatch ||
+      (requestedQuality == QualityMode::Auto20 &&
+       _fastMatchAllowlist.contains(presetName));
+  auto candidate = glic::createOriginalRealtimeMetalLane(
+      laneOptions(useFastMatch ? QualityMode::FastMatch : QualityMode::Strict),
+      error);
   if (!candidate ||
       !candidate->prepare(kProcessingWidth, kProcessingHeight,
                           _presets[static_cast<std::size_t>(pending)].config,
@@ -608,13 +793,21 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
     return false;
   _lane = std::move(candidate);
   _activePresetIndex = pending;
+  _activeQualityMode = requestedQuality;
+  _activeFastMatch = useFastMatch;
+  _governorReuseFrames =
+      useFastMatch ? 2u : 1u;
   _frameIndex = 0;
+  _droppedCaptureFrames.store(0, std::memory_order_release);
+  _rateFrameCount = 0;
+  _rateStart = std::chrono::steady_clock::now();
   _smoothedTotalMilliseconds = 0.0;
   _smoothedGpuMilliseconds = 0.0;
   return true;
 }
 
-- (bool)copyOrScaleInputPixelBuffer:(CVPixelBufferRef)pixelBuffer {
+- (bool)copyOrScaleInputPixelBuffer:(CVPixelBufferRef)pixelBuffer
+                         destination:(std::vector<glic::Color> &)pixels {
   const int sourceWidth = static_cast<int>(CVPixelBufferGetWidth(pixelBuffer));
   const int sourceHeight = static_cast<int>(CVPixelBufferGetHeight(pixelBuffer));
   const std::size_t sourceRowBytes = CVPixelBufferGetBytesPerRow(pixelBuffer);
@@ -623,7 +816,7 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   if (source == nullptr)
     return false;
 
-  auto *destination = reinterpret_cast<uint8_t *>(_inputPixels.data());
+  auto *destination = reinterpret_cast<uint8_t *>(pixels.data());
   constexpr std::size_t destinationRowBytes =
       static_cast<std::size_t>(kProcessingWidth) * sizeof(glic::Color);
   if (sourceWidth == kProcessingWidth && sourceHeight == kProcessingHeight) {
@@ -649,7 +842,7 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
                               kvImageHighQualityResampling) == kvImageNoError;
 }
 
-- (void)presentOutputFrame {
+- (void)presentOutputFrame:(const std::vector<glic::Color> &)pixels {
   if (_displayPixelBufferPool == nullptr ||
       _displayEnqueuePending.exchange(true, std::memory_order_acq_rel))
     return;
@@ -670,7 +863,7 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   constexpr std::size_t sourceRowBytes =
       static_cast<std::size_t>(kProcessingWidth) * sizeof(glic::Color);
   const auto *source =
-      reinterpret_cast<const uint8_t *>(_outputPixels.data());
+      reinterpret_cast<const uint8_t *>(pixels.data());
   for (int y = 0; y < kProcessingHeight; ++y)
     std::memcpy(destination + static_cast<std::size_t>(y) *
                                   destinationRowBytes,
@@ -717,42 +910,67 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   });
 }
 
-- (void)captureOutput:(AVCaptureOutput *)output
-    didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
-           fromConnection:(AVCaptureConnection *)connection {
-  (void)output;
-  (void)connection;
-  @autoreleasepool {
+- (void)processLatestFrames {
+  while (!_stopping.load(std::memory_order_acquire)) {
+    FrameSlot *slot = nullptr;
+    {
+      std::lock_guard lock(_frameSlotMutex);
+      int newest = -1;
+      uint64_t newestSequence = 0;
+      for (std::size_t index = 0; index < _frameSlots.size(); ++index) {
+        if (_frameSlots[index].state == FrameSlotState::Ready &&
+            (newest < 0 || _frameSlots[index].sequence > newestSequence)) {
+          newest = static_cast<int>(index);
+          newestSequence = _frameSlots[index].sequence;
+        }
+      }
+      if (newest < 0) {
+        _processingScheduled.store(false, std::memory_order_release);
+        return;
+      }
+      for (std::size_t index = 0; index < _frameSlots.size(); ++index) {
+        if (static_cast<int>(index) != newest &&
+            _frameSlots[index].state == FrameSlotState::Ready) {
+          _frameSlots[index].state = FrameSlotState::Empty;
+          _droppedCaptureFrames.fetch_add(1, std::memory_order_relaxed);
+        }
+      }
+      slot = &_frameSlots[static_cast<std::size_t>(newest)];
+      slot->state = FrameSlotState::Processing;
+    }
+
     std::string error;
     if (![self activatePendingPreset:error]) {
-      NSString *message = [NSString
-          stringWithFormat:@"Preset failed: %s", error.c_str()];
+      {
+        std::lock_guard lock(_frameSlotMutex);
+        slot->state = FrameSlotState::Empty;
+        _processingScheduled.store(false, std::memory_order_release);
+      }
+      NSString *message =
+          [NSString stringWithFormat:@"Preset failed: %s", error.c_str()];
       dispatch_async(dispatch_get_main_queue(), ^{
         [self showStatus:message error:YES];
       });
       return;
     }
 
-    CVPixelBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
-    if (imageBuffer == nullptr)
-      return;
-    CVPixelBufferLockBaseAddress(imageBuffer, kCVPixelBufferLock_ReadOnly);
-    const bool copied = [self copyOrScaleInputPixelBuffer:imageBuffer];
-    CVPixelBufferUnlockBaseAddress(imageBuffer, kCVPixelBufferLock_ReadOnly);
-    if (!copied)
-      return;
-
     glic::OriginalRealtimeMetalFrameStats stats;
-    if (!_lane->process(_inputPixels, _outputPixels, _frameIndex++, &stats,
-                        error)) {
+    const bool processed = _lane->process(slot->input, slot->output,
+                                          _frameIndex++, &stats, error);
+    if (processed)
+      [self presentOutputFrame:slot->output];
+    {
+      std::lock_guard lock(_frameSlotMutex);
+      slot->state = FrameSlotState::Empty;
+    }
+    if (!processed) {
       NSString *message = [NSString
           stringWithFormat:@"Metal processing failed: %s", error.c_str()];
       dispatch_async(dispatch_get_main_queue(), ^{
         [self showStatus:message error:YES];
       });
-      return;
+      continue;
     }
-    [self presentOutputFrame];
 
     constexpr double smoothing = 0.12;
     if (_smoothedTotalMilliseconds == 0.0) {
@@ -764,31 +982,117 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
       _smoothedGpuMilliseconds +=
           smoothing * (stats.gpuMilliseconds - _smoothedGpuMilliseconds);
     }
+
+    if (_activeQualityMode == QualityMode::Auto20 && _activeFastMatch) {
+      uint32_t desiredReuse = _governorReuseFrames;
+      if (_smoothedTotalMilliseconds > kGovernorHighWaterMilliseconds)
+        desiredReuse = 4;
+      else if (_smoothedTotalMilliseconds < kGovernorLowWaterMilliseconds)
+        desiredReuse = 2;
+      if (desiredReuse != _governorReuseFrames) {
+        _governorReuseFrames = desiredReuse;
+        _lane->setSegmentationReuseFrames(desiredReuse);
+      }
+    }
+
     ++_rateFrameCount;
     const auto now = std::chrono::steady_clock::now();
-    const double elapsed = std::chrono::duration<double>(now - _rateStart).count();
+    const double elapsed =
+        std::chrono::duration<double>(now - _rateStart).count();
     if (elapsed >= 0.5) {
-      const double captureFps = static_cast<double>(_rateFrameCount) / elapsed;
+      const double processedFps = static_cast<double>(_rateFrameCount) / elapsed;
       const uint64_t dropped = _droppedCaptureFrames.load();
       const std::string preset =
           _presets[static_cast<std::size_t>(_activePresetIndex)].name;
+      std::string quality = qualityModeName(_activeQualityMode);
+      if (_activeQualityMode == QualityMode::Auto20)
+        quality += _activeFastMatch ? "/Fast" : "/Strict";
       const double totalMilliseconds = _smoothedTotalMilliseconds;
       const double gpuMilliseconds = _smoothedGpuMilliseconds;
+      const uint32_t reuseFrames = _governorReuseFrames;
       _rateFrameCount = 0;
       _rateStart = now;
       dispatch_async(dispatch_get_main_queue(), ^{
-        const bool realtime = totalMilliseconds <= 1000.0 / kTargetFramesPerSecond;
+        const bool realtime =
+            processedFps >= kMinimumFramesPerSecond &&
+            totalMilliseconds <= kRealtimeBudgetMilliseconds;
         NSString *status = [NSString
             stringWithFormat:@"%@ · %s", realtime ? @"LIVE" : @"SLOW",
                              preset.c_str()];
         NSString *metrics = [NSString
-            stringWithFormat:@"960×540  %.1f fps  %.2f ms  GPU %.2f ms  drop %llu",
-                             captureFps, totalMilliseconds, gpuMilliseconds,
-                             static_cast<unsigned long long>(dropped)];
+            stringWithFormat:
+                @"960×540  %.1f fps  %.2f ms  GPU %.2f  %s x%u  drop %llu",
+                processedFps, totalMilliseconds, gpuMilliseconds,
+                quality.c_str(), reuseFrames,
+                static_cast<unsigned long long>(dropped)];
         self->_statusLabel.stringValue = status;
         self->_statusLabel.textColor = realtime ? NSColor.systemGreenColor
                                                 : NSColor.systemOrangeColor;
         self->_metricsLabel.stringValue = metrics;
+      });
+    }
+  }
+  _processingScheduled.store(false, std::memory_order_release);
+}
+
+- (void)captureOutput:(AVCaptureOutput *)output
+    didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
+           fromConnection:(AVCaptureConnection *)connection {
+  (void)output;
+  (void)connection;
+  if (_stopping.load(std::memory_order_acquire))
+    return;
+  @autoreleasepool {
+    FrameSlot *slot = nullptr;
+    {
+      std::lock_guard lock(_frameSlotMutex);
+      int selected = -1;
+      uint64_t oldestReadySequence = UINT64_MAX;
+      for (std::size_t index = 0; index < _frameSlots.size(); ++index) {
+        if (_frameSlots[index].state == FrameSlotState::Empty) {
+          selected = static_cast<int>(index);
+          break;
+        }
+        if (_frameSlots[index].state == FrameSlotState::Ready &&
+            _frameSlots[index].sequence < oldestReadySequence) {
+          selected = static_cast<int>(index);
+          oldestReadySequence = _frameSlots[index].sequence;
+        }
+      }
+      if (selected < 0) {
+        _droppedCaptureFrames.fetch_add(1, std::memory_order_relaxed);
+        return;
+      }
+      slot = &_frameSlots[static_cast<std::size_t>(selected)];
+      if (slot->state == FrameSlotState::Ready)
+        _droppedCaptureFrames.fetch_add(1, std::memory_order_relaxed);
+      slot->state = FrameSlotState::Capturing;
+      slot->sequence = ++_captureSequence;
+    }
+
+    CVPixelBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    bool copied = false;
+    if (imageBuffer != nullptr) {
+      CVPixelBufferLockBaseAddress(imageBuffer, kCVPixelBufferLock_ReadOnly);
+      copied = [self copyOrScaleInputPixelBuffer:imageBuffer
+                                     destination:slot->input];
+      CVPixelBufferUnlockBaseAddress(imageBuffer,
+                                     kCVPixelBufferLock_ReadOnly);
+    }
+    {
+      std::lock_guard lock(_frameSlotMutex);
+      slot->state = copied ? FrameSlotState::Ready : FrameSlotState::Empty;
+    }
+    if (!copied)
+      return;
+
+    bool expected = false;
+    if (_processingScheduled.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel)) {
+      dispatch_async(_processingQueue, ^{
+        @autoreleasepool {
+          [self processLatestFrames];
+        }
       });
     }
   }

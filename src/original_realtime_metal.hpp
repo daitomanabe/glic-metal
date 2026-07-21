@@ -31,6 +31,9 @@ struct OriginalRealtimeMetalFrameStats {
   std::size_t earlyTerminatedNodes = 0;
   std::size_t earlySkippedSamples = 0;
   bool staticScheduleReused = false;
+  bool adaptiveScheduleReused = false;
+  uint32_t adaptiveScheduleAge = 0;
+  bool fastCdf97 = false;
   uint32_t commandBufferSubmissions = 0;
   uint32_t completionWaits = 0;
   uint32_t mappedBufferCopies = 0;
@@ -39,6 +42,19 @@ struct OriginalRealtimeMetalFrameStats {
   double cpuOutputMilliseconds = 0.0;
   double totalMilliseconds = 0.0;
   uint64_t frameIndex = 0;
+};
+
+enum class OriginalRealtimeMetalFidelity {
+  Strict,
+  FastMatch,
+};
+
+struct OriginalRealtimeMetalOptions {
+  OriginalRealtimeMetalFidelity fidelity =
+      OriginalRealtimeMetalFidelity::Strict;
+  // One preserves per-frame adaptive segmentation. Larger values reuse the
+  // latest adaptive tree and its dependency schedule for this many frames.
+  uint32_t segmentationReuseFrames = 1;
 };
 
 class OriginalRealtimeMetalLane {
@@ -52,6 +68,7 @@ public:
                        uint64_t frameIndex,
                        OriginalRealtimeMetalFrameStats *stats,
                        std::string &error) = 0;
+  virtual void setSegmentationReuseFrames(uint32_t frames) noexcept = 0;
 
   [[nodiscard]] virtual int width() const noexcept = 0;
   [[nodiscard]] virtual int height() const noexcept = 0;
@@ -68,5 +85,9 @@ public:
 // to the compatibility realtime shader.
 std::unique_ptr<OriginalRealtimeMetalLane>
 createOriginalRealtimeMetalLane(std::string &error);
+
+std::unique_ptr<OriginalRealtimeMetalLane>
+createOriginalRealtimeMetalLane(const OriginalRealtimeMetalOptions &options,
+                                std::string &error);
 
 } // namespace glic

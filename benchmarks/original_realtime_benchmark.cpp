@@ -26,7 +26,7 @@ constexpr int kCertificationMinimumWidth = 960;
 constexpr int kCertificationMinimumHeight = 540;
 constexpr int kCertificationMinimumFrames = 120;
 constexpr int kCertificationMinimumWarmupFrames = 10;
-constexpr double kCertificationMinimumFps = 30.0;
+constexpr double kCertificationMinimumFps = 20.0;
 
 struct Options {
   std::string input;
@@ -37,8 +37,10 @@ struct Options {
   std::string jsonReport;
   int frames = kCertificationMinimumFrames;
   int warmupFrames = kCertificationMinimumWarmupFrames;
-  double requiredFps = 30.0;
+  double requiredFps = 20.0;
   std::string backend = "cpu";
+  std::string fidelity = "strict";
+  int segmentationReuseFrames = 1;
   bool allSupported = false;
 };
 
@@ -75,6 +77,8 @@ struct Result {
   std::string lastSegmentationRngState = "0000000000000000";
   std::string lastSegmentOrderFnv1a64 = "0000000000000000";
   double staticScheduleReuseRatio = 0.0;
+  double adaptiveScheduleReuseRatio = 0.0;
+  double fastCdf97Ratio = 0.0;
   bool pipelineAccountingPassed = true;
   bool usesCdf97 = false;
   int colorSpace = 0;
@@ -102,7 +106,9 @@ void printUsage(const char *program) {
       << "  --backend <cpu|metal>    Reconstruction backend (default: cpu)\n"
       << "  --frames <count>         Measured frames (default: 120)\n"
       << "  --warmup <count>         Warm-up frames (default: 10)\n"
-      << "  --require-fps <value>    mean+p95 gate (default: 30)\n"
+      << "  --require-fps <value>    mean+p95 gate (default: 20)\n"
+      << "  --fidelity <mode>        strict|fast-match (Metal only)\n"
+      << "  --segmentation-reuse <n> Adaptive tree reuse frames (default: 1)\n"
       << "  --output <png>           Save last frame (single preset only)\n"
       << "  --output-dir <path>      Save last frame for every supported "
          "preset\n"
@@ -168,6 +174,17 @@ bool parseOptions(int argc, char **argv, Options &options) {
       }
       if (!std::isfinite(options.requiredFps) || options.requiredFps <= 0.0)
         return false;
+    } else if (argument == "--fidelity") {
+      const char *value = takeValue();
+      if (!value || (std::string_view(value) != "strict" &&
+                     std::string_view(value) != "fast-match"))
+        return false;
+      options.fidelity = value;
+    } else if (argument == "--segmentation-reuse") {
+      const char *value = takeValue();
+      if (!value ||
+          !parsePositiveInt(value, options.segmentationReuseFrames))
+        return false;
     } else if (argument == "--output") {
       const char *value = takeValue();
       if (!value)
@@ -187,7 +204,10 @@ bool parseOptions(int argc, char **argv, Options &options) {
       return false;
     }
   }
-  return !options.allSupported || options.outputImage.empty();
+  return (!options.allSupported || options.outputImage.empty()) &&
+         (options.backend == "metal" ||
+          (options.fidelity == "strict" &&
+           options.segmentationReuseFrames == 1));
 }
 
 double percentile(std::vector<double> values, double fraction) {
@@ -360,8 +380,11 @@ bool writeJson(const Options &options, int width, int height,
       << "\",\n"
       << "  \"fidelity_lane\": "
          "\"upstream-colorspace-quadtree-fixed-predictor-quantize-"
-      << (usesMetal ? "reconstruct-float-float-cdf97-fp32-storage-no-serialization"
-                    : "reconstruct-exact-cdf97-no-serialization")
+      << (usesMetal
+              ? (options.fidelity == "fast-match"
+                     ? "reconstruct-fast-fp32-cdf97-no-serialization"
+                     : "reconstruct-float-float-cdf97-fp32-storage-no-serialization")
+              : "reconstruct-exact-cdf97-no-serialization")
       << "\",\n"
       << "  \"fidelity_claim\": "
          "\"original-style-algorithmic-core-not-processing-pixel-exact\",\n"
@@ -382,18 +405,28 @@ bool writeJson(const Options &options, int width, int height,
   if (usesMetal)
     output
         << ",\n    \"metal_cdf97_fp32_matrix_storage_differs_from_cpu_float64_reference\"";
+  if (usesMetal && options.fidelity == "fast-match")
+    output
+        << ",\n    \"fast_match_uses_fp32_cdf97_and_may_reuse_adaptive_segmentation\"";
   output << "\n  ],\n"
          << "  \"processing_rounding_compatible\": true,\n"
          << "  \"processing_raw_plane_pack_compatible\": true,\n"
-         << "  \"processing_rng_and_cross_channel_order_compatible\": true,\n"
+         << "  \"processing_rng_and_cross_channel_order_compatible\": "
+         << (options.segmentationReuseFrames == 1 ? "true" : "false")
+         << ",\n"
          << "  \"backend\": \""
          << (usesMetal ? "metal-original-visual" : "cpu-reference") << "\",\n"
+         << "  \"fidelity_mode\": \"" << options.fidelity << "\",\n"
+         << "  \"segmentation_reuse_frames\": "
+         << options.segmentationReuseFrames << ",\n"
          << "  \"execution_mode\": \""
          << (usesMetal ? "hybrid_cpu_colorspace_segmentation_gpu_reconstruction"
                        : "cpu_parallel_channels")
          << "\",\n"
          << "  \"cdf97_precision\": \""
-         << (usesMetal ? "float-float-accumulation-fp32-storage-safe-math"
+         << (usesMetal ? (options.fidelity == "fast-match"
+                              ? "fp32-fma-accumulation-fp32-storage-safe-math"
+                              : "float-float-accumulation-fp32-storage-safe-math")
                        : "float64")
          << "\",\n"
          << "  \"input_path\": \""
@@ -497,6 +530,9 @@ bool writeJson(const Options &options, int width, int height,
            << (result.pipelineAccountingPassed ? "true" : "false")
            << ", \"static_schedule_reuse_ratio\": "
            << result.staticScheduleReuseRatio
+           << ", \"adaptive_schedule_reuse_ratio\": "
+           << result.adaptiveScheduleReuseRatio
+           << ", \"fast_cdf97_ratio\": " << result.fastCdf97Ratio
            << ", \"uses_cdf97\": " << (result.usesCdf97 ? "true" : "false")
            << ", \"color_space\": " << result.colorSpace
            << ", \"min_block_size\": " << result.minBlockSize
@@ -589,11 +625,13 @@ int main(int argc, char **argv) {
   const bool usesMetal = options.backend == "metal";
   std::cout << "resolution=" << width << 'x' << height << " backend="
             << (usesMetal ? "metal-original-visual" : "cpu-reference")
+            << " fidelity=" << options.fidelity
+            << " segmentation_reuse=" << options.segmentationReuseFrames
             << " scanned=" << scannedPresets
             << " supported=" << candidates.size()
             << " unsupported=" << unsupportedPresets.size()
             << " load_failures=" << loadFailurePresets.size() << '\n';
-  std::cout << "preset\tmean_ms\tp95_ms\tfps\tmean_segments\tgpu_ms\t30fps\n";
+  std::cout << "preset\tmean_ms\tp95_ms\tfps\tmean_segments\tgpu_ms\tgate\n";
 
   const double frameBudgetMilliseconds = 1000.0 / options.requiredFps;
   const bool certificationEvidencePassed =
@@ -628,7 +666,14 @@ int main(int argc, char **argv) {
     std::unique_ptr<glic::OriginalRealtimeMetalLane> metalLane;
     bool prepared = false;
     if (usesMetal) {
-      metalLane = glic::createOriginalRealtimeMetalLane(error);
+      glic::OriginalRealtimeMetalOptions metalOptions;
+      metalOptions.fidelity =
+          options.fidelity == "fast-match"
+              ? glic::OriginalRealtimeMetalFidelity::FastMatch
+              : glic::OriginalRealtimeMetalFidelity::Strict;
+      metalOptions.segmentationReuseFrames =
+          static_cast<uint32_t>(options.segmentationReuseFrames);
+      metalLane = glic::createOriginalRealtimeMetalLane(metalOptions, error);
       prepared = metalLane != nullptr &&
                  metalLane->prepare(width, height, candidate.config, error);
     } else {
@@ -670,6 +715,8 @@ int main(int argc, char **argv) {
     double earlyTerminatedNodeTotal = 0.0;
     double earlySkippedSampleTotal = 0.0;
     double staticScheduleReuseTotal = 0.0;
+    double adaptiveScheduleReuseTotal = 0.0;
+    double fastCdf97Total = 0.0;
     bool pipelineAccountingPassed = true;
     for (int frame = 0; processPassed && frame < options.frames; ++frame) {
       glic::OriginalRealtimeFrameStats cpuStats;
@@ -701,6 +748,9 @@ int main(int argc, char **argv) {
           globalPipelineSegmentTotal += metalStats.globalPipelineSegments;
           bufferBarrierTotal += metalStats.bufferBarriers;
           staticScheduleReuseTotal += metalStats.staticScheduleReused ? 1.0 : 0.0;
+          adaptiveScheduleReuseTotal +=
+              metalStats.adaptiveScheduleReused ? 1.0 : 0.0;
+          fastCdf97Total += metalStats.fastCdf97 ? 1.0 : 0.0;
           pipelineAccountingPassed =
               pipelineAccountingPassed && metalStats.pipelineAccountingPassed;
           earlyTerminatedNodeTotal += metalStats.earlyTerminatedNodes;
@@ -750,6 +800,9 @@ int main(int argc, char **argv) {
           earlySkippedSampleTotal / frameTimes.size();
       result.staticScheduleReuseRatio =
           staticScheduleReuseTotal / frameTimes.size();
+      result.adaptiveScheduleReuseRatio =
+          adaptiveScheduleReuseTotal / frameTimes.size();
+      result.fastCdf97Ratio = fastCdf97Total / frameTimes.size();
       result.pipelineAccountingPassed = pipelineAccountingPassed;
       result.timingPassed =
           result.meanMilliseconds <= frameBudgetMilliseconds &&

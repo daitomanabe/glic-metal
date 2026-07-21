@@ -114,6 +114,12 @@ static_assert(sizeof(MetalSegmentDescriptor) == 16);
 
 class MetalOriginalRealtimeLane final : public OriginalRealtimeMetalLane {
 public:
+  explicit MetalOriginalRealtimeLane(OriginalRealtimeMetalOptions options)
+      : options_(options) {
+    options_.segmentationReuseFrames =
+        std::max<uint32_t>(1u, options_.segmentationReuseFrames);
+  }
+
   ~MetalOriginalRealtimeLane() override {
     stopWorkers();
     @autoreleasepool {
@@ -162,10 +168,20 @@ public:
       return false;
     }
 
+    MTLFunctionConstantValues *functionConstants =
+        [[MTLFunctionConstantValues alloc] init];
+    BOOL fastCdf97 = options_.fidelity ==
+                     OriginalRealtimeMetalFidelity::FastMatch;
+    [functionConstants setConstantValue:&fastCdf97
+                                   type:MTLDataTypeBool
+                                atIndex:0];
     id<MTLFunction> function =
-        [library_ newFunctionWithName:@"glicOriginalSegments"];
+        [library_ newFunctionWithName:@"glicOriginalSegments"
+                       constantValues:functionConstants
+                                error:&libraryError];
     if (function == nil) {
-      error = "Metal library does not contain glicOriginalSegments";
+      error = "Metal library does not contain a compatible "
+              "glicOriginalSegments: " + metalErrorString(libraryError);
       return false;
     }
     NSError *pipelineError = nil;
@@ -176,11 +192,15 @@ public:
               metalErrorString(pipelineError);
       return false;
     }
-    id<MTLFunction> threadgroupCdfFunction =
-        [library_ newFunctionWithName:@"glicOriginalSegmentsThreadgroupCdf"];
+    libraryError = nil;
+    id<MTLFunction> threadgroupCdfFunction = [library_
+        newFunctionWithName:@"glicOriginalSegmentsThreadgroupCdf"
+             constantValues:functionConstants
+                      error:&libraryError];
     if (threadgroupCdfFunction == nil) {
-      error =
-          "Metal library does not contain glicOriginalSegmentsThreadgroupCdf";
+      error = "Metal library does not contain a compatible "
+              "glicOriginalSegmentsThreadgroupCdf: " +
+              metalErrorString(libraryError);
       return false;
     }
     pipelineError = nil;
@@ -214,7 +234,10 @@ public:
       stopWorkers();
       prepared_ = false;
       staticSchedule_ = false;
+      adaptiveScheduleValid_ = false;
+      adaptiveScheduleAge_ = 0;
       cachedScheduleStats_ = {};
+      cachedAdaptiveScheduleStats_ = {};
       error.clear();
       if (width <= 0 || height <= 0) {
         error = "original-style Metal lane requires positive dimensions";
@@ -382,6 +405,8 @@ public:
     ProcessingRandomCheckpoint rngCheckpoint(segmentationRng_);
     OriginalRealtimeMetalFrameStats frameStats;
     frameStats.frameIndex = frameIndex;
+    frameStats.fastCdf97 =
+        options_.fidelity == OriginalRealtimeMetalFidelity::FastMatch;
     const auto totalStart = Clock::now();
     try {
       input_ = input.data();
@@ -404,6 +429,18 @@ public:
         frameStats.segmentOrderFnv1a64 =
             cachedScheduleStats_.segmentOrderFnv1a64;
         frameStats.staticScheduleReused = true;
+      } else if (adaptiveScheduleValid_ &&
+                 adaptiveScheduleAge_ + 1u <
+                     options_.segmentationReuseFrames) {
+        frameStats.segmentCounts = cachedAdaptiveScheduleStats_.segmentCounts;
+        frameStats.totalSegments = cachedAdaptiveScheduleStats_.totalSegments;
+        frameStats.dispatchLevels =
+            cachedAdaptiveScheduleStats_.dispatchLevels;
+        frameStats.segmentOrderFnv1a64 =
+            cachedAdaptiveScheduleStats_.segmentOrderFnv1a64;
+        ++adaptiveScheduleAge_;
+        frameStats.adaptiveScheduleReused = true;
+        frameStats.adaptiveScheduleAge = adaptiveScheduleAge_;
       } else {
         // Preserve the one evolving Processing RNG stream in original
         // channel/DFS order. Once those exact leaf lists exist, dependency
@@ -413,6 +450,9 @@ public:
         runWorkerPhase(WorkerPhase::BuildDependencyLevels, 3);
         if (!buildDispatchSchedule(frameStats, error))
           return false;
+        cachedAdaptiveScheduleStats_ = frameStats;
+        adaptiveScheduleValid_ = true;
+        adaptiveScheduleAge_ = 0;
       }
       frameStats.segmentationRngState = segmentationRng_.state();
       frameStats.earlyTerminatedNodes = earlyTerminatedNodes_;
@@ -579,6 +619,11 @@ public:
 
   int width() const noexcept override { return width_; }
   int height() const noexcept override { return height_; }
+  void setSegmentationReuseFrames(uint32_t frames) noexcept override {
+    options_.segmentationReuseFrames = std::max<uint32_t>(1u, frames);
+    if (adaptiveScheduleAge_ >= options_.segmentationReuseFrames)
+      adaptiveScheduleAge_ = options_.segmentationReuseFrames - 1u;
+  }
   const OriginalPresetConfig &config() const noexcept override {
     return config_;
   }
@@ -587,7 +632,9 @@ public:
     return "hybrid_cpu_colorspace_segmentation_gpu_reconstruction";
   }
   const char *numericPrecision() const noexcept override {
-    return "integer_prediction_float_float_cdf97_accumulation_fp32_storage";
+    return options_.fidelity == OriginalRealtimeMetalFidelity::FastMatch
+               ? "integer_prediction_fp32_cdf97_accumulation_fp32_storage"
+               : "integer_prediction_float_float_cdf97_accumulation_fp32_storage";
   }
   bool isPixelExact() const noexcept override { return false; }
   bool isHardwareAccelerated() const noexcept override { return true; }
@@ -1095,8 +1142,12 @@ private:
   int pendingWorkers_ = 0;
   bool workerShutdown_ = false;
   OriginalRealtimeMetalFrameStats cachedScheduleStats_{};
+  OriginalRealtimeMetalFrameStats cachedAdaptiveScheduleStats_{};
+  OriginalRealtimeMetalOptions options_{};
+  uint32_t adaptiveScheduleAge_ = 0;
   bool threadgroupCdfEnabled_ = true;
   bool staticSchedule_ = false;
+  bool adaptiveScheduleValid_ = false;
   bool prepared_ = false;
 };
 
@@ -1104,8 +1155,14 @@ private:
 
 std::unique_ptr<OriginalRealtimeMetalLane>
 createOriginalRealtimeMetalLane(std::string &error) {
+  return createOriginalRealtimeMetalLane(OriginalRealtimeMetalOptions{}, error);
+}
+
+std::unique_ptr<OriginalRealtimeMetalLane>
+createOriginalRealtimeMetalLane(const OriginalRealtimeMetalOptions &options,
+                                std::string &error) {
   @autoreleasepool {
-    auto lane = std::make_unique<MetalOriginalRealtimeLane>();
+    auto lane = std::make_unique<MetalOriginalRealtimeLane>(options);
     if (!lane->initialize(error))
       return nullptr;
     error.clear();

@@ -95,7 +95,15 @@ macOSでMetal shaderをビルドする際はFull Xcodeが必要です。CMakeは
 macOS版は`GLIC Webcam Preview.app`を生成します。内蔵または外付けカメラを
 960×540・30fpsで取得し、`original_visual` Metal laneで処理します。画面上部の
 ポップアップ、またはメニューバーの`Preset`から、対応済み37プリセットを実行中に
-切り替えられます。処理時間、GPU時間、入力fps、drop数を画面上で確認できます。
+切り替えられます。`Quality`では原作準拠の`Strict`、fp32 CDF97と2フレーム分割木
+再利用を使う`Fast Match`、画像解析allowlistから安全なpresetだけFastへ切り替える
+`Auto 20fps`を選べます。Autoが画質gateを通らなかったpresetはStrictへ戻ります。
+処理時間、GPU時間、処理fps、実効モード、drop数を画面上で確認できます。
+
+キャプチャとMetal処理は別キューで、事前確保した3スロットから常に最新フレームを
+選びます。古い待機フレームは破棄するため、重いpresetでも遅延が蓄積しません。
+2026-07-21のM4 Max通常画像＋uniform-noise交差評価では19/37 presetがFast Matchの
+局所SSIM、Lab色差、エッジ、クリップ、p95 50msの全gateを通過しました。
 
 ```bash
 cmake --build build --target glic_webcam_preview --parallel
@@ -104,6 +112,11 @@ open "build/GLIC Webcam Preview.app"
 
 初回起動時はmacOSのカメラ使用許可を承認してください。アプリは背面でもApp Napを
 避けて処理を継続しますが、他のアプリを強制的に最前面へ移動しません。
+
+`scripts/build_fast_match_allowlist.py`はStrict/Fastの複数ベンチマークとPNG群を
+比較し、全入力ケースを通ったpresetだけを
+`config/fast-match-allowlist.json`へ出力します。アプリはこのJSONをbundleへ同梱し、
+欠落・不正時はfail-closedでAutoをStrictとして動かします。
 
 ### 動画処理
 
@@ -484,8 +497,18 @@ Full Xcode is required to compile the Metal shader on macOS. CMake uses `/Applic
 The macOS build produces `GLIC Webcam Preview.app`. It captures a built-in or
 external camera at 960×540/30 fps and processes frames through the
 `original_visual` Metal lane. Switch among all 37 supported presets from the
-popup at the top of the window or the `Preset` application menu. Live capture
-fps, total processing time, GPU time, and dropped frames remain visible.
+popup at the top of the window or the `Preset` application menu. The `Quality`
+control selects original-compatible `Strict`, fp32 CDF97 plus two-frame tree
+reuse in `Fast Match`, or fail-closed `Auto 20fps`. Auto uses Fast Match only
+for presets in the analyzed allowlist and falls back to Strict otherwise.
+Processed fps, total processing time, GPU time, effective mode, and dropped
+frames remain visible.
+
+Capture and Metal processing use separate queues. A preallocated three-slot
+ring always selects the newest ready frame and discards stale queued frames, so
+heavy presets do not accumulate latency. The 2026-07-21 M4 Max normal plus
+uniform-noise cross-check admitted 19/37 presets after local SSIM, Lab color
+difference, edge, clipping, and p95 50 ms gates.
 
 ```bash
 cmake --build build --target glic_webcam_preview --parallel
@@ -494,6 +517,10 @@ open "build/GLIC Webcam Preview.app"
 
 Approve camera access on first launch. The realtime loop opts out of App Nap
 when the app is behind other software, without forcing its window to the front.
+`scripts/build_fast_match_allowlist.py` intersects multiple paired Strict/Fast
+benchmark and preview sets. CMake bundles the resulting
+`config/fast-match-allowlist.json`; missing or invalid data makes Auto use
+Strict.
 
 ### Video processing
 

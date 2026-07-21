@@ -150,6 +150,8 @@ if(APPLE)
         MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.0"
         MACOSX_BUNDLE_INFO_PLIST
             "${CMAKE_SOURCE_DIR}/resources/GLICWebcamPreview-Info.plist")
+    set_property(TARGET glic_webcam_preview APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_SOURCE_DIR}/config/fast-match-allowlist.json")
     add_custom_command(TARGET glic_webcam_preview POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources"
@@ -159,6 +161,9 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_SOURCE_DIR}/presets"
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/Presets"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/config/fast-match-allowlist.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/fast-match-allowlist.json"
         COMMAND /usr/bin/codesign --force --sign -
             "$<TARGET_BUNDLE_DIR:glic_webcam_preview>"
         VERBATIM)
@@ -227,6 +232,9 @@ if(BUILD_TESTING)
         add_test(NAME glic_original_metal_reference_analysis
                  COMMAND "${Python3_EXECUTABLE}"
                          "${CMAKE_SOURCE_DIR}/tests/test_compare_original_metal_reference.py")
+        add_test(NAME glic_fast_match_allowlist
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${CMAKE_SOURCE_DIR}/tests/test_build_fast_match_allowlist.py")
         add_test(NAME glic_original_metal_validation_adapter_selftest
                  COMMAND "${Python3_EXECUTABLE}"
                          "${CMAKE_SOURCE_DIR}/scripts/validate_original_metal_run.py"
@@ -307,6 +315,7 @@ install(PROGRAMS scripts/run_search_supervisor.sh scripts/build_search_catalog.p
         scripts/build_original_preset_catalog.py
         scripts/analyze_original_visual_tier.py
         scripts/compare_original_metal_reference.py
+        scripts/build_fast_match_allowlist.py
         DESTINATION bin)
 install(DIRECTORY presets/
         DESTINATION share/glic-metal/presets)

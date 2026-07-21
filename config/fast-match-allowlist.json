@@ -1,0 +1,1550 @@
+{
+  "allowlist": [
+    "0rg4n1c-___",
+    "0rg4n1c-t1ny4ngl3z",
+    "0rg4n1c-tr1angl3",
+    "0rg4n1c-tr1f0rc3",
+    "0rg4n1c-tr33",
+    "0rg4n1c-v1n3z",
+    "1amblu",
+    "bl33dyl1n3z",
+    "bl33dyl1n3z-2",
+    "default",
+    "vv01",
+    "vv02",
+    "vv03",
+    "vv07",
+    "vv08",
+    "vv10",
+    "vv13",
+    "vv17",
+    "vv25"
+  ],
+  "cases": [
+    "normal",
+    "noise"
+  ],
+  "generated_at_utc": "2026-07-21T08:33:11.195145+00:00",
+  "policy": "all-cases-must-pass",
+  "results": [
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 1.743,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 604.303,
+        "minimum_speedup_ratio": 1.011049723756906,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 604.303,
+          "fast_p95_ms": 1.743,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.0628398791540785,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 613.921,
+          "fast_p95_ms": 1.737,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.011049723756906,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "0rg4n1c-___",
+      "preset_config_fnv1a64": "b4a99e4fe1347cf1",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 3.12,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 331.382,
+        "minimum_speedup_ratio": 0.9960238568588469,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 331.382,
+          "fast_p95_ms": 3.12,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 0.9960238568588469,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 332.304,
+          "fast_p95_ms": 3.12,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.0009970089730809,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "0rg4n1c-t1ny4ngl3z",
+      "preset_config_fnv1a64": "8939706f067fffd4",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 1.717,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 618.171,
+        "minimum_speedup_ratio": 0.9888751545117429,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 626.725,
+          "fast_p95_ms": 1.641,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 0.994360902255639,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 618.171,
+          "fast_p95_ms": 1.717,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 0.9888751545117429,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "0rg4n1c-tr1angl3",
+      "preset_config_fnv1a64": "fb6ba45d1c0748af",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 1.716,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 620.856,
+        "minimum_speedup_ratio": 0.9987585350713842,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 623.475,
+          "fast_p95_ms": 1.716,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.0049875311720697,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 620.856,
+          "fast_p95_ms": 1.713,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 0.9987585350713842,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "0rg4n1c-tr1f0rc3",
+      "preset_config_fnv1a64": "349280b2304ce48d",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 1.713,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 621.605,
+        "minimum_speedup_ratio": 0.9937849596022374,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 621.605,
+          "fast_p95_ms": 1.713,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 0.9937849596022374,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 625.563,
+          "fast_p95_ms": 1.679,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 0.9956222639149469,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "0rg4n1c-tr33",
+      "preset_config_fnv1a64": "6f4edc9bd5ef416e",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 1.71,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 620.111,
+        "minimum_speedup_ratio": 0.9919003115264798,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 623.152,
+          "fast_p95_ms": 1.71,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 0.9919003115264798,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 620.111,
+          "fast_p95_ms": 1.646,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 0.9944203347799133,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "0rg4n1c-v1n3z",
+      "preset_config_fnv1a64": "da0c6ed7078f78f5",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 5.347,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 191.042,
+        "minimum_speedup_ratio": 0.9990291262135921,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 194.183,
+          "fast_p95_ms": 5.239,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 0.9990291262135921,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 191.042,
+          "fast_p95_ms": 5.347,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.0022927015666796,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "1amblu",
+      "preset_config_fnv1a64": "966c399fe2fe8e7a",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.00031185699588477374,
+        "maximum_edge_disagreement_ratio": 0.053722993827160496,
+        "maximum_fast_p95_ms": 17.61,
+        "maximum_mean_delta_e76": 11.171361923217773,
+        "minimum_fast_fps": 83.363,
+        "minimum_speedup_ratio": 1.2323016415868673,
+        "minimum_windowed_luma_ssim": 0.9140880703926086
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.00031185699588477374,
+          "edge_disagreement_ratio": 0.04027970679012346,
+          "exact_pixel_ratio": 0.07512538580246914,
+          "fast_fps": 85.496,
+          "fast_p95_ms": 13.212,
+          "label": "normal",
+          "mean_delta_e76": 11.171361923217773,
+          "speedup_ratio": 1.2323016415868673,
+          "windowed_luma_ssim": 0.9140880703926086
+        },
+        {
+          "clipping_increase_ratio": 1.5432098765422175e-05,
+          "edge_disagreement_ratio": 0.053722993827160496,
+          "exact_pixel_ratio": 0.4357484567901235,
+          "fast_fps": 83.363,
+          "fast_p95_ms": 17.61,
+          "label": "noise",
+          "mean_delta_e76": 4.381224155426025,
+          "speedup_ratio": 1.5162554184728243,
+          "windowed_luma_ssim": 0.9844087362289429
+        }
+      ],
+      "preset": "abstract_expressionism",
+      "preset_config_fnv1a64": "2e5bc95a8afe7371",
+      "reasons": [
+        "windowed_luma_ssim",
+        "mean_delta_e76"
+      ]
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0001189557613168711,
+        "maximum_edge_disagreement_ratio": 0.4324922839506173,
+        "maximum_fast_p95_ms": 16.393,
+        "maximum_mean_delta_e76": 77.12128448486328,
+        "minimum_fast_fps": 90.102,
+        "minimum_speedup_ratio": 1.414234256614085,
+        "minimum_windowed_luma_ssim": 0.33922767639160156
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0001189557613168711,
+          "edge_disagreement_ratio": 0.08429398148148148,
+          "exact_pixel_ratio": 0.0644849537037037,
+          "fast_fps": 124.206,
+          "fast_p95_ms": 10.86,
+          "label": "normal",
+          "mean_delta_e76": 12.695772171020508,
+          "speedup_ratio": 1.414234256614085,
+          "windowed_luma_ssim": 0.8064886331558228
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.4324922839506173,
+          "exact_pixel_ratio": 0.029498456790123456,
+          "fast_fps": 90.102,
+          "fast_p95_ms": 16.393,
+          "label": "noise",
+          "mean_delta_e76": 77.12128448486328,
+          "speedup_ratio": 1.525002252455176,
+          "windowed_luma_ssim": 0.33922767639160156
+        }
+      ],
+      "preset": "beautifulwave",
+      "preset_config_fnv1a64": "37f76ba57276bdb9",
+      "reasons": [
+        "windowed_luma_ssim",
+        "mean_delta_e76",
+        "edge_disagreement"
+      ]
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.2929591049382716,
+        "maximum_fast_p95_ms": 16.525,
+        "maximum_mean_delta_e76": 25.41493797302246,
+        "minimum_fast_fps": 101.843,
+        "minimum_speedup_ratio": 1.1776333244892545,
+        "minimum_windowed_luma_ssim": 0.6981558799743652
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.07915316358024692,
+          "exact_pixel_ratio": 0.01293016975308642,
+          "fast_fps": 132.658,
+          "fast_p95_ms": 9.23,
+          "label": "normal",
+          "mean_delta_e76": 18.253896713256836,
+          "speedup_ratio": 1.1776333244892545,
+          "windowed_luma_ssim": 0.6981558799743652
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.2929591049382716,
+          "exact_pixel_ratio": 0.004965277777777778,
+          "fast_fps": 101.843,
+          "fast_p95_ms": 16.525,
+          "label": "noise",
+          "mean_delta_e76": 25.41493797302246,
+          "speedup_ratio": 1.6409002953457579,
+          "windowed_luma_ssim": 0.7452765703201294
+        }
+      ],
+      "preset": "bi0g4n1c",
+      "preset_config_fnv1a64": "498cbe669cd63efc",
+      "reasons": [
+        "windowed_luma_ssim",
+        "mean_delta_e76",
+        "edge_disagreement"
+      ]
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 6.587,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 152.898,
+        "minimum_speedup_ratio": 1.1163608562691132,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 166.594,
+          "fast_p95_ms": 6.112,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.124271197734466,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 152.898,
+          "fast_p95_ms": 6.587,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.1163608562691132,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "bl33dyl1n3z",
+      "preset_config_fnv1a64": "f18f7979cc6ee909",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 6.554,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 153.462,
+        "minimum_speedup_ratio": 1.119244935543278,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 164.876,
+          "fast_p95_ms": 6.156,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.120692497938994,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 153.462,
+          "fast_p95_ms": 6.554,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.119244935543278,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "bl33dyl1n3z-2",
+      "preset_config_fnv1a64": "daf16845f0989603",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0012017746913580152,
+        "maximum_edge_disagreement_ratio": 0.3479706790123457,
+        "maximum_fast_p95_ms": 10.557,
+        "maximum_mean_delta_e76": 39.58647537231445,
+        "minimum_fast_fps": 111.763,
+        "minimum_speedup_ratio": 1.0997438816163916,
+        "minimum_windowed_luma_ssim": 0.21015183627605438
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0012017746913580152,
+          "edge_disagreement_ratio": 0.32916280864197534,
+          "exact_pixel_ratio": 0.13302083333333334,
+          "fast_fps": 142.281,
+          "fast_p95_ms": 7.822,
+          "label": "normal",
+          "mean_delta_e76": 17.883638381958008,
+          "speedup_ratio": 1.0997438816163916,
+          "windowed_luma_ssim": 0.21015183627605438
+        },
+        {
+          "clipping_increase_ratio": 0.0005536265432098675,
+          "edge_disagreement_ratio": 0.3479706790123457,
+          "exact_pixel_ratio": 0.03279128086419753,
+          "fast_fps": 111.763,
+          "fast_p95_ms": 10.557,
+          "label": "noise",
+          "mean_delta_e76": 39.58647537231445,
+          "speedup_ratio": 1.1678587393831021,
+          "windowed_luma_ssim": 0.6177462339401245
+        }
+      ],
+      "preset": "burn",
+      "preset_config_fnv1a64": "e281e41dbf7755cf",
+      "reasons": [
+        "windowed_luma_ssim",
+        "mean_delta_e76",
+        "edge_disagreement"
+      ]
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0002726337448559768,
+        "maximum_edge_disagreement_ratio": 0.22472993827160495,
+        "maximum_fast_p95_ms": 16.116,
+        "maximum_mean_delta_e76": 24.445104598999023,
+        "minimum_fast_fps": 104.623,
+        "minimum_speedup_ratio": 1.210612347541808,
+        "minimum_windowed_luma_ssim": 0.8509440422058105
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.037621527777777775,
+          "exact_pixel_ratio": 0.08433449074074074,
+          "fast_fps": 125.735,
+          "fast_p95_ms": 9.861,
+          "label": "normal",
+          "mean_delta_e76": 18.3736572265625,
+          "speedup_ratio": 1.210612347541808,
+          "windowed_luma_ssim": 0.8509440422058105
+        },
+        {
+          "clipping_increase_ratio": 0.0002726337448559768,
+          "edge_disagreement_ratio": 0.22472993827160495,
+          "exact_pixel_ratio": 0.019849537037037037,
+          "fast_fps": 104.623,
+          "fast_p95_ms": 16.116,
+          "label": "noise",
+          "mean_delta_e76": 24.445104598999023,
+          "speedup_ratio": 1.651810002092488,
+          "windowed_luma_ssim": 0.8860071897506714
+        }
+      ],
+      "preset": "colour_glow",
+      "preset_config_fnv1a64": "a092f990f06b873b",
+      "reasons": [
+        "windowed_luma_ssim",
+        "mean_delta_e76",
+        "edge_disagreement"
+      ]
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0015824331275720166,
+        "maximum_edge_disagreement_ratio": 0.11301311728395062,
+        "maximum_fast_p95_ms": 22.899,
+        "maximum_mean_delta_e76": 38.53652572631836,
+        "minimum_fast_fps": 47.87,
+        "minimum_speedup_ratio": 1.2089037817137387,
+        "minimum_windowed_luma_ssim": 0.5129124522209167
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0015824331275720166,
+          "edge_disagreement_ratio": 0.11301311728395062,
+          "exact_pixel_ratio": 0.10730902777777777,
+          "fast_fps": 47.87,
+          "fast_p95_ms": 22.899,
+          "label": "normal",
+          "mean_delta_e76": 38.53652572631836,
+          "speedup_ratio": 1.2089037817137387,
+          "windowed_luma_ssim": 0.5129124522209167
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.00018132716049382717,
+          "exact_pixel_ratio": 0.9971913580246914,
+          "fast_fps": 82.15,
+          "fast_p95_ms": 18.066,
+          "label": "noise",
+          "mean_delta_e76": 0.09615937620401382,
+          "speedup_ratio": 1.5031627372052903,
+          "windowed_luma_ssim": 0.997473955154419
+        }
+      ],
+      "preset": "colour_mess",
+      "preset_config_fnv1a64": "f4688d2f8fdadfe9",
+      "reasons": [
+        "windowed_luma_ssim",
+        "mean_delta_e76"
+      ]
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0032561728395061607,
+        "maximum_edge_disagreement_ratio": 0.32456404320987653,
+        "maximum_fast_p95_ms": 22.987,
+        "maximum_mean_delta_e76": 65.7940902709961,
+        "minimum_fast_fps": 48.062,
+        "minimum_speedup_ratio": 1.2120061520715177,
+        "minimum_windowed_luma_ssim": 0.22343358397483826
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0032561728395061607,
+          "edge_disagreement_ratio": 0.32456404320987653,
+          "exact_pixel_ratio": 0.0552295524691358,
+          "fast_fps": 48.062,
+          "fast_p95_ms": 22.987,
+          "label": "normal",
+          "mean_delta_e76": 65.7940902709961,
+          "speedup_ratio": 1.2120061520715177,
+          "windowed_luma_ssim": 0.22343358397483826
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.04884066358024691,
+          "exact_pixel_ratio": 0.7049884259259259,
+          "fast_fps": 82.493,
+          "fast_p95_ms": 17.691,
+          "label": "noise",
+          "mean_delta_e76": 3.506526231765747,
+          "speedup_ratio": 1.5098993565418248,
+          "windowed_luma_ssim": 0.9897738099098206
+        }
+      ],
+      "preset": "colour_mess2",
+      "preset_config_fnv1a64": "ce5672a98407ff77",
+      "reasons": [
+        "windowed_luma_ssim",
+        "mean_delta_e76",
+        "edge_disagreement"
+      ]
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.006235853909465017,
+        "maximum_edge_disagreement_ratio": 0.4538599537037037,
+        "maximum_fast_p95_ms": 20.186,
+        "maximum_mean_delta_e76": 76.575927734375,
+        "minimum_fast_fps": 55.964,
+        "minimum_speedup_ratio": 1.2087973585539202,
+        "minimum_windowed_luma_ssim": 0.13789993524551392
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.006235853909465017,
+          "edge_disagreement_ratio": 0.4040644290123457,
+          "exact_pixel_ratio": 0.0597241512345679,
+          "fast_fps": 55.964,
+          "fast_p95_ms": 20.186,
+          "label": "normal",
+          "mean_delta_e76": 71.72208404541016,
+          "speedup_ratio": 1.2087973585539202,
+          "windowed_luma_ssim": 0.1453579068183899
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.4538599537037037,
+          "exact_pixel_ratio": 0.018597608024691358,
+          "fast_fps": 88.65,
+          "fast_p95_ms": 16.729,
+          "label": "noise",
+          "mean_delta_e76": 76.575927734375,
+          "speedup_ratio": 1.5276595744680852,
+          "windowed_luma_ssim": 0.13789993524551392
+        }
+      ],
+      "preset": "colour_waves_sharp",
+      "preset_config_fnv1a64": "2b504bc166ac7d97",
+      "reasons": [
+        "windowed_luma_ssim",
+        "mean_delta_e76",
+        "edge_disagreement"
+      ]
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0031925154320987664,
+        "maximum_edge_disagreement_ratio": 0.38852430555555556,
+        "maximum_fast_p95_ms": 21.354,
+        "maximum_mean_delta_e76": 72.3603744506836,
+        "minimum_fast_fps": 52.642,
+        "minimum_speedup_ratio": 1.2259423036428723,
+        "minimum_windowed_luma_ssim": 0.14126791059970856
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0031925154320987664,
+          "edge_disagreement_ratio": 0.38852430555555556,
+          "exact_pixel_ratio": 0.05657793209876543,
+          "fast_fps": 52.642,
+          "fast_p95_ms": 21.354,
+          "label": "normal",
+          "mean_delta_e76": 72.3603744506836,
+          "speedup_ratio": 1.2259423036428723,
+          "windowed_luma_ssim": 0.14126791059970856
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.3843248456790124,
+          "exact_pixel_ratio": 0.030690586419753085,
+          "fast_fps": 84.553,
+          "fast_p95_ms": 17.084,
+          "label": "noise",
+          "mean_delta_e76": 71.49260711669922,
+          "speedup_ratio": 1.514416166398918,
+          "windowed_luma_ssim": 0.2223789095878601
+        }
+      ],
+      "preset": "colour_waves_sharp2",
+      "preset_config_fnv1a64": "054e0ddc1eaa1567",
+      "reasons": [
+        "windowed_luma_ssim",
+        "mean_delta_e76",
+        "edge_disagreement"
+      ]
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 5.787037037036785e-06,
+        "maximum_edge_disagreement_ratio": 0.056936728395061725,
+        "maximum_fast_p95_ms": 3.844,
+        "maximum_mean_delta_e76": 10.632346153259277,
+        "minimum_fast_fps": 304.651,
+        "minimum_speedup_ratio": 1.2775746496039,
+        "minimum_windowed_luma_ssim": 0.9908868670463562
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 5.787037037036785e-06,
+          "edge_disagreement_ratio": 0.0022241512345679013,
+          "exact_pixel_ratio": 0.4832079475308642,
+          "fast_fps": 304.651,
+          "fast_p95_ms": 3.844,
+          "label": "normal",
+          "mean_delta_e76": 2.025509834289551,
+          "speedup_ratio": 1.2775746496039,
+          "windowed_luma_ssim": 0.9984033107757568
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.056936728395061725,
+          "exact_pixel_ratio": 0.5598726851851852,
+          "fast_fps": 310.642,
+          "fast_p95_ms": 3.739,
+          "label": "noise",
+          "mean_delta_e76": 10.632346153259277,
+          "speedup_ratio": 1.3118981050015532,
+          "windowed_luma_ssim": 0.9908868670463562
+        }
+      ],
+      "preset": "colourful_disturbances",
+      "preset_config_fnv1a64": "7d9cd8e1700718b9",
+      "reasons": [
+        "mean_delta_e76"
+      ]
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0010030864197531075,
+        "maximum_edge_disagreement_ratio": 0.2690895061728395,
+        "maximum_fast_p95_ms": 14.771,
+        "maximum_mean_delta_e76": 37.3319206237793,
+        "minimum_fast_fps": 73.214,
+        "minimum_speedup_ratio": 1.2372062376455084,
+        "minimum_windowed_luma_ssim": 0.6485317349433899
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.10674189814814815,
+          "exact_pixel_ratio": 0.06666280864197531,
+          "fast_fps": 73.214,
+          "fast_p95_ms": 14.771,
+          "label": "normal",
+          "mean_delta_e76": 17.192909240722656,
+          "speedup_ratio": 1.2372062376455084,
+          "windowed_luma_ssim": 0.6485317349433899
+        },
+        {
+          "clipping_increase_ratio": 0.0010030864197531075,
+          "edge_disagreement_ratio": 0.2690895061728395,
+          "exact_pixel_ratio": 0.18680362654320987,
+          "fast_fps": 176.073,
+          "fast_p95_ms": 7.587,
+          "label": "noise",
+          "mean_delta_e76": 37.3319206237793,
+          "speedup_ratio": 1.4143335094206726,
+          "windowed_luma_ssim": 0.7973009943962097
+        }
+      ],
+      "preset": "constrctivist_minimal",
+      "preset_config_fnv1a64": "c69dbc2498c2b09d",
+      "reasons": [
+        "windowed_luma_ssim",
+        "mean_delta_e76",
+        "edge_disagreement"
+      ]
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 7.83,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 157.898,
+        "minimum_speedup_ratio": 1.1975367124585503,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 157.898,
+          "fast_p95_ms": 7.83,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.1975367124585503,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 271.309,
+          "fast_p95_ms": 5.825,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.5496473141616929,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "default",
+      "preset_config_fnv1a64": "d6abb69f18b9fc7b",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.39161265432098763,
+        "maximum_fast_p95_ms": 18.829,
+        "maximum_mean_delta_e76": 52.921791076660156,
+        "minimum_fast_fps": 77.911,
+        "minimum_speedup_ratio": 1.3038658722460856,
+        "minimum_windowed_luma_ssim": 0.6009150743484497
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.004018132716049383,
+          "exact_pixel_ratio": 0.5088387345679012,
+          "fast_fps": 138.561,
+          "fast_p95_ms": 8.447,
+          "label": "normal",
+          "mean_delta_e76": 1.168005108833313,
+          "speedup_ratio": 1.3038658722460856,
+          "windowed_luma_ssim": 0.984169602394104
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.39161265432098763,
+          "exact_pixel_ratio": 0.022785493827160493,
+          "fast_fps": 77.911,
+          "fast_p95_ms": 18.829,
+          "label": "noise",
+          "mean_delta_e76": 52.921791076660156,
+          "speedup_ratio": 1.512037397740553,
+          "windowed_luma_ssim": 0.6009150743484497
+        }
+      ],
+      "preset": "diagonalcolourbleed",
+      "preset_config_fnv1a64": "fb37f3c1481a2dc3",
+      "reasons": [
+        "windowed_luma_ssim",
+        "mean_delta_e76",
+        "edge_disagreement"
+      ]
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.00028227880658437954,
+        "maximum_edge_disagreement_ratio": 0.39965663580246913,
+        "maximum_fast_p95_ms": 14.736,
+        "maximum_mean_delta_e76": 55.037841796875,
+        "minimum_fast_fps": 112.538,
+        "minimum_speedup_ratio": 1.4905254091300602,
+        "minimum_windowed_luma_ssim": 0.4811146557331085
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.00011252572016461071,
+          "edge_disagreement_ratio": 0.01923611111111111,
+          "exact_pixel_ratio": 0.43461998456790124,
+          "fast_fps": 215.335,
+          "fast_p95_ms": 7.093,
+          "label": "normal",
+          "mean_delta_e76": 1.9287524223327637,
+          "speedup_ratio": 1.4905254091300602,
+          "windowed_luma_ssim": 0.9311844110488892
+        },
+        {
+          "clipping_increase_ratio": 0.00028227880658437954,
+          "edge_disagreement_ratio": 0.39965663580246913,
+          "exact_pixel_ratio": 0.004299768518518519,
+          "fast_fps": 112.538,
+          "fast_p95_ms": 14.736,
+          "label": "noise",
+          "mean_delta_e76": 55.037841796875,
+          "speedup_ratio": 1.6185010128291697,
+          "windowed_luma_ssim": 0.4811146557331085
+        }
+      ],
+      "preset": "lightblur",
+      "preset_config_fnv1a64": "e464b5e950b17904",
+      "reasons": [
+        "windowed_luma_ssim",
+        "mean_delta_e76",
+        "edge_disagreement"
+      ]
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 6.430041152263486e-07,
+        "maximum_edge_disagreement_ratio": 0.15345679012345678,
+        "maximum_fast_p95_ms": 16.479,
+        "maximum_mean_delta_e76": 24.046138763427734,
+        "minimum_fast_fps": 89.925,
+        "minimum_speedup_ratio": 1.4208105420188961,
+        "minimum_windowed_luma_ssim": 0.8268967270851135
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 6.430041152263486e-07,
+          "edge_disagreement_ratio": 0.008564814814814815,
+          "exact_pixel_ratio": 0.3673341049382716,
+          "fast_fps": 124.322,
+          "fast_p95_ms": 10.87,
+          "label": "normal",
+          "mean_delta_e76": 3.507133960723877,
+          "speedup_ratio": 1.4208105420188961,
+          "windowed_luma_ssim": 0.956601083278656
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.15345679012345678,
+          "exact_pixel_ratio": 0.45601273148148147,
+          "fast_fps": 89.925,
+          "fast_p95_ms": 16.479,
+          "label": "noise",
+          "mean_delta_e76": 24.046138763427734,
+          "speedup_ratio": 1.52931654676259,
+          "windowed_luma_ssim": 0.8268967270851135
+        }
+      ],
+      "preset": "minimaldiag",
+      "preset_config_fnv1a64": "4818507a4cc97499",
+      "reasons": [
+        "windowed_luma_ssim",
+        "mean_delta_e76",
+        "edge_disagreement"
+      ]
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 3.562,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 285.097,
+        "minimum_speedup_ratio": 1.13909559244419,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 286.23,
+          "fast_p95_ms": 3.562,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.13909559244419,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 285.097,
+          "fast_p95_ms": 3.557,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.1408209806157354,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "vv01",
+      "preset_config_fnv1a64": "211c6a061d5dc668",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 3.539,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 287.035,
+        "minimum_speedup_ratio": 1.1386337543053962,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 287.035,
+          "fast_p95_ms": 3.539,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.1386337543053962,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 287.22,
+          "fast_p95_ms": 3.5,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.1390005743825387,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "vv02",
+      "preset_config_fnv1a64": "2853c37744501b38",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 1.183,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 941.267,
+        "minimum_speedup_ratio": 0.9849198868991518,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 942.263,
+          "fast_p95_ms": 1.183,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 0.9849198868991518,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 941.267,
+          "fast_p95_ms": 1.116,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 0.9981167608286252,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "vv03",
+      "preset_config_fnv1a64": "9d79b6bd8c493619",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 7.76,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 146.739,
+        "minimum_speedup_ratio": 0.992516507703595,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 173.63,
+          "fast_p95_ms": 5.847,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 0.9994790762285118,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 146.739,
+          "fast_p95_ms": 7.76,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 0.992516507703595,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "vv07",
+      "preset_config_fnv1a64": "51647c39cdbd941d",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 3.117,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 499.366,
+        "minimum_speedup_ratio": 1.4687968047928108,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 506.892,
+          "fast_p95_ms": 3.04,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.4891028890015205,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 499.366,
+          "fast_p95_ms": 3.117,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.4687968047928108,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "vv08",
+      "preset_config_fnv1a64": "2a67789ce7b80a2d",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 1.682,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 638.425,
+        "minimum_speedup_ratio": 0.9923371647509579,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 641.121,
+          "fast_p95_ms": 1.602,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.001923076923077,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 638.425,
+          "fast_p95_ms": 1.682,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 0.9923371647509579,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "vv10",
+      "preset_config_fnv1a64": "ceca6845c17fbca7",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 8.186,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 123.358,
+        "minimum_speedup_ratio": 1.064508032128514,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 125.498,
+          "fast_p95_ms": 8.057,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.064508032128514,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 123.358,
+          "fast_p95_ms": 8.186,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.0657456519057606,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "vv13",
+      "preset_config_fnv1a64": "15b7a3ac9f0d9aed",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 9.645061728395062e-06,
+        "maximum_fast_p95_ms": 2.615,
+        "maximum_mean_delta_e76": 0.00011309876572340727,
+        "minimum_fast_fps": 389.362,
+        "minimum_speedup_ratio": 1.1573208722741433,
+        "minimum_windowed_luma_ssim": 0.9999988079071045
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 392.026,
+          "fast_p95_ms": 2.59,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.165425323402587,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 9.645061728395062e-06,
+          "exact_pixel_ratio": 0.999994212962963,
+          "fast_fps": 389.362,
+          "fast_p95_ms": 2.615,
+          "label": "noise",
+          "mean_delta_e76": 0.00011309876572340727,
+          "speedup_ratio": 1.1573208722741433,
+          "windowed_luma_ssim": 0.9999988079071045
+        }
+      ],
+      "preset": "vv17",
+      "preset_config_fnv1a64": "6d7e36d5d4551d22",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.0,
+        "maximum_fast_p95_ms": 5.597,
+        "maximum_mean_delta_e76": 0.0,
+        "minimum_fast_fps": 179.4,
+        "minimum_speedup_ratio": 1.1349120918550413,
+        "minimum_windowed_luma_ssim": 1.0
+      },
+      "allowed": true,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 179.708,
+          "fast_p95_ms": 5.583,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.1360287511230907,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 179.4,
+          "fast_p95_ms": 5.597,
+          "label": "noise",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.1349120918550413,
+          "windowed_luma_ssim": 1.0
+        }
+      ],
+      "preset": "vv25",
+      "preset_config_fnv1a64": "1227189dc4e96c8d",
+      "reasons": []
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.00028227880658437954,
+        "maximum_edge_disagreement_ratio": 0.12976658950617284,
+        "maximum_fast_p95_ms": 8.157,
+        "maximum_mean_delta_e76": 13.163315773010254,
+        "minimum_fast_fps": 172.808,
+        "minimum_speedup_ratio": 1.4905823397269742,
+        "minimum_windowed_luma_ssim": 0.9708738327026367
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.0,
+          "exact_pixel_ratio": 1.0,
+          "fast_fps": 180.61,
+          "fast_p95_ms": 7.875,
+          "label": "normal",
+          "mean_delta_e76": 0.0,
+          "speedup_ratio": 1.5022575401842153,
+          "windowed_luma_ssim": 1.0
+        },
+        {
+          "clipping_increase_ratio": 0.00028227880658437954,
+          "edge_disagreement_ratio": 0.12976658950617284,
+          "exact_pixel_ratio": 0.22126736111111112,
+          "fast_fps": 172.808,
+          "fast_p95_ms": 8.157,
+          "label": "noise",
+          "mean_delta_e76": 13.163315773010254,
+          "speedup_ratio": 1.4905823397269742,
+          "windowed_luma_ssim": 0.9708738327026367
+        }
+      ],
+      "preset": "web_p_like",
+      "preset_config_fnv1a64": "bef9d67217fd6bcf",
+      "reasons": [
+        "mean_delta_e76",
+        "edge_disagreement"
+      ]
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.15581211419753085,
+        "maximum_fast_p95_ms": 24.186,
+        "maximum_mean_delta_e76": 14.450987815856934,
+        "minimum_fast_fps": 53.661,
+        "minimum_speedup_ratio": 1.1769251408639654,
+        "minimum_windowed_luma_ssim": 0.8267977237701416
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.07075424382716049,
+          "exact_pixel_ratio": 0.09504243827160494,
+          "fast_fps": 53.661,
+          "fast_p95_ms": 19.551,
+          "label": "normal",
+          "mean_delta_e76": 8.945167541503906,
+          "speedup_ratio": 1.1769251408639654,
+          "windowed_luma_ssim": 0.8267977237701416
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.15581211419753085,
+          "exact_pixel_ratio": 0.27948109567901236,
+          "fast_fps": 54.324,
+          "fast_p95_ms": 24.186,
+          "label": "noise",
+          "mean_delta_e76": 14.450987815856934,
+          "speedup_ratio": 1.3535962624945677,
+          "windowed_luma_ssim": 0.945064902305603
+        }
+      ],
+      "preset": "webp",
+      "preset_config_fnv1a64": "884bb5910e1afddf",
+      "reasons": [
+        "windowed_luma_ssim",
+        "mean_delta_e76",
+        "edge_disagreement"
+      ]
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.23491319444444445,
+        "maximum_fast_p95_ms": 19.002,
+        "maximum_mean_delta_e76": 23.470422744750977,
+        "minimum_fast_fps": 77.321,
+        "minimum_speedup_ratio": 1.3079060719744338,
+        "minimum_windowed_luma_ssim": 0.3657476603984833
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.23491319444444445,
+          "exact_pixel_ratio": 0.13630594135802468,
+          "fast_fps": 138.942,
+          "fast_p95_ms": 8.409,
+          "label": "normal",
+          "mean_delta_e76": 23.470422744750977,
+          "speedup_ratio": 1.3079060719744338,
+          "windowed_luma_ssim": 0.3657476603984833
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.2184837962962963,
+          "exact_pixel_ratio": 0.13550347222222223,
+          "fast_fps": 77.321,
+          "fast_p95_ms": 19.002,
+          "label": "noise",
+          "mean_delta_e76": 18.703655242919922,
+          "speedup_ratio": 1.509317250444599,
+          "windowed_luma_ssim": 0.9166356325149536
+        }
+      ],
+      "preset": "wtf",
+      "preset_config_fnv1a64": "8bd97733305b048b",
+      "reasons": [
+        "windowed_luma_ssim",
+        "mean_delta_e76",
+        "edge_disagreement"
+      ]
+    },
+    {
+      "aggregate": {
+        "maximum_clipping_increase_ratio": 0.0,
+        "maximum_edge_disagreement_ratio": 0.25015625,
+        "maximum_fast_p95_ms": 21.929,
+        "maximum_mean_delta_e76": 22.334104537963867,
+        "minimum_fast_fps": 48.585,
+        "minimum_speedup_ratio": 1.2240792925857544,
+        "minimum_windowed_luma_ssim": 0.29516685009002686
+      },
+      "allowed": false,
+      "cases": [
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.25015625,
+          "exact_pixel_ratio": 0.09371720679012345,
+          "fast_fps": 48.585,
+          "fast_p95_ms": 21.929,
+          "label": "normal",
+          "mean_delta_e76": 22.334104537963867,
+          "speedup_ratio": 1.2240792925857544,
+          "windowed_luma_ssim": 0.29516685009002686
+        },
+        {
+          "clipping_increase_ratio": 0.0,
+          "edge_disagreement_ratio": 0.10864197530864197,
+          "exact_pixel_ratio": 0.3248572530864198,
+          "fast_fps": 80.793,
+          "fast_p95_ms": 18.265,
+          "label": "noise",
+          "mean_delta_e76": 7.644164562225342,
+          "speedup_ratio": 1.5179768926234143,
+          "windowed_luma_ssim": 0.9756664037704468
+        }
+      ],
+      "preset": "wtf2",
+      "preset_config_fnv1a64": "2cb6c7042a0a9c36",
+      "reasons": [
+        "windowed_luma_ssim",
+        "mean_delta_e76",
+        "edge_disagreement"
+      ]
+    }
+  ],
+  "schema": "glic-fast-match-allowlist-v1",
+  "thresholds": {
+    "maximum_clipping_increase_ratio": 0.02,
+    "maximum_edge_disagreement_ratio": 0.12,
+    "maximum_mean_delta_e76": 6.0,
+    "maximum_p95_ms": 50.0,
+    "minimum_fps": 20.0,
+    "minimum_windowed_luma_ssim": 0.94
+  }
+}
