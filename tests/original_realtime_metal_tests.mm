@@ -96,7 +96,11 @@ bool processPair(const glic::OriginalPresetConfig &config,
       !metal->process(input, candidate, 0, metalStats, error))
     return false;
   if (metalStats != nullptr &&
-      cpuStats.segmentCounts != metalStats->segmentCounts) {
+      (cpuStats.segmentCounts != metalStats->segmentCounts ||
+       cpuStats.segmentationRngState != metalStats->segmentationRngState ||
+       cpuStats.segmentOrderFnv1a64 != metalStats->segmentOrderFnv1a64 ||
+       cpuStats.earlyTerminatedNodes != metalStats->earlyTerminatedNodes ||
+       cpuStats.earlySkippedSamples != metalStats->earlySkippedSamples)) {
     error = "Metal segmentation diverged from the CPU reference";
     return false;
   }
@@ -170,14 +174,32 @@ bool testThreadgroupCdfMatchesGlobalBitExactly() {
                 << height << ": " << error << '\n';
       return false;
     }
+    const bool mixedLocalGlobal =
+        std::any_of(blockSizes.begin(), blockSizes.end(),
+                    [](int size) { return size <= 32; }) &&
+        std::any_of(blockSizes.begin(), blockSizes.end(),
+                    [](int size) { return size > 32; });
     if (localOutput != globalOutput ||
         localStats.threadgroupPipelineDispatches == 0 ||
         localStats.threadgroupPipelineSegments == 0 ||
-        localStats.globalPipelineDispatches != 0 ||
         globalStats.threadgroupPipelineDispatches != 0 ||
         globalStats.globalPipelineDispatches == 0 ||
+        globalStats.globalPipelineSegments != globalStats.totalSegments ||
         !localStats.staticScheduleReused ||
-        localStats.bufferBarriers + 1 != localStats.gpuDispatches) {
+        localStats.bufferBarriers + 1 != localStats.dispatchLevels ||
+        localStats.threadgroupPipelineSegments +
+                localStats.globalPipelineSegments !=
+            localStats.totalSegments ||
+        !localStats.pipelineAccountingPassed ||
+        !globalStats.pipelineAccountingPassed ||
+        (!mixedLocalGlobal &&
+         (localStats.globalPipelineDispatches != 0 ||
+          localStats.globalPipelineSegments != 0 ||
+          localStats.threadgroupPipelineSegments != localStats.totalSegments)) ||
+        (mixedLocalGlobal &&
+         (localStats.globalPipelineDispatches == 0 ||
+          localStats.globalPipelineSegments == 0 ||
+          localStats.gpuDispatches <= localStats.dispatchLevels))) {
       std::cerr << "threadgroup/global A/B mismatch at " << width << 'x'
                 << height << " blocks " << blockSizes[0] << '/'
                 << blockSizes[1] << '/' << blockSizes[2] << " transform "
@@ -203,7 +225,11 @@ bool testThreadgroupCdfMatchesGlobalBitExactly() {
          runCase(65, 49, {32, 16, 4}, 1,
                  {glic::PredictionMethod::DIFF,
                   glic::PredictionMethod::DC,
-                  glic::PredictionMethod::JPEGLS});
+                  glic::PredictionMethod::JPEGLS}) &&
+         runCase(65, 49, {16, 64, 8}, 0,
+                 {glic::PredictionMethod::DC,
+                  glic::PredictionMethod::JPEGLS,
+                  glic::PredictionMethod::DIFF});
 }
 
 bool testNoWaveletExact() {

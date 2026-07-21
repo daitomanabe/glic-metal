@@ -72,8 +72,27 @@ def main() -> int:
             "integer": "1111111111111111",
             "cdf": "2222222222222222",
         }
+        default_traces = {
+            "integer": {
+                "last_segmentation_rng_state": "0000111111111111",
+                "last_segment_order_fnv1a64": "aaaaaaaaaaaaaaaa",
+                "mean_early_terminated_nodes": 0.0,
+                "mean_early_skipped_samples": 0.0,
+            },
+            "cdf": {
+                "last_segmentation_rng_state": "0000222222222222",
+                "last_segment_order_fnv1a64": "bbbbbbbbbbbbbbbb",
+                "mean_early_terminated_nodes": 12.5,
+                "mean_early_skipped_samples": 4096.0,
+            },
+        }
 
-        def rows(directory: Path, config_hashes: dict[str, str]) -> list[dict]:
+        def rows(
+            directory: Path,
+            config_hashes: dict[str, str],
+            traces: dict[str, dict] | None = None,
+        ) -> list[dict]:
+            trace_values = traces or default_traces
             return [
                 {
                     "preset": preset,
@@ -82,6 +101,7 @@ def main() -> int:
                     "output_preview_file_fnv1a64": fnv1a64_file(
                         directory / f"{preset}.png"
                     ),
+                    **trace_values[preset],
                 }
                 for preset, uses_cdf97 in (("integer", False), ("cdf", True))
             ]
@@ -90,6 +110,7 @@ def main() -> int:
             *,
             cpu_input_hash: str = "0123456789abcdef",
             cpu_config_hashes: dict[str, str] | None = None,
+            cpu_traces: dict[str, dict] | None = None,
         ) -> None:
             benchmark.write_text(
                 json.dumps(
@@ -108,7 +129,9 @@ def main() -> int:
                         "schema": "glic-original-realtime-cpu-benchmark-v1",
                         "input_decoded_color_fnv1a64": cpu_input_hash,
                         "results": rows(
-                            cpu, cpu_config_hashes or default_config_hashes
+                            cpu,
+                            cpu_config_hashes or default_config_hashes,
+                            cpu_traces,
                         ),
                     }
                 ),
@@ -147,6 +170,7 @@ def main() -> int:
         assert payload["style_passed_count"] == 2
         assert payload["original_style_match_passed"] is True
         assert payload["provenance_match_verified"] is True
+        assert payload["segmentation_trace_match_verified"] is True
 
         # Reordering 32 px tiles preserves global blur/orientation/edge-energy
         # statistics, but must fail the aligned spatial-edge morphology gate.
@@ -238,6 +262,35 @@ def main() -> int:
         )
         assert config_mismatch_result.returncode == 2
         assert "preset configuration differs" in config_mismatch_result.stdout
+
+        mismatched_traces = {
+            preset: dict(values) for preset, values in default_traces.items()
+        }
+        mismatched_traces["cdf"]["last_segment_order_fnv1a64"] = (
+            "cccccccccccccccc"
+        )
+        write_benchmarks(cpu_traces=mismatched_traces)
+        trace_mismatch_result = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--cpu-dir",
+                str(cpu),
+                "--metal-dir",
+                str(metal),
+                "--cpu-benchmark",
+                str(cpu_benchmark),
+                "--benchmark",
+                str(benchmark),
+                "--output-json",
+                str(report),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert trace_mismatch_result.returncode == 2
+        assert "segmentation trace differs" in trace_mismatch_result.stdout
 
         write_benchmarks()
         stale_preview = shuffled.copy()

@@ -3,6 +3,7 @@
 #include "prediction.hpp"
 #include "processing_math.hpp"
 #include "processing_random.hpp"
+#include "segmentation_trace.hpp"
 #include "quantization.hpp"
 #include "segment.hpp"
 #include "wavelet.hpp"
@@ -15,6 +16,7 @@
 #include <limits>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -104,6 +106,58 @@ bool testProcessingRandomGolden() {
     return false;
   }
 
+  glic::ProcessingRandom checkedPowerOfTwo(42);
+  glic::ProcessingRandom hoistedPowerOfTwo(42);
+  for (unsigned magnitude = 0; magnitude <= 24; ++magnitude) {
+    const int size = 1 << magnitude;
+    constexpr int drawsPerMagnitude = 64;
+    for (int draw = 0; draw < drawsPerMagnitude; ++draw) {
+      const float high = static_cast<float>(size);
+      float value = 0.0f;
+      do {
+        value = checkedPowerOfTwo.nextFloat() * high;
+      } while (value == high);
+      const int expected = static_cast<int>(value);
+      if (expected !=
+          hoistedPowerOfTwo.nextPowerOfTwoPosition(magnitude)) {
+        std::cerr << "Processing hoisted power-of-two random mismatch\n";
+        return false;
+      }
+    }
+  }
+  if (checkedPowerOfTwo.state() != hoistedPowerOfTwo.state()) {
+    std::cerr << "Processing hoisted power-of-two RNG state mismatch\n";
+    return false;
+  }
+  glic::ProcessingRandom invalidMagnitude(42);
+  glic::ProcessingRandom invalidMagnitudeReference(42);
+  const int invalidPosition = invalidMagnitude.nextPowerOfTwoPosition(25);
+  if (invalidPosition != 0 ||
+      invalidMagnitude.state() != invalidMagnitudeReference.state()) {
+    std::cerr << "Processing power-of-two magnitude guard mismatch\n";
+    return false;
+  }
+
+  glic::ProcessingRandom checkpointed(42);
+  const std::uint64_t checkpointState = checkpointed.state();
+  {
+    glic::ProcessingRandomCheckpoint checkpoint(checkpointed);
+    (void)checkpointed.nextFloat();
+  }
+  if (checkpointed.state() != checkpointState) {
+    std::cerr << "Processing random checkpoint rollback mismatch\n";
+    return false;
+  }
+  {
+    glic::ProcessingRandomCheckpoint checkpoint(checkpointed);
+    (void)checkpointed.nextFloat();
+    checkpoint.commit();
+  }
+  if (checkpointed.state() == checkpointState) {
+    std::cerr << "Processing random checkpoint commit mismatch\n";
+    return false;
+  }
+
   glic::ProcessingRandom sequential(42);
   glic::ProcessingRandom skipped(42);
   constexpr std::uint64_t skipCount = 12345;
@@ -119,6 +173,238 @@ bool testProcessingRandomGolden() {
   fixedTree.discardNextFloats(922208);
   if (fixedTree.state() != 0x9deba58d7c27ULL) {
     std::cerr << "Processing fixed-tree RNG state golden mismatch\n";
+    return false;
+  }
+  return true;
+}
+
+struct ProbeLeaf {
+  int frame = 0;
+  int channel = 0;
+  int x = 0;
+  int y = 0;
+  int size = 0;
+
+  auto operator<=>(const ProbeLeaf &) const = default;
+};
+
+using ProbePlanes = std::array<std::vector<int>, 3>;
+
+int probePlaneValue(const ProbePlanes &planes, int width, int height,
+                    int channel, int x, int y) {
+  if (x < 0 || x >= width || y < 0 || y >= height)
+    return 17 + channel * 31;
+  return planes[static_cast<std::size_t>(channel)]
+               [static_cast<std::size_t>(y) * width + x];
+}
+
+bool probeDeviationExceeds(glic::ProcessingRandom &random,
+                           const ProbePlanes &planes, int width, int height,
+                           int channel, int x, int y, int size,
+                           float threshold, bool early,
+                           std::size_t &evaluatedSamples) {
+#if defined(__clang__)
+#pragma clang fp contract(off)
+#endif
+  const int limit = std::max(
+      static_cast<int>(0.1f * static_cast<float>(size) *
+                       static_cast<float>(size)),
+      4);
+  float average = 0.0f;
+  float sum = 0.0f;
+  int nextDecisionSample = 1;
+  const unsigned magnitude = std::countr_zero(static_cast<unsigned>(size));
+  const auto slowProcessingPosition = [&](int extent) {
+    const float high = static_cast<float>(extent);
+    float value = 0.0f;
+    do {
+      value = random.nextFloat() * high;
+    } while (value == high);
+    return static_cast<int>(value);
+  };
+  for (int sample = 1; sample <= limit; ++sample) {
+    const int sampleX =
+        early ? random.nextPowerOfTwoPosition(magnitude)
+              : slowProcessingPosition(size);
+    const int sampleY =
+        early ? random.nextPowerOfTwoPosition(magnitude)
+              : slowProcessingPosition(size);
+    ++evaluatedSamples;
+    const int value = probePlaneValue(planes, width, height, channel,
+                                      x + sampleX, y + sampleY);
+    const float oldAverage = average;
+    average += (static_cast<float>(value) - average) /
+               static_cast<float>(sample);
+    sum += (static_cast<float>(value) - oldAverage) *
+           (static_cast<float>(value) - average);
+    if (early && (sample == nextDecisionSample || sample == limit)) {
+      if (std::sqrt(sum / static_cast<float>(limit - 1)) > threshold) {
+        random.discardNextFloats(
+            static_cast<std::uint64_t>(limit - sample) * 2u);
+        return true;
+      }
+      nextDecisionSample = std::min(limit, nextDecisionSample * 2);
+    }
+  }
+  return std::sqrt(sum / static_cast<float>(limit - 1)) > threshold;
+}
+
+void probeSegmentTree(glic::ProcessingRandom &random,
+                      const ProbePlanes &planes, int width, int height,
+                      int frame, int channel, int x, int y, int size,
+                      int minSize, int maxSize, float threshold, bool early,
+                      std::vector<ProbeLeaf> &leaves,
+                      std::array<std::uint64_t, 2> &frameHashes,
+                      std::size_t &evaluatedSamples) {
+  if (x >= width || y >= height)
+    return;
+  const int limit = std::max(
+      static_cast<int>(0.1f * static_cast<float>(size) *
+                       static_cast<float>(size)),
+      4);
+  const bool forcedSplit = size > maxSize;
+  const bool forcedLeaf = size <= minSize;
+  bool splitByDeviation = false;
+  if (forcedSplit || forcedLeaf) {
+    if (early) {
+      random.discardNextFloats(static_cast<std::uint64_t>(limit) * 2u);
+    } else {
+      for (int sample = 0; sample < limit; ++sample) {
+        (void)random.nextFloat();
+        (void)random.nextFloat();
+      }
+    }
+  } else {
+    splitByDeviation = probeDeviationExceeds(
+        random, planes, width, height, channel, x, y, size, threshold, early,
+        evaluatedSamples);
+  }
+  if (forcedSplit || (!forcedLeaf && splitByDeviation)) {
+    const int half = size / 2;
+    probeSegmentTree(random, planes, width, height, frame, channel, x, y, half,
+                     minSize, maxSize, threshold, early, leaves, frameHashes,
+                     evaluatedSamples);
+    probeSegmentTree(random, planes, width, height, frame, channel, x + half, y,
+                     half, minSize, maxSize, threshold, early, leaves,
+                     frameHashes, evaluatedSamples);
+    probeSegmentTree(random, planes, width, height, frame, channel, x, y + half,
+                     half, minSize, maxSize, threshold, early, leaves,
+                     frameHashes, evaluatedSamples);
+    probeSegmentTree(random, planes, width, height, frame, channel, x + half,
+                     y + half, half, minSize, maxSize, threshold, early,
+                     leaves, frameHashes, evaluatedSamples);
+    return;
+  }
+  leaves.push_back({frame, channel, x, y, size});
+  glic::appendSegmentationTraceLeaf(frameHashes[frame], channel, x, y, size);
+}
+
+struct ProbeRun {
+  std::vector<ProbeLeaf> leaves;
+  std::array<std::uint64_t, 2> frameHashes{
+      glic::kSegmentationTraceFnvOffset, glic::kSegmentationTraceFnvOffset};
+  std::array<std::uint64_t, 2> terminalStates{};
+  std::size_t evaluatedSamples = 0;
+};
+
+ProbeRun
+runSegmentationProbe(const ProbePlanes &planes, int width, int height,
+                     float threshold, bool early) {
+  glic::ProcessingRandom random(42);
+  ProbeRun result;
+  for (int frame = 0; frame < 2; ++frame) {
+    for (int channel = 0; channel < 3; ++channel) {
+      probeSegmentTree(random, planes, width, height, frame, channel, 0, 0, 128,
+                       2, 64, threshold, early, result.leaves,
+                       result.frameHashes, result.evaluatedSamples);
+    }
+    result.terminalStates[frame] = random.state();
+  }
+  return result;
+}
+
+bool testEarlySegmentationMatchesFullSamplingOracle() {
+  constexpr int width = 65;
+  constexpr int height = 49;
+  ProbePlanes planes;
+  for (auto &plane : planes)
+    plane.resize(width * height);
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      const std::size_t index = static_cast<std::size_t>(y) * width + x;
+      planes[0][index] = (x * 17 + y * 5 + ((x ^ y) * 11)) & 255;
+      planes[1][index] = (x * 3 + y * 23 + ((x * y) >> 2)) & 255;
+      planes[2][index] = (x * 29 + y * 7 + ((x + y) * 13)) & 255;
+    }
+  }
+  std::vector<glic::Color> input(width * height);
+  for (std::size_t index = 0; index < input.size(); ++index) {
+    input[index] = glic::makeColor(
+        static_cast<std::uint8_t>(planes[0][index]),
+        static_cast<std::uint8_t>(planes[1][index]),
+        static_cast<std::uint8_t>(planes[2][index]));
+  }
+  bool observedOracleSavings = false;
+  bool observedProductionSavings = false;
+  for (const float threshold : {-0.25f, 0.0f, 7.205f, 40.0f, 1000.0f}) {
+    const auto full =
+        runSegmentationProbe(planes, width, height, threshold, false);
+    const auto early =
+        runSegmentationProbe(planes, width, height, threshold, true);
+    if (early.leaves != full.leaves ||
+        early.frameHashes != full.frameHashes ||
+        early.terminalStates != full.terminalStates) {
+      std::cerr << "early segmentation/full sampling oracle mismatch at "
+                << threshold << '\n';
+      return false;
+    }
+    observedOracleSavings =
+        observedOracleSavings || early.evaluatedSamples < full.evaluatedSamples;
+
+    // Negative thresholds exercise the mathematical oracle boundary but are
+    // rejected by the public preset preflight, so production comparison starts
+    // at the supported non-negative domain.
+    if (threshold < 0.0f)
+      continue;
+
+    auto config = makeSupportedConfig();
+    config.borderColorR = 17;
+    config.borderColorG = 48;
+    config.borderColorB = 79;
+    for (auto &channel : config.channels) {
+      channel.minBlockSize = 2;
+      channel.maxBlockSize = 64;
+      channel.segmentationPrecision = threshold;
+      channel.predictionMethod = glic::PredictionMethod::NONE;
+      channel.quantizationValue = 0;
+      channel.originalWaveletId = 0;
+    }
+    glic::OriginalRealtimeCpuLane lane;
+    std::vector<glic::Color> output(input.size());
+    std::string error;
+    if (!lane.prepare(width, height, config, error)) {
+      std::cerr << "production segmentation probe prepare failed: " << error
+                << '\n';
+      return false;
+    }
+    for (int frame = 0; frame < 2; ++frame) {
+      glic::OriginalRealtimeFrameStats stats;
+      if (!lane.process(input, output, &stats, error) || output != input ||
+          stats.segmentOrderFnv1a64 != full.frameHashes[frame] ||
+          stats.segmentationRngState != full.terminalStates[frame]) {
+        std::cerr << "production segmentation/full oracle mismatch at "
+                  << threshold << " frame " << frame << ": " << error
+                  << '\n';
+        return false;
+      }
+      observedProductionSavings =
+          observedProductionSavings ||
+          (stats.earlyTerminatedNodes > 0 &&
+           stats.earlySkippedSamples > 0);
+    }
+  }
+  if (!observedOracleSavings || !observedProductionSavings) {
+    std::cerr << "early segmentation optimization was not exercised\n";
     return false;
   }
   return true;
@@ -523,6 +809,7 @@ bool testBufferValidation() {
 
 int main() {
   if (!testProcessingRoundGolden() || !testProcessingRandomGolden() ||
+      !testEarlySegmentationMatchesFullSamplingOracle() ||
       !testFixedPredictorQuantization() ||
       !testZeroQuantizationRoundTrip() || !testAdaptiveProcessingTreeGolden() ||
       !testEverySupportedPredictorMatchesReference() ||

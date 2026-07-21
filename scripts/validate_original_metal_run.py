@@ -187,8 +187,15 @@ def validate_benchmark(
             global_dispatches = finite_number(
                 row.get("mean_global_pipeline_dispatches")
             )
+            global_segments = finite_number(
+                row.get("mean_global_pipeline_segments")
+            )
+            mean_segments = finite_number(row.get("mean_segments"))
+            dependency_levels = finite_number(row.get("mean_dependency_levels"))
             barriers = finite_number(row.get("mean_buffer_barriers"))
             reuse = finite_number(row.get("static_schedule_reuse_ratio"))
+            early_nodes = finite_number(row.get("mean_early_terminated_nodes"))
+            early_samples = finite_number(row.get("mean_early_skipped_samples"))
             require(
                 gpu_dispatches is not None and gpu_dispatches >= 1.0,
                 f"{label}/{preset}: invalid GPU dispatch count",
@@ -199,7 +206,19 @@ def validate_benchmark(
                 and threadgroup_segments is not None
                 and threadgroup_segments >= 0.0
                 and global_dispatches is not None
-                and global_dispatches >= 0.0,
+                and global_dispatches >= 0.0
+                and global_segments is not None
+                and global_segments >= 0.0
+                and mean_segments is not None
+                and mean_segments >= 1.0
+                and dependency_levels is not None
+                and dependency_levels >= 1.0
+                and early_nodes is not None
+                and early_nodes >= 0.0
+                and early_samples is not None
+                and early_samples >= 0.0
+                and valid_fnv1a64(row.get("last_segmentation_rng_state"))
+                and valid_fnv1a64(row.get("last_segment_order_fnv1a64")),
                 f"{label}/{preset}: invalid local/global pipeline evidence",
             )
             require(
@@ -211,9 +230,30 @@ def validate_benchmark(
                 f"{label}/{preset}: local/global dispatch totals do not match",
             )
             require(
+                abs(mean_segments - (threadgroup_segments + global_segments))
+                <= 0.005,
+                f"{label}/{preset}: local/global segment totals do not match",
+            )
+            require(
+                threadgroup_segments + 0.005 >= threadgroup_dispatches
+                and global_segments + 0.005 >= global_dispatches,
+                f"{label}/{preset}: a pipeline dispatch has no segment",
+            )
+            require(
+                (threadgroup_dispatches <= 0.005)
+                == (threadgroup_segments <= 0.005)
+                and (global_dispatches <= 0.005)
+                == (global_segments <= 0.005),
+                f"{label}/{preset}: zero dispatch/segment evidence is inconsistent",
+            )
+            require(
                 barriers is not None
-                and abs(barriers - max(0.0, gpu_dispatches - 1.0)) <= 0.01,
+                and abs(barriers - max(0.0, dependency_levels - 1.0)) <= 0.01,
                 f"{label}/{preset}: plane-buffer barrier count is inconsistent",
+            )
+            require(
+                row.get("pipeline_accounting_passed") is True,
+                f"{label}/{preset}: runtime pipeline accounting did not pass",
             )
             require(
                 reuse is not None and 0.0 <= reuse <= 1.0,
@@ -247,6 +287,10 @@ def validate_comparison(
     require(
         payload.get("provenance_match_verified") is True,
         "reference comparison: provenance was not verified",
+    )
+    require(
+        payload.get("segmentation_trace_match_verified") is True,
+        "reference comparison: CPU/Metal segmentation trace was not verified",
     )
     require(
         int(payload.get("preset_count", -1)) == expected_presets,
@@ -363,8 +407,18 @@ def validate_video(payload: dict[str, Any], *, minimum_fps: float) -> None:
         stats.get("mean_threadgroup_pipeline_segments")
     )
     global_dispatches = finite_number(stats.get("mean_global_pipeline_dispatches"))
+    global_segments = finite_number(stats.get("mean_global_pipeline_segments"))
+    dependency_levels = finite_number(stats.get("mean_dependency_levels"))
+    channel_segments = stats.get("mean_segments_per_channel")
+    mean_segments = None
+    if isinstance(channel_segments, list) and len(channel_segments) == 3:
+        parsed_segments = [finite_number(value) for value in channel_segments]
+        if all(value is not None for value in parsed_segments):
+            mean_segments = sum(float(value) for value in parsed_segments)
     barriers = finite_number(stats.get("buffer_barriers_per_frame"))
     reuse = finite_number(stats.get("static_schedule_reuse_ratio"))
+    early_nodes = finite_number(stats.get("mean_early_terminated_nodes"))
+    early_samples = finite_number(stats.get("mean_early_skipped_samples"))
     require(
         gpu_dispatches is not None
         and gpu_dispatches >= 1.0
@@ -373,7 +427,19 @@ def validate_video(payload: dict[str, Any], *, minimum_fps: float) -> None:
         and threadgroup_segments is not None
         and threadgroup_segments >= 0.0
         and global_dispatches is not None
-        and global_dispatches >= 0.0,
+        and global_dispatches >= 0.0
+        and global_segments is not None
+        and global_segments >= 0.0
+        and dependency_levels is not None
+        and dependency_levels >= 1.0
+        and mean_segments is not None
+        and mean_segments >= 1.0
+        and early_nodes is not None
+        and early_nodes >= 0.0
+        and early_samples is not None
+        and early_samples >= 0.0
+        and valid_fnv1a64(stats.get("last_segmentation_rng_state"))
+        and valid_fnv1a64(stats.get("last_segment_order_fnv1a64")),
         "video: invalid local/global pipeline evidence",
     )
     require(
@@ -382,9 +448,27 @@ def validate_video(payload: dict[str, Any], *, minimum_fps: float) -> None:
         "video: local/global dispatch totals do not match",
     )
     require(
+        abs(mean_segments - (threadgroup_segments + global_segments)) <= 0.005,
+        "video: local/global segment totals do not match",
+    )
+    require(
+        threadgroup_segments + 0.005 >= threadgroup_dispatches
+        and global_segments + 0.005 >= global_dispatches,
+        "video: a pipeline dispatch has no segment",
+    )
+    require(
+        (threadgroup_dispatches <= 0.005) == (threadgroup_segments <= 0.005)
+        and (global_dispatches <= 0.005) == (global_segments <= 0.005),
+        "video: zero dispatch/segment evidence is inconsistent",
+    )
+    require(
         barriers is not None
-        and abs(barriers - max(0.0, gpu_dispatches - 1.0)) <= 0.01,
+        and abs(barriers - max(0.0, dependency_levels - 1.0)) <= 0.01,
         "video: plane-buffer barrier count is inconsistent",
+    )
+    require(
+        stats.get("pipeline_accounting_passed") is True,
+        "video: runtime pipeline accounting did not pass",
     )
     require(
         reuse is not None and 0.0 <= reuse <= 1.0,
@@ -426,11 +510,19 @@ def selftest() -> None:
         "p95_ms": 12.0,
         "preset_config_fnv1a64": "1111111111111111",
         "output_preview_file_fnv1a64": "2222222222222222",
-        "mean_gpu_dispatches": 1.0,
-        "mean_threadgroup_pipeline_dispatches": 0.5,
+        "mean_gpu_dispatches": 2.0,
+        "mean_threadgroup_pipeline_dispatches": 1.0,
         "mean_threadgroup_pipeline_segments": 1.0,
-        "mean_global_pipeline_dispatches": 0.5,
+        "mean_global_pipeline_dispatches": 1.0,
+        "mean_global_pipeline_segments": 1.0,
+        "mean_segments": 2.0,
+        "mean_dependency_levels": 1.0,
         "mean_buffer_barriers": 0.0,
+        "pipeline_accounting_passed": True,
+        "mean_early_terminated_nodes": 1.0,
+        "mean_early_skipped_samples": 4.0,
+        "last_segmentation_rng_state": "0123456789abcdef",
+        "last_segment_order_fnv1a64": "fedcba9876543210",
         "static_schedule_reuse_ratio": 1.0,
         "min_block_size": 4,
         "max_block_size": 4,
@@ -455,18 +547,17 @@ def selftest() -> None:
         require_performance=True,
         minimum_fps=30.0,
     )
-    validate_comparison(
-        {
-            "schema": "glic-original-metal-reference-comparison-v1",
-            "provenance_match_verified": True,
-            "preset_count": 1,
-            "passed_count": 1,
-            "failed_presets": [],
-            "style_passed_count": 1,
-            "original_style_match_passed": True,
-        },
-        expected_presets=1,
-    )
+    comparison_fixture = {
+        "schema": "glic-original-metal-reference-comparison-v1",
+        "provenance_match_verified": True,
+        "segmentation_trace_match_verified": True,
+        "preset_count": 1,
+        "passed_count": 1,
+        "failed_presets": [],
+        "style_passed_count": 1,
+        "original_style_match_passed": True,
+    }
+    validate_comparison(comparison_fixture, expected_presets=1)
     validate_effect_difference(
         {
             "schema": "glic-effect-difference-v1",
@@ -504,8 +595,16 @@ def selftest() -> None:
                 "mean_threadgroup_pipeline_dispatches": 374.0,
                 "mean_threadgroup_pipeline_segments": 97200.0,
                 "mean_global_pipeline_dispatches": 0.0,
+                "mean_global_pipeline_segments": 0.0,
+                "mean_dependency_levels": 374.0,
+                "mean_segments_per_channel": [32400.0, 32400.0, 32400.0],
                 "buffer_barriers_per_frame": 373.0,
                 "static_schedule_reuse_ratio": 1.0,
+                "pipeline_accounting_passed": True,
+                "mean_early_terminated_nodes": 0.0,
+                "mean_early_skipped_samples": 0.0,
+                "last_segmentation_rng_state": "0123456789abcdef",
+                "last_segment_order_fnv1a64": "fedcba9876543210",
             },
         },
         minimum_fps=30.0,
@@ -533,6 +632,29 @@ def selftest() -> None:
             minimum_fps=30.0,
         ),
         "performance negative selftest did not fail",
+    )
+    broken_barrier = {
+        **base,
+        "schema": "glic-original-realtime-metal-benchmark-v1",
+        "results": [{**row, "mean_buffer_barriers": 1.0}],
+    }
+    expect_failure(
+        lambda: validate_benchmark(
+            broken_barrier,
+            label="barrier negative selftest",
+            schema="glic-original-realtime-metal-benchmark-v1",
+            expected_presets=1,
+            require_performance=True,
+            minimum_fps=30.0,
+        ),
+        "frontier barrier negative selftest did not fail",
+    )
+    expect_failure(
+        lambda: validate_comparison(
+            {**comparison_fixture, "segmentation_trace_match_verified": False},
+            expected_presets=1,
+        ),
+        "segmentation trace negative selftest did not fail",
     )
     legacy = {
         **base,

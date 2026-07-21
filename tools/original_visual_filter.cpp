@@ -190,6 +190,12 @@ std::string jsonEscape(std::string_view value) {
   return output.str();
 }
 
+std::string hex64(std::uint64_t value) {
+  std::ostringstream output;
+  output << std::hex << std::setfill('0') << std::setw(16) << value;
+  return output.str();
+}
+
 double percentile(std::vector<double> values, double fraction) {
   if (values.empty())
     return 0.0;
@@ -233,8 +239,14 @@ bool writeStats(const Options &options,
                 double dependencyLevelTotal, double gpuDispatchTotal,
                 double threadgroupPipelineDispatchTotal,
                 double threadgroupPipelineSegmentTotal,
-                double globalPipelineDispatchTotal, double bufferBarrierTotal,
+                double globalPipelineDispatchTotal,
+                double globalPipelineSegmentTotal, double bufferBarrierTotal,
                 double staticScheduleReuseTotal,
+                bool pipelineAccountingPassed,
+                double earlyTerminatedNodeTotal,
+                double earlySkippedSampleTotal,
+                std::uint64_t lastSegmentationRngState,
+                std::uint64_t lastSegmentOrderFnv1a64,
                 double commandBufferTotal, double completionWaitTotal,
                 double mappedBufferCopyTotal, std::size_t initialTimingCapacity,
                 std::size_t timingCapacityGrowthEvents) {
@@ -392,6 +404,12 @@ bool writeStats(const Options &options,
               : globalPipelineDispatchTotal /
                     static_cast<double>(kernelFrameTimes.size()))
       << ",\n"
+      << "  \"mean_global_pipeline_segments\": "
+      << (kernelFrameTimes.empty()
+              ? 0.0
+              : globalPipelineSegmentTotal /
+                    static_cast<double>(kernelFrameTimes.size()))
+      << ",\n"
       << "  \"buffer_barriers_per_frame\": "
       << (kernelFrameTimes.empty()
               ? 0.0
@@ -404,6 +422,24 @@ bool writeStats(const Options &options,
               : staticScheduleReuseTotal /
                     static_cast<double>(kernelFrameTimes.size()))
       << ",\n"
+      << "  \"pipeline_accounting_passed\": "
+      << (pipelineAccountingPassed ? "true" : "false") << ",\n"
+      << "  \"mean_early_terminated_nodes\": "
+      << (kernelFrameTimes.empty()
+              ? 0.0
+              : earlyTerminatedNodeTotal /
+                    static_cast<double>(kernelFrameTimes.size()))
+      << ",\n"
+      << "  \"mean_early_skipped_samples\": "
+      << (kernelFrameTimes.empty()
+              ? 0.0
+              : earlySkippedSampleTotal /
+                    static_cast<double>(kernelFrameTimes.size()))
+      << ",\n"
+      << "  \"last_segmentation_rng_state\": \""
+      << hex64(lastSegmentationRngState) << "\",\n"
+      << "  \"last_segment_order_fnv1a64\": \""
+      << hex64(lastSegmentOrderFnv1a64) << "\",\n"
       << "  \"command_buffers_per_frame\": "
       << (kernelFrameTimes.empty()
               ? 0.0
@@ -555,8 +591,14 @@ int main(int argc, char **argv) {
   double threadgroupPipelineDispatchTotal = 0.0;
   double threadgroupPipelineSegmentTotal = 0.0;
   double globalPipelineDispatchTotal = 0.0;
+  double globalPipelineSegmentTotal = 0.0;
   double bufferBarrierTotal = 0.0;
   double staticScheduleReuseTotal = 0.0;
+  bool pipelineAccountingPassed = true;
+  double earlyTerminatedNodeTotal = 0.0;
+  double earlySkippedSampleTotal = 0.0;
+  std::uint64_t lastSegmentationRngState = 0;
+  std::uint64_t lastSegmentOrderFnv1a64 = 0;
   double commandBufferTotal = 0.0;
   double completionWaitTotal = 0.0;
   double mappedBufferCopyTotal = 0.0;
@@ -616,9 +658,17 @@ int main(int argc, char **argv) {
           static_cast<double>(metalFrameStats.threadgroupPipelineSegments);
       globalPipelineDispatchTotal +=
           static_cast<double>(metalFrameStats.globalPipelineDispatches);
+      globalPipelineSegmentTotal +=
+          static_cast<double>(metalFrameStats.globalPipelineSegments);
       bufferBarrierTotal +=
           static_cast<double>(metalFrameStats.bufferBarriers);
       staticScheduleReuseTotal += metalFrameStats.staticScheduleReused ? 1.0 : 0.0;
+      pipelineAccountingPassed =
+          pipelineAccountingPassed && metalFrameStats.pipelineAccountingPassed;
+      earlyTerminatedNodeTotal += metalFrameStats.earlyTerminatedNodes;
+      earlySkippedSampleTotal += metalFrameStats.earlySkippedSamples;
+      lastSegmentationRngState = metalFrameStats.segmentationRngState;
+      lastSegmentOrderFnv1a64 = metalFrameStats.segmentOrderFnv1a64;
       commandBufferTotal +=
           static_cast<double>(metalFrameStats.commandBufferSubmissions);
       completionWaitTotal +=
@@ -649,8 +699,12 @@ int main(int argc, char **argv) {
                   dependencyLevelTotal, gpuDispatchTotal,
                   threadgroupPipelineDispatchTotal,
                   threadgroupPipelineSegmentTotal,
-                  globalPipelineDispatchTotal, bufferBarrierTotal,
-                  staticScheduleReuseTotal, commandBufferTotal,
+                  globalPipelineDispatchTotal, globalPipelineSegmentTotal,
+                  bufferBarrierTotal,
+                  staticScheduleReuseTotal, pipelineAccountingPassed,
+                  earlyTerminatedNodeTotal, earlySkippedSampleTotal,
+                  lastSegmentationRngState, lastSegmentOrderFnv1a64,
+                  commandBufferTotal,
                   completionWaitTotal, mappedBufferCopyTotal,
                   initialTimingCapacity, timingCapacityGrowthEvents))
     return 7;

@@ -196,6 +196,9 @@ if(BUILD_TESTING)
                  COMMAND "${Python3_EXECUTABLE}"
                          "${CMAKE_SOURCE_DIR}/scripts/validate_original_metal_run.py"
                          --selftest)
+        add_test(NAME glic_original_metal_manifest_dirty_source
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${CMAKE_SOURCE_DIR}/tests/test_write_original_metal_manifest.py")
     endif()
 
     add_executable(glic_realtime_tests tests/realtime_tests.cpp)
@@ -218,6 +221,10 @@ if(BUILD_TESTING)
     target_compile_definitions(glic_original_realtime_tests PRIVATE
         "GLIC_TEST_PRESETS_DIR=\"${CMAKE_SOURCE_DIR}/presets\""
     )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(glic_original_realtime_tests PRIVATE
+                               -ffp-contract=off)
+    endif()
     add_test(NAME glic_original_realtime_cpu_reference
              COMMAND glic_original_realtime_tests)
 

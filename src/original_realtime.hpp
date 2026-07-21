@@ -31,6 +31,10 @@ evaluateOriginalRealtimeSupport(const OriginalPresetConfig &config);
 
 struct OriginalRealtimeFrameStats {
   std::array<std::size_t, 3> segmentCounts{};
+  std::uint64_t segmentationRngState = 0;
+  std::uint64_t segmentOrderFnv1a64 = 0;
+  std::size_t earlyTerminatedNodes = 0;
+  std::size_t earlySkippedSamples = 0;
 };
 
 class OriginalRealtimeCpuLane {
@@ -58,7 +62,8 @@ private:
   };
 
   int planeValue(int channel, int x, int y) const noexcept;
-  float sampledStandardDeviation(int channel, int x, int y, int size);
+  bool sampledStandardDeviationExceeds(int channel, int x, int y, int size,
+                                       float threshold);
   void skipUnusedDeviationSamples(int size) noexcept;
   std::uint64_t fixedSegmentationRandomDraws(int blockSize) const noexcept;
   void emitFixedSegments(int x, int y, int size, int blockSize,
@@ -95,6 +100,8 @@ private:
   std::array<std::vector<double>, 3> transformScratch_{};
   std::array<int, 3> referenceValues_{};
   ProcessingRandom segmentationRng_{42};
+  std::size_t earlyTerminatedNodes_ = 0;
+  std::size_t earlySkippedSamples_ = 0;
   std::array<std::jthread, 2> workers_{};
   std::mutex workerMutex_;
   std::condition_variable workerCondition_;

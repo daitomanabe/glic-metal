@@ -132,6 +132,30 @@ def main() -> int:
             assert metal_stats["mean_gpu_dispatches"] >= 1
             assert metal_stats["mean_threadgroup_pipeline_dispatches"] >= 1
             assert metal_stats["mean_global_pipeline_dispatches"] == 0
+            assert metal_stats["mean_global_pipeline_segments"] == 0
+            assert metal_stats["pipeline_accounting_passed"] is True
+            assert metal_stats["mean_early_terminated_nodes"] == 0
+            assert metal_stats["mean_early_skipped_samples"] == 0
+            assert len(metal_stats["last_segmentation_rng_state"]) == 16
+            assert len(metal_stats["last_segment_order_fnv1a64"]) == 16
+            assert abs(
+                metal_stats["mean_gpu_dispatches"]
+                - (
+                    metal_stats["mean_threadgroup_pipeline_dispatches"]
+                    + metal_stats["mean_global_pipeline_dispatches"]
+                )
+            ) <= 0.005
+            assert abs(
+                sum(metal_stats["mean_segments_per_channel"])
+                - (
+                    metal_stats["mean_threadgroup_pipeline_segments"]
+                    + metal_stats["mean_global_pipeline_segments"]
+                )
+            ) <= 0.005
+            assert abs(
+                metal_stats["buffer_barriers_per_frame"]
+                - max(0.0, metal_stats["mean_dependency_levels"] - 1.0)
+            ) <= 0.005
             assert metal_stats["command_buffers_per_frame"] == 1
             assert metal_stats["cpu_gpu_waits_per_frame"] == 1
             assert metal_stats["mapped_buffer_copies_per_frame"] == 0

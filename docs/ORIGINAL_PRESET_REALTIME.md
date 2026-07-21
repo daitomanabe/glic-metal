@@ -182,8 +182,8 @@ boundary while moving reconstruction to Metal:
    space;
 2. one small CPU control pass builds the sampled quadtree in original channel
    and DFS order using the shared Java 48-bit RNG;
-3. each leaf receives a dependency level from the fully reconstructed top and
-   left boundaries used by the fixed predictors;
+3. after the exact leaf lists are fixed, three independent CPU workers assign
+   dependency levels from the fully reconstructed top and left boundaries;
 4. Metal dispatches each dependency frontier in order and processes all three
    channels concurrently;
 5. each leaf runs residual prediction, quantization, CDF97 FWT/WPT,
@@ -194,9 +194,20 @@ Fixed-block presets build the exact DFS leaf/frontier schedule once in
 `prepare()` and reuse it for every frame, while advancing the otherwise-unused
 RNG state by the original draw count in O(log N). Adaptive nodes whose split or
 leaf result is forced by block-size bounds likewise advance the RNG without
-unused plane sampling and variance work. Leaves up to 32 px use the dedicated
-threadgroup-memory pipeline with cached top/left boundaries, local matrix and
-scratch storage; larger leaves use the preallocated device workspaces.
+unused plane sampling and variance work. For sampled adaptive nodes, Welford's
+sum is monotonic: once the deviation computed with the final denominator
+exceeds the threshold, dead image reads and arithmetic stop while the remaining
+Java RNG calls are advanced exactly. An independent full-sampling test oracle
+compares ordered leaves and terminal RNG state over multiple thresholds and
+consecutive frames. Every `process()` call also checkpoints that stream and
+commits it only after the full CPU or Metal frame succeeds; any failure rolls
+back, so retry/drop paths cannot perturb later trees. Fixed-block presets and adaptive presets that cannot emit
+leaves above 32 px use the dedicated threadgroup-memory pipeline with cached
+top/left boundaries, local matrix and scratch storage. Adaptive CDF97 presets
+whose declared bounds admit larger leaves use a frame-stable preallocated
+global workspace route; fixed mixed-
+channel frontiers may bucket independent small and large leaves before their
+single frontier barrier.
 Dependency barriers fence only the reconstructed plane buffer. Threadgroup size
 is selected from the current block size and frame segment density. Per-frame
 work uses one command-buffer submission, one completion wait, and no
@@ -215,15 +226,29 @@ JSON report records the initial capacity and any unexpected growth event.
 
 Metal does not provide the fp64 arithmetic used by the CPU/JWave port. The
 Metal CDF97 kernel therefore splits each JWave coefficient into high and low
-fp32 components and uses compensated float-float product accumulation. The
+fp32 components and uses compensated float-float product accumulation. Inverse
+passes iterate only taps matching the destination parity, preserving the exact
+ascending accumulation subsequence while removing rejected iterations. The
 matrix remains fp32 between passes, so CDF97 is explicitly
 `processing_pixel_exact=false`. No-wavelet reconstruction is integer-exact
 against the CPU lane. Tests require bit-exact local/global Metal output for
 2--32 px FWT/WPT leaves, including 63 x 47 and 65 x 49 edge padding, mixed
 channel block sizes, and DC/JPEGLS/DIFF predictors. CPU-double deviation is
 bounded through 64 px, and all 37 supported presets are executed rather than
-only prepared. Reports expose local/global pipeline dispatches, plane-buffer
-barriers, and fixed-schedule reuse so the accelerated route can be verified.
+only prepared. Reports expose local/global pipeline dispatches and segment
+totals, dependency-frontier plane-buffer barriers, and fixed-schedule reuse so
+the accelerated route can be verified. The CPU/Metal comparison binds each
+preset to its terminal Java RNG state, ordered-leaf FNV-1a64 hash, and early
+skip counters in addition to input/config/preview provenance. The final
+manifest refuses both tracked and untracked dirty source and records hashes for
+the benchmark binary, video-filter binary, and compiled metallib.
+
+The report accounting invariants are checked with per-frame integer counters
+before a frame is accepted:
+
+- GPU dispatches = threadgroup dispatches + global dispatches;
+- total segments = threadgroup segments + global segments;
+- plane-buffer barriers = dependency frontiers - 1.
 
 ### Certified local baseline
 

@@ -2,6 +2,7 @@
 
 #include "colorspaces.hpp"
 #include "processing_math.hpp"
+#include "segmentation_trace.hpp"
 #include "quantization.hpp"
 
 #include <algorithm>
@@ -267,8 +268,8 @@ int OriginalRealtimeCpuLane::planeValue(int channel, int x,
                  static_cast<std::size_t>(x)];
 }
 
-float OriginalRealtimeCpuLane::sampledStandardDeviation(int channel, int x,
-                                                         int y, int size) {
+bool OriginalRealtimeCpuLane::sampledStandardDeviationExceeds(
+    int channel, int x, int y, int size, float threshold) {
 #if defined(__clang__)
 #pragma clang fp contract(off)
 #endif
@@ -278,17 +279,38 @@ float OriginalRealtimeCpuLane::sampledStandardDeviation(int channel, int x,
       4);
   float average = 0.0f;
   float sum = 0.0f;
+  int nextDecisionSample = 1;
+  const unsigned positionMagnitude =
+      std::countr_zero(static_cast<unsigned>(size));
   for (int sample = 1; sample <= limit; ++sample) {
-    const int value = planeValue(channel,
-                                 x + segmentationRng_.nextPosition(size),
-                                 y + segmentationRng_.nextPosition(size));
+    const int value = planeValue(
+        channel,
+        x + segmentationRng_.nextPowerOfTwoPosition(positionMagnitude),
+        y + segmentationRng_.nextPowerOfTwoPosition(positionMagnitude));
     const float oldAverage = average;
     average += (static_cast<float>(value) - average) /
                static_cast<float>(sample);
     sum += (static_cast<float>(value) - oldAverage) *
            (static_cast<float>(value) - average);
+    if (sample == nextDecisionSample || sample == limit) {
+      // Welford's accumulated sum only increases for these bounded integer
+      // samples. Once the final-denominator deviation exceeds the threshold,
+      // later samples cannot turn this split back into a leaf. Preserve the
+      // exact Processing RNG state while skipping only dead arithmetic/reads.
+      if (std::sqrt(sum / static_cast<float>(limit - 1)) > threshold) {
+        const int remaining = limit - sample;
+        if (remaining > 0) {
+          ++earlyTerminatedNodes_;
+          earlySkippedSamples_ += static_cast<std::size_t>(remaining);
+          segmentationRng_.discardNextFloats(
+              static_cast<std::uint64_t>(remaining) * 2u);
+        }
+        return true;
+      }
+      nextDecisionSample = std::min(limit, nextDecisionSample * 2);
+    }
   }
-  return std::sqrt(sum / static_cast<float>(limit - 1));
+  return false;
 }
 
 void OriginalRealtimeCpuLane::skipUnusedDeviationSamples(int size) noexcept {
@@ -345,12 +367,13 @@ void OriginalRealtimeCpuLane::segmentChannel(
 
   const bool forcedSplit = size > maxSize;
   const bool forcedLeaf = size <= minSize;
-  float deviation = 0.0f;
+  bool splitByDeviation = false;
   if (forcedSplit || forcedLeaf)
     skipUnusedDeviationSamples(size);
   else
-    deviation = sampledStandardDeviation(channel, x, y, size);
-  if (forcedSplit || (!forcedLeaf && deviation > threshold)) {
+    splitByDeviation =
+        sampledStandardDeviationExceeds(channel, x, y, size, threshold);
+  if (forcedSplit || (!forcedLeaf && splitByDeviation)) {
     const int half = size / 2;
     segmentChannel(channel, x, y, half, minSize, maxSize, threshold,
                    segments);
@@ -776,6 +799,7 @@ bool OriginalRealtimeCpuLane::process(std::span<const Color> input,
     return false;
   }
 
+  ProcessingRandomCheckpoint rngCheckpoint(segmentationRng_);
   try {
     for (std::size_t index = 0; index < required; ++index) {
       const Color converted = toColorSpace(input[index], config_.colorSpace);
@@ -785,11 +809,24 @@ bool OriginalRealtimeCpuLane::process(std::span<const Color> input,
     }
 
     OriginalRealtimeFrameStats frameStats;
+    earlyTerminatedNodes_ = 0;
+    earlySkippedSamples_ = 0;
     // Upstream consumes one Processing RNG in channel order. Segmentation is
     // kept sequential for that small fidelity-critical stage; reconstruction
     // below remains parallel across all three channels.
     for (int channel = 0; channel < 3; ++channel)
       prepareChannelSegments(channel);
+    frameStats.segmentationRngState = segmentationRng_.state();
+    frameStats.segmentOrderFnv1a64 = kSegmentationTraceFnvOffset;
+    for (std::size_t channel = 0; channel < segments_.size(); ++channel) {
+      for (const auto &segment : segments_[channel]) {
+        appendSegmentationTraceLeaf(frameStats.segmentOrderFnv1a64,
+                                    static_cast<int>(channel), segment.x,
+                                    segment.y, segment.size);
+      }
+    }
+    frameStats.earlyTerminatedNodes = earlyTerminatedNodes_;
+    frameStats.earlySkippedSamples = earlySkippedSamples_;
     {
       std::lock_guard lock(workerMutex_);
       workerErrors_ = {};
@@ -826,6 +863,7 @@ bool OriginalRealtimeCpuLane::process(std::span<const Color> input,
     }
     if (stats)
       *stats = frameStats;
+    rngCheckpoint.commit();
     return true;
   } catch (const std::exception &exception) {
     error = std::string("original fidelity processing failed: ") +

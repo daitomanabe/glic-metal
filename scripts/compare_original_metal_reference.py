@@ -76,6 +76,22 @@ def validate_fnv1a64(value: Any, context: str) -> str:
     return value.lower()
 
 
+def validate_rng_state(value: Any, context: str) -> str:
+    normalized = validate_fnv1a64(value, context)
+    if int(normalized, 16) >= (1 << 48):
+        raise RuntimeError(f"{context} is not a 48-bit java.util.Random state")
+    return normalized
+
+
+def validate_nonnegative_number(value: Any, context: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise RuntimeError(f"{context} is not numeric")
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized < 0.0:
+        raise RuntimeError(f"{context} is not a finite non-negative number")
+    return normalized
+
+
 def validate_benchmark(
     benchmark: Any, expected_schema: str, label: str
 ) -> list[dict[str, Any]]:
@@ -109,6 +125,22 @@ def validate_benchmark(
         validate_fnv1a64(
             row.get("output_preview_file_fnv1a64"),
             f"{label} result {index} output_preview_file_fnv1a64",
+        )
+        validate_rng_state(
+            row.get("last_segmentation_rng_state"),
+            f"{label} result {index} last_segmentation_rng_state",
+        )
+        validate_fnv1a64(
+            row.get("last_segment_order_fnv1a64"),
+            f"{label} result {index} last_segment_order_fnv1a64",
+        )
+        validate_nonnegative_number(
+            row.get("mean_early_terminated_nodes"),
+            f"{label} result {index} mean_early_terminated_nodes",
+        )
+        validate_nonnegative_number(
+            row.get("mean_early_skipped_samples"),
+            f"{label} result {index} mean_early_skipped_samples",
         )
     return results
 
@@ -282,20 +314,32 @@ def main() -> int:
     if metal_presets.keys() != cpu_presets.keys():
         raise RuntimeError("CPU/Metal benchmark preset sets differ")
     for preset, row in metal_presets.items():
+        cpu_row = cpu_presets[preset]
         metal_config_hash = validate_fnv1a64(
             row.get("preset_config_fnv1a64"),
             f"Metal preset configuration {preset}",
         )
         cpu_config_hash = validate_fnv1a64(
-            cpu_presets[preset].get("preset_config_fnv1a64"),
+            cpu_row.get("preset_config_fnv1a64"),
             f"CPU preset configuration {preset}",
         )
         if metal_config_hash != cpu_config_hash:
             raise RuntimeError(f"CPU/Metal preset configuration differs: {preset}")
         if bool(row.get("uses_cdf97")) != bool(
-            cpu_presets[preset].get("uses_cdf97")
+            cpu_row.get("uses_cdf97")
         ):
             raise RuntimeError(f"CPU/Metal transform tier differs: {preset}")
+        trace_fields = (
+            "last_segmentation_rng_state",
+            "last_segment_order_fnv1a64",
+            "mean_early_terminated_nodes",
+            "mean_early_skipped_samples",
+        )
+        for field in trace_fields:
+            if row[field] != cpu_row[field]:
+                raise RuntimeError(
+                    f"CPU/Metal segmentation trace differs: {preset}/{field}"
+                )
 
     results: list[dict[str, Any]] = []
     for benchmark_row in benchmark_results:
@@ -353,6 +397,18 @@ def main() -> int:
                 "preset_config_fnv1a64": benchmark_row[
                     "preset_config_fnv1a64"
                 ],
+                "last_segmentation_rng_state": benchmark_row[
+                    "last_segmentation_rng_state"
+                ],
+                "last_segment_order_fnv1a64": benchmark_row[
+                    "last_segment_order_fnv1a64"
+                ],
+                "mean_early_terminated_nodes": benchmark_row[
+                    "mean_early_terminated_nodes"
+                ],
+                "mean_early_skipped_samples": benchmark_row[
+                    "mean_early_skipped_samples"
+                ],
                 "reference_match_passed": numeric_passed,
                 "original_style_match_passed": style_passed,
                 "cpu_preview": str(reference_path.resolve()),
@@ -376,6 +432,7 @@ def main() -> int:
         "cpu_benchmark": str(args.cpu_benchmark.resolve()),
         "cpu_benchmark_sha256": cpu_benchmark_sha256,
         "provenance_match_verified": True,
+        "segmentation_trace_match_verified": True,
         "input_path": benchmark.get("input_path"),
         "input_decoded_color_fnv1a64": benchmark.get(
             "input_decoded_color_fnv1a64"

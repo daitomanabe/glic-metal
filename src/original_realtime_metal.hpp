@@ -23,7 +23,13 @@ struct OriginalRealtimeMetalFrameStats {
   std::size_t threadgroupPipelineDispatches = 0;
   std::size_t threadgroupPipelineSegments = 0;
   std::size_t globalPipelineDispatches = 0;
+  std::size_t globalPipelineSegments = 0;
   std::size_t bufferBarriers = 0;
+  bool pipelineAccountingPassed = false;
+  std::uint64_t segmentationRngState = 0;
+  std::uint64_t segmentOrderFnv1a64 = 0;
+  std::size_t earlyTerminatedNodes = 0;
+  std::size_t earlySkippedSamples = 0;
   bool staticScheduleReused = false;
   uint32_t commandBufferSubmissions = 0;
   uint32_t completionWaits = 0;

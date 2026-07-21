@@ -62,7 +62,27 @@ def benchmark_summary(path: Path) -> dict[str, Any]:
         ),
         "slowest_mean": {
             key: slowest_mean.get(key)
-            for key in ("preset", "mean_ms", "p95_ms", "fps", "mean_gpu_ms")
+            for key in (
+                "preset",
+                "mean_ms",
+                "p95_ms",
+                "fps",
+                "mean_gpu_ms",
+                "mean_cpu_prepare_ms",
+                "mean_cpu_output_ms",
+                "mean_dependency_levels",
+                "mean_gpu_dispatches",
+                "mean_threadgroup_pipeline_dispatches",
+                "mean_threadgroup_pipeline_segments",
+                "mean_global_pipeline_dispatches",
+                "mean_global_pipeline_segments",
+                "mean_buffer_barriers",
+                "pipeline_accounting_passed",
+                "mean_early_terminated_nodes",
+                "mean_early_skipped_samples",
+                "last_segmentation_rng_state",
+                "last_segment_order_fnv1a64",
+            )
         },
         "slowest_p95": {
             key: slowest_p95.get(key)
@@ -76,6 +96,7 @@ def benchmark_summary(path: Path) -> dict[str, Any]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", type=Path, required=True)
+    parser.add_argument("--build-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--input", action="append", default=[], metavar="NAME=PATH")
     return parser.parse_args()
@@ -84,6 +105,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     repo_root = args.repo_root.resolve()
+    build_dir = args.build_dir.resolve()
     output_dir = args.output_dir.resolve()
     inputs: dict[str, Path] = {}
     for item in args.input:
@@ -96,9 +118,22 @@ def main() -> int:
         inputs[name] = path
 
     source_commit = command("git", "-C", str(repo_root), "rev-parse", "HEAD")
-    source_status = command(
-        "git", "-C", str(repo_root), "status", "--porcelain", "--untracked-files=no"
+    worktree_status = command(
+        "git", "-C", str(repo_root), "status", "--porcelain", "--untracked-files=all"
     )
+    if worktree_status:
+        raise RuntimeError(
+            "refusing to certify a dirty source tree: "
+            + "; ".join(worktree_status.splitlines())
+        )
+    executable_paths = {
+        "benchmark": build_dir / "glic_original_realtime_bench",
+        "filter": build_dir / "glic_original_visual_filter",
+        "metallib": build_dir / "glic_realtime.metallib",
+    }
+    for name, path in executable_paths.items():
+        if not path.is_file():
+            raise RuntimeError(f"certified {name} artifact does not exist: {path}")
     artifacts = []
     excluded = {"validation-manifest.json", "manifest.log"}
     for path in sorted(candidate for candidate in output_dir.rglob("*") if candidate.is_file()):
@@ -119,8 +154,14 @@ def main() -> int:
         "source": {
             "repository": str(repo_root),
             "commit": source_commit,
-            "tracked_worktree_clean": source_status == "",
-            "tracked_status": source_status.splitlines(),
+            "upstream_glic_commit":
+                "460e61bf9b01f7415cf973b3d655a0ae2c7962a7",
+            "worktree_clean": worktree_status == "",
+            "worktree_status": worktree_status.splitlines(),
+        },
+        "executables": {
+            name: file_record(path)
+            for name, path in sorted(executable_paths.items())
         },
         "machine": {
             "hostname": platform.node(),
@@ -158,7 +199,48 @@ def main() -> int:
                     "end_to_end_average_30fps_passed",
                 )
             }
-            | {"processed_frames": video_filter.get("frames")},
+            | {
+                "processed_frames": video_filter.get("frames"),
+                "mean_process_ms": video_filter.get("mean_process_ms"),
+                "p95_process_ms": video_filter.get("p95_process_ms"),
+                "gpu_mean_ms": video_filter.get("gpu_mean_ms"),
+                "cpu_prepare_mean_ms": video_filter.get("cpu_prepare_mean_ms"),
+                "cpu_output_mean_ms": video_filter.get("cpu_output_mean_ms"),
+                "mean_dependency_levels": video_filter.get(
+                    "mean_dependency_levels"
+                ),
+                "mean_gpu_dispatches": video_filter.get("mean_gpu_dispatches"),
+                "mean_threadgroup_pipeline_dispatches": video_filter.get(
+                    "mean_threadgroup_pipeline_dispatches"
+                ),
+                "mean_threadgroup_pipeline_segments": video_filter.get(
+                    "mean_threadgroup_pipeline_segments"
+                ),
+                "mean_global_pipeline_dispatches": video_filter.get(
+                    "mean_global_pipeline_dispatches"
+                ),
+                "mean_global_pipeline_segments": video_filter.get(
+                    "mean_global_pipeline_segments"
+                ),
+                "buffer_barriers_per_frame": video_filter.get(
+                    "buffer_barriers_per_frame"
+                ),
+                "pipeline_accounting_passed": video_filter.get(
+                    "pipeline_accounting_passed"
+                ),
+                "mean_early_terminated_nodes": video_filter.get(
+                    "mean_early_terminated_nodes"
+                ),
+                "mean_early_skipped_samples": video_filter.get(
+                    "mean_early_skipped_samples"
+                ),
+                "last_segmentation_rng_state": video_filter.get(
+                    "last_segmentation_rng_state"
+                ),
+                "last_segment_order_fnv1a64": video_filter.get(
+                    "last_segment_order_fnv1a64"
+                ),
+            },
             "video_qa": qa.get("summary"),
         },
         "artifacts": artifacts,

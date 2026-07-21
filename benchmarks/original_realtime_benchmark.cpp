@@ -68,8 +68,14 @@ struct Result {
   double meanThreadgroupPipelineDispatches = 0.0;
   double meanThreadgroupPipelineSegments = 0.0;
   double meanGlobalPipelineDispatches = 0.0;
+  double meanGlobalPipelineSegments = 0.0;
   double meanBufferBarriers = 0.0;
+  double meanEarlyTerminatedNodes = 0.0;
+  double meanEarlySkippedSamples = 0.0;
+  std::string lastSegmentationRngState = "0000000000000000";
+  std::string lastSegmentOrderFnv1a64 = "0000000000000000";
   double staticScheduleReuseRatio = 0.0;
+  bool pipelineAccountingPassed = true;
   bool usesCdf97 = false;
   int colorSpace = 0;
   int minBlockSize = 0;
@@ -476,7 +482,19 @@ bool writeJson(const Options &options, int width, int height,
            << result.meanThreadgroupPipelineSegments
            << ", \"mean_global_pipeline_dispatches\": "
            << result.meanGlobalPipelineDispatches
+           << ", \"mean_global_pipeline_segments\": "
+           << result.meanGlobalPipelineSegments
            << ", \"mean_buffer_barriers\": " << result.meanBufferBarriers
+           << ", \"mean_early_terminated_nodes\": "
+           << result.meanEarlyTerminatedNodes
+           << ", \"mean_early_skipped_samples\": "
+           << result.meanEarlySkippedSamples
+           << ", \"last_segmentation_rng_state\": \""
+           << result.lastSegmentationRngState
+           << "\", \"last_segment_order_fnv1a64\": \""
+           << result.lastSegmentOrderFnv1a64 << "\""
+           << ", \"pipeline_accounting_passed\": "
+           << (result.pipelineAccountingPassed ? "true" : "false")
            << ", \"static_schedule_reuse_ratio\": "
            << result.staticScheduleReuseRatio
            << ", \"uses_cdf97\": " << (result.usesCdf97 ? "true" : "false")
@@ -647,8 +665,12 @@ int main(int argc, char **argv) {
     double threadgroupPipelineDispatchTotal = 0.0;
     double threadgroupPipelineSegmentTotal = 0.0;
     double globalPipelineDispatchTotal = 0.0;
+    double globalPipelineSegmentTotal = 0.0;
     double bufferBarrierTotal = 0.0;
+    double earlyTerminatedNodeTotal = 0.0;
+    double earlySkippedSampleTotal = 0.0;
     double staticScheduleReuseTotal = 0.0;
+    bool pipelineAccountingPassed = true;
     for (int frame = 0; processPassed && frame < options.frames; ++frame) {
       glic::OriginalRealtimeFrameStats cpuStats;
       glic::OriginalRealtimeMetalFrameStats metalStats;
@@ -676,8 +698,24 @@ int main(int argc, char **argv) {
           threadgroupPipelineSegmentTotal +=
               metalStats.threadgroupPipelineSegments;
           globalPipelineDispatchTotal += metalStats.globalPipelineDispatches;
+          globalPipelineSegmentTotal += metalStats.globalPipelineSegments;
           bufferBarrierTotal += metalStats.bufferBarriers;
           staticScheduleReuseTotal += metalStats.staticScheduleReused ? 1.0 : 0.0;
+          pipelineAccountingPassed =
+              pipelineAccountingPassed && metalStats.pipelineAccountingPassed;
+          earlyTerminatedNodeTotal += metalStats.earlyTerminatedNodes;
+          earlySkippedSampleTotal += metalStats.earlySkippedSamples;
+          result.lastSegmentationRngState =
+              fnvHex(metalStats.segmentationRngState);
+          result.lastSegmentOrderFnv1a64 =
+              fnvHex(metalStats.segmentOrderFnv1a64);
+        } else {
+          earlyTerminatedNodeTotal += cpuStats.earlyTerminatedNodes;
+          earlySkippedSampleTotal += cpuStats.earlySkippedSamples;
+          result.lastSegmentationRngState =
+              fnvHex(cpuStats.segmentationRngState);
+          result.lastSegmentOrderFnv1a64 =
+              fnvHex(cpuStats.segmentOrderFnv1a64);
         }
       }
     }
@@ -703,9 +741,16 @@ int main(int argc, char **argv) {
           threadgroupPipelineSegmentTotal / frameTimes.size();
       result.meanGlobalPipelineDispatches =
           globalPipelineDispatchTotal / frameTimes.size();
+      result.meanGlobalPipelineSegments =
+          globalPipelineSegmentTotal / frameTimes.size();
       result.meanBufferBarriers = bufferBarrierTotal / frameTimes.size();
+      result.meanEarlyTerminatedNodes =
+          earlyTerminatedNodeTotal / frameTimes.size();
+      result.meanEarlySkippedSamples =
+          earlySkippedSampleTotal / frameTimes.size();
       result.staticScheduleReuseRatio =
           staticScheduleReuseTotal / frameTimes.size();
+      result.pipelineAccountingPassed = pipelineAccountingPassed;
       result.timingPassed =
           result.meanMilliseconds <= frameBudgetMilliseconds &&
           result.p95Milliseconds <= frameBudgetMilliseconds;

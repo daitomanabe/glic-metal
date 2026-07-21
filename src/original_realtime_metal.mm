@@ -3,6 +3,7 @@
 #include "colorspaces.hpp"
 #include "processing_math.hpp"
 #include "processing_random.hpp"
+#include "segmentation_trace.hpp"
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -289,8 +290,11 @@ public:
                                         static_cast<std::size_t>(height_) + 2u;
       levelCounts_.assign(levelCapacity, 0u);
       levelOffsets_.assign(levelCapacity, 0u);
-      levelCursors_.assign(levelCapacity, 0u);
-      levelMaxBlockSizes_.assign(levelCapacity, 0u);
+      levelThreadgroupCounts_.assign(levelCapacity, 0u);
+      levelThreadgroupCursors_.assign(levelCapacity, 0u);
+      levelGlobalCursors_.assign(levelCapacity, 0u);
+      levelThreadgroupMaxBlockSizes_.assign(levelCapacity, 0u);
+      levelGlobalMaxBlockSizes_.assign(levelCapacity, 0u);
 
       const Color convertedReference =
           toColorSpace(makeColor(config_.borderColorR, config_.borderColorG,
@@ -368,6 +372,7 @@ public:
       return false;
     }
 
+    ProcessingRandomCheckpoint rngCheckpoint(segmentationRng_);
     OriginalRealtimeMetalFrameStats frameStats;
     frameStats.frameIndex = frameIndex;
     const auto totalStart = Clock::now();
@@ -377,6 +382,8 @@ public:
 
       const auto prepareStart = Clock::now();
       runWorkerPhase(WorkerPhase::ConvertInput, 6);
+      earlyTerminatedNodes_ = 0;
+      earlySkippedSamples_ = 0;
       if (staticSchedule_) {
         // Cached geometry removes all per-frame tree work, but upstream still
         // calls calcStdDev at every fixed-tree node. Advance the exact Java RNG
@@ -387,16 +394,22 @@ public:
         frameStats.segmentCounts = cachedScheduleStats_.segmentCounts;
         frameStats.totalSegments = cachedScheduleStats_.totalSegments;
         frameStats.dispatchLevels = cachedScheduleStats_.dispatchLevels;
+        frameStats.segmentOrderFnv1a64 =
+            cachedScheduleStats_.segmentOrderFnv1a64;
         frameStats.staticScheduleReused = true;
       } else {
         // Preserve the one evolving Processing RNG stream in original
-        // channel/DFS order. Metal reconstruction still runs every channel in
-        // parallel once these compact descriptors have been built.
+        // channel/DFS order. Once those exact leaf lists exist, dependency
+        // levels are independent per channel and can be built in parallel.
         for (int channel = 0; channel < 3; ++channel)
-          segmentChannel(channel);
+          segmentChannelGeometry(channel);
+        runWorkerPhase(WorkerPhase::BuildDependencyLevels, 3);
         if (!buildDispatchSchedule(frameStats, error))
           return false;
       }
+      frameStats.segmentationRngState = segmentationRng_.state();
+      frameStats.earlyTerminatedNodes = earlyTerminatedNodes_;
+      frameStats.earlySkippedSamples = earlySkippedSamples_;
       const auto prepareStop = Clock::now();
       frameStats.cpuPrepareMilliseconds =
           milliseconds(prepareStart, prepareStop);
@@ -427,57 +440,74 @@ public:
           const uint32_t count = levelCounts_[level];
           if (count == 0)
             continue;
-          const uint32_t offset = levelOffsets_[level];
-          const uint32_t maxBlockSize = levelMaxBlockSizes_[level];
-          // Dense adaptive frames benefit from more SIMD groups per leaf;
-          // sparse frames retain occupancy with smaller groups. This avoids
-          // treating a few large transforms like tens of thousands of small
-          // transforms while keeping one preallocated pipeline.
-          const bool denseFrontiers = frameStats.totalSegments >= 30000u;
-          NSUInteger levelThreads = 0;
-          if (denseFrontiers) {
-            levelThreads = maxBlockSize <= 4u    ? 32u
-                           : maxBlockSize <= 16u ? 128u
-                                                 : 256u;
-          } else {
-            levelThreads = maxBlockSize <= 4u    ? 32u
-                           : maxBlockSize <= 16u ? 64u
-                           : maxBlockSize <= 64u ? 128u
-                                                 : 256u;
+          const uint32_t threadgroupCount = levelThreadgroupCounts_[level];
+          const uint32_t globalCount = count - threadgroupCount;
+          // Leaves in one dependency frontier are mutually independent. Fixed
+          // mixed-channel schedules can therefore keep their <=32 leaves in
+          // threadgroup memory while large leaves use global scratch. Dense
+          // adaptive frames containing large leaves are routed wholly through
+          // the global kernel when the schedule is built: on Apple silicon
+          // that avoids hundreds of pipeline switches/extra dispatches.
+          // Both buckets (when present) complete before the one barrier below.
+          for (int bucket = 0; bucket < 2; ++bucket) {
+            const bool useThreadgroupPipeline = bucket == 0;
+            const uint32_t bucketCount =
+                useThreadgroupPipeline ? threadgroupCount : globalCount;
+            if (bucketCount == 0)
+              continue;
+            const uint32_t offset =
+                useThreadgroupPipeline
+                    ? levelOffsets_[level]
+                    : levelOffsets_[level] + threadgroupCount;
+            const uint32_t maxBlockSize =
+                useThreadgroupPipeline
+                    ? levelThreadgroupMaxBlockSizes_[level]
+                    : levelGlobalMaxBlockSizes_[level];
+            // Dense adaptive frames benefit from more SIMD groups per leaf;
+            // sparse frames retain occupancy with smaller groups.
+            const bool denseFrontiers = frameStats.totalSegments >= 30000u;
+            NSUInteger levelThreads = 0;
+            if (denseFrontiers) {
+              levelThreads = maxBlockSize <= 4u    ? 32u
+                             : maxBlockSize <= 16u ? 128u
+                                                   : 256u;
+            } else {
+              levelThreads = maxBlockSize <= 4u    ? 32u
+                             : maxBlockSize <= 16u ? 64u
+                             : maxBlockSize <= 64u ? 128u
+                                                   : 256u;
+            }
+            levelThreads = std::min(levelThreads, pipelineThreadLimit_);
+            const NSUInteger matrixFloats =
+                static_cast<NSUInteger>(maxBlockSize) * maxBlockSize;
+            const NSUInteger threadgroupWorkingBytes =
+                (matrixFloats + std::max(matrixFloats, NSUInteger(32))) *
+                    sizeof(float) +
+                2u * static_cast<NSUInteger>(maxBlockSize) * sizeof(int32_t);
+            id<MTLComputePipelineState> desiredPipeline =
+                useThreadgroupPipeline ? threadgroupCdfPipeline_ : pipeline_;
+            if (activePipeline != desiredPipeline) {
+              [encoder setComputePipelineState:desiredPipeline];
+              activePipeline = desiredPipeline;
+            }
+            [encoder setThreadgroupMemoryLength:
+                         useThreadgroupPipeline
+                             ? threadgroupWorkingBytes
+                             : NSUInteger(128)
+                                        atIndex:1];
+            [encoder setBytes:&offset length:sizeof(offset) atIndex:5];
+            [encoder dispatchThreadgroups:MTLSizeMake(bucketCount, 1, 1)
+                    threadsPerThreadgroup:MTLSizeMake(levelThreads, 1, 1)];
+            ++frameStats.gpuDispatches;
+            if (useThreadgroupPipeline) {
+              ++frameStats.threadgroupPipelineDispatches;
+              frameStats.threadgroupPipelineSegments += bucketCount;
+            } else {
+              ++frameStats.globalPipelineDispatches;
+              frameStats.globalPipelineSegments += bucketCount;
+            }
+            emitted += bucketCount;
           }
-          levelThreads = std::min(levelThreads, pipelineThreadLimit_);
-          const NSUInteger matrixFloats =
-              static_cast<NSUInteger>(maxBlockSize) * maxBlockSize;
-          const NSUInteger threadgroupWorkingBytes =
-              (matrixFloats + std::max(matrixFloats, NSUInteger(32))) *
-                  sizeof(float) +
-              2u * static_cast<NSUInteger>(maxBlockSize) * sizeof(int32_t);
-          const bool useThreadgroupCdf =
-              threadgroupCdfEnabled_ &&
-              maxBlockSize <= kThreadgroupCdfMaxBlockSize &&
-              threadgroupWorkingBytes <= device_.maxThreadgroupMemoryLength;
-          id<MTLComputePipelineState> desiredPipeline =
-              useThreadgroupCdf ? threadgroupCdfPipeline_ : pipeline_;
-          if (activePipeline != desiredPipeline) {
-            [encoder setComputePipelineState:desiredPipeline];
-            activePipeline = desiredPipeline;
-          }
-          [encoder setThreadgroupMemoryLength:
-                       useThreadgroupCdf
-                           ? threadgroupWorkingBytes
-                           : NSUInteger(128)
-                                      atIndex:1];
-          [encoder setBytes:&offset length:sizeof(offset) atIndex:5];
-          [encoder dispatchThreadgroups:MTLSizeMake(count, 1, 1)
-                  threadsPerThreadgroup:MTLSizeMake(levelThreads, 1, 1)];
-          ++frameStats.gpuDispatches;
-          if (useThreadgroupCdf) {
-            ++frameStats.threadgroupPipelineDispatches;
-            frameStats.threadgroupPipelineSegments += count;
-          } else {
-            ++frameStats.globalPipelineDispatches;
-          }
-          emitted += count;
           if (emitted < frameStats.totalSegments) {
             // Only reconstructed planes cross dependency frontiers. Transform
             // workspaces are disjoint per quadtree leaf; segment/uniform data
@@ -505,6 +535,23 @@ public:
       if (frameStats.gpuMilliseconds <= 0.0)
         frameStats.gpuMilliseconds = milliseconds(gpuStart, gpuStop);
 
+      const bool dispatchAccounting =
+          frameStats.gpuDispatches ==
+          frameStats.threadgroupPipelineDispatches +
+              frameStats.globalPipelineDispatches;
+      const bool segmentAccounting =
+          frameStats.totalSegments ==
+          frameStats.threadgroupPipelineSegments +
+              frameStats.globalPipelineSegments;
+      const bool frontierAccounting =
+          frameStats.dispatchLevels > 0 &&
+          frameStats.bufferBarriers + 1u == frameStats.dispatchLevels;
+      if (!dispatchAccounting || !segmentAccounting || !frontierAccounting) {
+        error = "original-style Metal pipeline accounting invariant failed";
+        return false;
+      }
+      frameStats.pipelineAccountingPassed = true;
+
       const auto outputStart = Clock::now();
       runWorkerPhase(WorkerPhase::ConvertOutput, 6);
       const auto outputStop = Clock::now();
@@ -512,6 +559,7 @@ public:
       frameStats.totalMilliseconds = milliseconds(totalStart, outputStop);
       if (stats)
         *stats = frameStats;
+      rngCheckpoint.commit();
       return true;
     } catch (const std::exception &exception) {
       error = std::string("original-style Metal processing failed: ") +
@@ -545,7 +593,12 @@ private:
     uint32_t dependencyLevel = 0;
   };
 
-  enum class WorkerPhase { Idle, ConvertInput, ConvertOutput };
+  enum class WorkerPhase {
+    Idle,
+    ConvertInput,
+    BuildDependencyLevels,
+    ConvertOutput
+  };
 
   int *planes() noexcept { return static_cast<int *>(planeBuffer_.contents); }
 
@@ -558,7 +611,8 @@ private:
                   static_cast<std::size_t>(x)];
   }
 
-  float sampledStandardDeviation(int channel, int x, int y, int size) {
+  bool sampledStandardDeviationExceeds(int channel, int x, int y, int size,
+                                       float threshold) {
 #if defined(__clang__)
 #pragma clang fp contract(off)
 #endif
@@ -568,17 +622,34 @@ private:
                  4);
     float average = 0.0f;
     float sum = 0.0f;
+    int nextDecisionSample = 1;
+    const unsigned positionMagnitude =
+        std::countr_zero(static_cast<unsigned>(size));
     for (int sample = 1; sample <= limit; ++sample) {
       const int value = planeValue(
-          channel, x + segmentationRng_.nextPosition(size),
-          y + segmentationRng_.nextPosition(size));
+          channel,
+          x + segmentationRng_.nextPowerOfTwoPosition(positionMagnitude),
+          y + segmentationRng_.nextPowerOfTwoPosition(positionMagnitude));
       const float oldAverage = average;
       average +=
           (static_cast<float>(value) - average) / static_cast<float>(sample);
       sum += (static_cast<float>(value) - oldAverage) *
              (static_cast<float>(value) - average);
+      if (sample == nextDecisionSample || sample == limit) {
+        if (std::sqrt(sum / static_cast<float>(limit - 1)) > threshold) {
+          const int remaining = limit - sample;
+          if (remaining > 0) {
+            ++earlyTerminatedNodes_;
+            earlySkippedSamples_ += static_cast<std::size_t>(remaining);
+            segmentationRng_.discardNextFloats(
+                static_cast<std::uint64_t>(remaining) * 2u);
+          }
+          return true;
+        }
+        nextDecisionSample = std::min(limit, nextDecisionSample * 2);
+      }
     }
-    return std::sqrt(sum / static_cast<float>(limit - 1));
+    return false;
   }
 
   void skipUnusedDeviationSamples(int size) {
@@ -632,12 +703,13 @@ private:
       return;
     const bool forcedSplit = size > maxSize;
     const bool forcedLeaf = size <= minSize;
-    float deviation = 0.0f;
+    bool splitByDeviation = false;
     if (forcedSplit || forcedLeaf)
       skipUnusedDeviationSamples(size);
     else
-      deviation = sampledStandardDeviation(channel, x, y, size);
-    if (forcedSplit || (!forcedLeaf && deviation > threshold)) {
+      splitByDeviation =
+          sampledStandardDeviationExceeds(channel, x, y, size, threshold);
+    if (forcedSplit || (!forcedLeaf && splitByDeviation)) {
       const int half = size / 2;
       segmentChannelRecursive(channel, x, y, half, minSize, maxSize, threshold);
       segmentChannelRecursive(channel, x + half, y, half, minSize, maxSize,
@@ -651,11 +723,9 @@ private:
     }
   }
 
-  void segmentChannel(int channel, bool consumeRandom = true) {
+  void segmentChannelGeometry(int channel, bool consumeRandom = true) {
     auto &segments = segments_[static_cast<std::size_t>(channel)];
-    auto &levelMap = dependencyLevels_[static_cast<std::size_t>(channel)];
     segments.clear();
-    std::fill(levelMap.begin(), levelMap.end(), 0u);
     const auto &channelConfig = config_.channels[channel];
     if (channelConfig.minBlockSize == channelConfig.maxBlockSize) {
       // The sampled deviation cannot affect a fixed-size quadtree. Emitting
@@ -671,6 +741,12 @@ private:
           channel, 0, 0, rootSize_, channelConfig.minBlockSize,
           channelConfig.maxBlockSize, channelConfig.segmentationPrecision);
     }
+  }
+
+  void buildChannelDependencyLevels(int channel) {
+    auto &segments = segments_[static_cast<std::size_t>(channel)];
+    auto &levelMap = dependencyLevels_[static_cast<std::size_t>(channel)];
+    std::fill(levelMap.begin(), levelMap.end(), 0u);
 
     // Preserve codec.pde's DFS reconstruction semantics. A leaf can run only
     // after every leaf touching its full top and left boundaries has finished.
@@ -709,6 +785,11 @@ private:
     }
   }
 
+  void segmentChannel(int channel, bool consumeRandom = true) {
+    segmentChannelGeometry(channel, consumeRandom);
+    buildChannelDependencyLevels(channel);
+  }
+
   void convertInputRange(int part, int partCount) {
     const std::size_t begin = pixelCount_ * static_cast<std::size_t>(part) /
                               static_cast<std::size_t>(partCount);
@@ -741,6 +822,9 @@ private:
     switch (phase) {
     case WorkerPhase::ConvertInput:
       convertInputRange(part, partCount);
+      break;
+    case WorkerPhase::BuildDependencyLevels:
+      buildChannelDependencyLevels(part);
       break;
     case WorkerPhase::ConvertOutput:
       convertOutputRange(part, partCount);
@@ -845,22 +929,57 @@ private:
   bool buildDispatchSchedule(OriginalRealtimeMetalFrameStats &stats,
                              std::string &error) {
     std::fill(levelCounts_.begin(), levelCounts_.end(), 0u);
-    std::fill(levelMaxBlockSizes_.begin(), levelMaxBlockSizes_.end(), 0u);
+    std::fill(levelThreadgroupCounts_.begin(), levelThreadgroupCounts_.end(),
+              0u);
+    std::fill(levelThreadgroupMaxBlockSizes_.begin(),
+              levelThreadgroupMaxBlockSizes_.end(), 0u);
+    std::fill(levelGlobalMaxBlockSizes_.begin(),
+              levelGlobalMaxBlockSizes_.end(), 0u);
+    // Keep routing stable across frames. Adaptive CDF97 presets whose declared
+    // bounds admit large leaves use one global-workspace route even when a
+    // particular RNG frame happens not to emit one. This avoids discontinuous
+    // pipeline switches and dispatch-count spikes; no-wavelet adaptive frames
+    // retain the cheap small-leaf threadgroup route.
+    const bool adaptiveCdfCanUseLargeLeaves =
+        !staticSchedule_ &&
+        std::any_of(config_.channels.begin(), config_.channels.end(),
+                    [](const OriginalPresetChannel &channel) {
+                      return channel.originalWaveletId == 65 &&
+                             channel.maxBlockSize >
+                                 static_cast<int>(
+                                     kThreadgroupCdfMaxBlockSize);
+                    });
+    const auto useThreadgroupForSegment = [&](int blockSize) {
+      return !adaptiveCdfCanUseLargeLeaves &&
+             canUseThreadgroupPipeline(blockSize);
+    };
     std::size_t total = 0;
     std::size_t maxLevel = 0;
+    stats.segmentOrderFnv1a64 = kSegmentationTraceFnvOffset;
     for (std::size_t channel = 0; channel < segments_.size(); ++channel) {
       stats.segmentCounts[channel] = segments_[channel].size();
       total += segments_[channel].size();
       for (const auto &segment : segments_[channel]) {
+        appendSegmentationTraceLeaf(stats.segmentOrderFnv1a64,
+                                    static_cast<int>(channel), segment.x,
+                                    segment.y, segment.size);
         if (segment.dependencyLevel == 0 ||
             segment.dependencyLevel > levelCounts_.size()) {
           error = "original-style Metal dependency frontier overflow";
           return false;
         }
-        ++levelCounts_[segment.dependencyLevel - 1u];
-        levelMaxBlockSizes_[segment.dependencyLevel - 1u] =
-            std::max(levelMaxBlockSizes_[segment.dependencyLevel - 1u],
-                     static_cast<uint32_t>(segment.size));
+        const std::size_t level = segment.dependencyLevel - 1u;
+        ++levelCounts_[level];
+        if (useThreadgroupForSegment(segment.size)) {
+          ++levelThreadgroupCounts_[level];
+          levelThreadgroupMaxBlockSizes_[level] =
+              std::max(levelThreadgroupMaxBlockSizes_[level],
+                       static_cast<uint32_t>(segment.size));
+        } else {
+          levelGlobalMaxBlockSizes_[level] =
+              std::max(levelGlobalMaxBlockSizes_[level],
+                       static_cast<uint32_t>(segment.size));
+        }
         maxLevel = std::max<std::size_t>(maxLevel, segment.dependencyLevel);
       }
     }
@@ -871,7 +990,8 @@ private:
     uint32_t offset = 0;
     for (std::size_t level = 0; level < maxLevel; ++level) {
       levelOffsets_[level] = offset;
-      levelCursors_[level] = offset;
+      levelThreadgroupCursors_[level] = offset;
+      levelGlobalCursors_[level] = offset + levelThreadgroupCounts_[level];
       offset += levelCounts_[level];
     }
     auto *descriptors =
@@ -879,7 +999,10 @@ private:
     for (std::size_t channel = 0; channel < segments_.size(); ++channel) {
       for (const auto &segment : segments_[channel]) {
         const std::size_t level = segment.dependencyLevel - 1u;
-        const uint32_t destination = levelCursors_[level]++;
+        const uint32_t destination =
+            useThreadgroupForSegment(segment.size)
+                ? levelThreadgroupCursors_[level]++
+                : levelGlobalCursors_[level]++;
         descriptors[destination] = {
             static_cast<uint32_t>(segment.x),
             static_cast<uint32_t>(segment.y),
@@ -891,6 +1014,19 @@ private:
     stats.totalSegments = total;
     stats.dispatchLevels = maxLevel;
     return true;
+  }
+
+  bool canUseThreadgroupPipeline(int blockSize) const noexcept {
+    if (!threadgroupCdfEnabled_ || blockSize <= 0 ||
+        blockSize > static_cast<int>(kThreadgroupCdfMaxBlockSize))
+      return false;
+    const NSUInteger matrixFloats =
+        static_cast<NSUInteger>(blockSize) * blockSize;
+    const NSUInteger workingBytes =
+        (matrixFloats + std::max(matrixFloats, NSUInteger(32))) *
+            sizeof(float) +
+        2u * static_cast<NSUInteger>(blockSize) * sizeof(int32_t);
+    return workingBytes <= device_.maxThreadgroupMemoryLength;
   }
 
   id<MTLDevice> device_ = nil;
@@ -915,10 +1051,15 @@ private:
   std::array<std::vector<WorkingSegment>, 3> segments_{};
   std::array<std::vector<uint32_t>, 3> dependencyLevels_{};
   ProcessingRandom segmentationRng_{42};
+  std::size_t earlyTerminatedNodes_ = 0;
+  std::size_t earlySkippedSamples_ = 0;
   std::vector<uint32_t> levelCounts_;
   std::vector<uint32_t> levelOffsets_;
-  std::vector<uint32_t> levelCursors_;
-  std::vector<uint32_t> levelMaxBlockSizes_;
+  std::vector<uint32_t> levelThreadgroupCounts_;
+  std::vector<uint32_t> levelThreadgroupCursors_;
+  std::vector<uint32_t> levelGlobalCursors_;
+  std::vector<uint32_t> levelThreadgroupMaxBlockSizes_;
+  std::vector<uint32_t> levelGlobalMaxBlockSizes_;
 
   const Color *input_ = nullptr;
   Color *output_ = nullptr;

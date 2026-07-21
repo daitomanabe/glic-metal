@@ -300,9 +300,12 @@ static void originalCdfPass(device float *matrix,
             }
         } else {
             uint destination = output;
-            for (uint tap = 0u; tap < 9u; ++tap) {
+            // The inverse branch accepts only taps with the destination's
+            // parity. Step through exactly that ascending subsequence so the
+            // compensated accumulation order is unchanged while eliminating
+            // four/five dead loop iterations and branches per output.
+            for (uint tap = destination & 1u; tap < 9u; tap += 2u) {
                 uint delta = (destination - tap) & mask;
-                if ((delta & 1u) != 0u) continue;
                 uint coefficient = delta >> 1u;
                 uint lowPosition = packetOffset + coefficient;
                 uint highPosition = lowPosition + halfLength;
@@ -633,9 +636,8 @@ static void originalCdfPassThreadgroup(
             }
         } else {
             uint destination = output;
-            for (uint tap = 0u; tap < 9u; ++tap) {
+            for (uint tap = destination & 1u; tap < 9u; tap += 2u) {
                 uint delta = (destination - tap) & mask;
-                if ((delta & 1u) != 0u) continue;
                 uint coefficient = delta >> 1u;
                 uint lowPosition = packetOffset + coefficient;
                 uint highPosition = lowPosition + halfLength;

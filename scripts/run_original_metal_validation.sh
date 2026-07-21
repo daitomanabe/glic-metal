@@ -185,6 +185,7 @@ fi
 if [ "$skip_video_qa" -eq 0 ]; then
   run_logged "write provenance manifest" "$output_dir/manifest.log" \
     "$python_bin" "$manifest_writer" --repo-root "$repo_root" \
+    --build-dir "$build_dir" \
     --output-dir "$output_dir" \
     --input "normal=$normal_image" --input "noise=$noise_image" \
     --input "video=$video_input"
