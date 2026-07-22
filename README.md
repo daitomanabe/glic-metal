@@ -7,6 +7,7 @@ active development; no stable binary release has been tagged yet.
 
 [Build guide](docs/BUILDING.md) ·
 [Embedding guide](docs/EMBEDDING.md) ·
+[AI integration contract](docs/AI_INTEGRATION.md) ·
 [Codec Glitch](docs/CODEC_GLITCH.md) ·
 [Original-preset fidelity](docs/ORIGINAL_PRESET_REALTIME.md) ·
 [Preset catalog](docs/original-preset-catalog.md) ·
@@ -96,7 +97,7 @@ cmake --build .
   --preset default --backend cpu
 ```
 
-リアルタイムAPIは [src/realtime.hpp](src/realtime.hpp) にあります。CPU backendは3チャンネルを永続workerで並列処理し、解像度変更時以外はworkspaceを再利用します。Metal backendはCPU配列を扱う同期APIに加え、`MTLTexture`を直接渡すゼロコピーAPIと、呼び出し側の`MTLCommandBuffer`へ処理を追加する非同期APIを提供します。
+他アプリ向けリアルタイムAPIは [include/glic_metal/glic_metal.h](include/glic_metal/glic_metal.h) にあります。AIエージェントは [AI向け組み込み仕様](docs/AI_INTEGRATION.md) に従ってください。CPU backendは3チャンネルを永続workerで並列処理し、解像度変更時以外はworkspaceを再利用します。Metal backendはCPU配列を扱う同期APIに加え、`MTLTexture`を直接渡すゼロコピーAPIと、呼び出し側の`MTLCommandBuffer`へ処理を追加する非同期APIを提供します。
 
 互換性レベル、上流GLICの20fps UI設定との違い、対応37 presetの境界は [docs/ORIGINAL_PRESET_REALTIME.md](docs/ORIGINAL_PRESET_REALTIME.md) にあります。2026-07-20のM4 Max隔離認証（commit `6e1d1f8`）では、`original_metal_visual` は960×540、warm-up 10 + 計測120フレームで、通常画像・uniform-noiseの双方とも37/37件が平均/p95 30fps gateを通過しました。CPU数値参照とは34/37件が規定範囲内、残り3件もエッジ方向・エッジ量・粗い構造による原作スタイル形態gateを通過しています。全144名を処理する `compat_realtime` は引き続き明示的に別の視覚近似です。
 
@@ -107,11 +108,12 @@ macOSでMetal shaderをビルドする際はFull Xcodeが必要です。CMakeは
 ### Webカメラ・リアルタイムプレビュー
 
 macOS版は`GLIC Webcam Preview.app`を生成します。内蔵または外付けカメラを
-960×540・30fpsで取得し、画面上部または`Lane`メニューから`Original Visual`と
-`Codec Glitch`を切り替えます。Original Visualでは対応済み37 presetと、原作準拠の
+960×540・30fpsで取得し、画面上部または`Lane`メニューから`Original Visual`、
+`Spatial Metal`、`Codec Glitch`を切り替えます。採用済み19 presetのみを表示し、
+内訳はOriginal 14、Spatial 4、Codec 1です。Original Visualでは原作準拠の
 `Strict`、fp32 CDF97と2フレーム分割木再利用を使う`Fast Match`、画像解析allowlist
 から安全なpresetだけFastへ切り替える`Auto 20fps`を選べます。Codec Glitchでは
-12種類のH.264 effect、`Amount`、codec historyを消去する`Reset`を操作できます。
+採用されたH.264 presetの`Amount`と、codec historyを消去する`Reset`を操作できます。
 処理時間、GPU/codec latency、処理fps、実効モード、drop数を画面上で確認できます。
 
 キャプチャとMetal処理は別キューで、事前確保した3スロットから常に最新フレームを
@@ -566,7 +568,7 @@ cmake --build .
   --preset default --backend cpu
 ```
 
-The realtime API is declared in [src/realtime.hpp](src/realtime.hpp). The CPU backend reuses resolution-sized workspaces after preparation. The Metal backend provides a synchronous CPU-buffer API, an opaque zero-copy `MTLTexture` API, and a non-blocking API that appends work to the caller's `MTLCommandBuffer`.
+The public realtime API is declared in [include/glic_metal/glic_metal.h](include/glic_metal/glic_metal.h). Coding agents should follow the [AI integration contract](docs/AI_INTEGRATION.md). The CPU backend reuses resolution-sized workspaces after preparation. The Metal backend provides a synchronous CPU-buffer API, an opaque zero-copy `MTLTexture` API, and a non-blocking API that appends work to the caller's `MTLCommandBuffer`.
 
 See [docs/ORIGINAL_PRESET_REALTIME.md](docs/ORIGINAL_PRESET_REALTIME.md) for compatibility levels and why upstream's 20 fps setting is a UI rate rather than codec throughput. In the previous isolated M4 Max certification (`6e1d1f8`, 2026-07-20), `original_metal_visual` passed the mean+p95 30 fps gate for all 37 supported presets on both the normal and uniform-noise inputs. Numeric CPU-reference comparison passed 34/37; the remaining three passed the separate blurred-structure and edge-morphology gate. The all-144 Metal path remains the separately labelled `compat_realtime` visual approximation.
 
@@ -596,13 +598,14 @@ Full Xcode is required to compile the Metal shader on macOS. CMake uses `/Applic
 ### Realtime webcam preview
 
 The macOS build produces `GLIC Webcam Preview.app`. It captures a built-in or
-external camera at 960×540/30 fps and switches between `Original Visual` and
-`Codec Glitch` from the popup or `Lane` application menu. Original Visual
-offers all 37 supported presets plus original-compatible `Strict`, fp32 CDF97
+external camera at 960×540/30 fps and switches between `Original Visual`,
+`Spatial Metal`, and `Codec Glitch` from the popup or `Lane` application menu.
+It exposes only the adopted 19 presets: 14 Original, four Spatial, and one
+Codec. Original Visual offers original-compatible `Strict`, fp32 CDF97
 with two-frame tree reuse in `Fast Match`, and fail-closed `Auto 20fps`.
-Codec Glitch offers twelve H.264 effects, an `Amount` control, and `Reset` for
-clearing codec history. Processed fps, total/GPU or codec latency, effective
-mode, recovery state, and dropped frames remain visible.
+Codec Glitch offers the adopted H.264 preset, an `Amount` control, and `Reset`
+for clearing codec history. Processed fps, total/GPU or codec latency,
+effective mode, recovery state, and dropped frames remain visible.
 
 Capture and Metal processing use separate queues. A preallocated three-slot
 ring always selects the newest ready frame and discards stale queued frames, so

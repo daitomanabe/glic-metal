@@ -4,6 +4,7 @@ Contents:
 
 - `GlicMetal.xcframework` — static C ABI library and public headers;
 - `GlicMetalResources.bundle` — Metal kernels, presets, and license notices;
+- `AI_INTEGRATION.md` — first-read contract for coding agents;
 - `SHA256SUMS` — checksums for the packaged files.
 
 Add the XCFramework and resource bundle to the Xcode application target. Link
@@ -17,6 +18,9 @@ The adopted 19-preset production bank is available through
 `GlicMetalResources.bundle/Contents/Resources/selected-presets.json`. Use the
 C API to enumerate stable names and apply exact Original, Spatial Metal, or
 Codec controls without parsing JSON.
+`integration-manifest.json` in the same resource directory is the
+machine-readable contract for downstream coding agents. The adjacent
+`AI_INTEGRATION.md` is its normative implementation checklist.
 The asynchronous hardware-codec lane is exposed separately through
 `<glic_metal/codec_glitch.h>` and accepts opaque `CVPixelBufferRef` values. Its
 twelve effects use codec-quality control, intentional encoded-frame holds, and

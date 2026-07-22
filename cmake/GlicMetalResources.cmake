@@ -21,6 +21,10 @@ function(glic_metal_copy_resources)
     message(FATAL_ERROR
             "GLIC Metal selected preset bank is missing: ${GLIC_METAL_SELECTED_PRESETS_JSON}")
   endif()
+  if(NOT EXISTS "${GLIC_METAL_INTEGRATION_MANIFEST}")
+    message(FATAL_ERROR
+            "GLIC Metal integration manifest is missing: ${GLIC_METAL_INTEGRATION_MANIFEST}")
+  endif()
 
   add_custom_command(TARGET "${GLIC_RESOURCE_TARGET}" POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E make_directory
@@ -31,6 +35,9 @@ function(glic_metal_copy_resources)
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${GLIC_METAL_SELECTED_PRESETS_JSON}"
             "${GLIC_RESOURCE_DESTINATION}/selected-presets.json"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${GLIC_METAL_INTEGRATION_MANIFEST}"
+            "${GLIC_RESOURCE_DESTINATION}/integration-manifest.json"
     VERBATIM)
 
   if(APPLE)

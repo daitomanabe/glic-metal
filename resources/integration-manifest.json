@@ -1,0 +1,99 @@
+{
+  "schema": "glic-metal-integration-v1",
+  "library": {
+    "name": "GlicMetal",
+    "cmake_target": "GlicMetal::GlicMetal",
+    "swift_module": "GlicMetal",
+    "language_abi": "C",
+    "abi_versions": {"image": 1, "codec": 1, "selected_presets": 1}
+  },
+  "public_headers": [
+    "glic_metal/glic_metal.h",
+    "glic_metal/glic_metal_metal.h",
+    "glic_metal/codec_glitch.h",
+    "glic_metal/glitch_presets.h"
+  ],
+  "selected_preset_bank": {
+    "resource": "selected-presets.json",
+    "runtime_source": "compiled_c_api",
+    "count": 19,
+    "category_counts": {"original": 14, "spatial": 4, "codec": 1},
+    "enumerate": "glic_glitch_preset_count + glic_glitch_preset_get",
+    "lookup": "glic_glitch_preset_find"
+  },
+  "lanes": {
+    "original": {
+      "execution": "synchronous",
+      "input": "BGRA8_or_RGBA8_CPU_buffer",
+      "context": "glic_metal_context",
+      "apply": "glic_glitch_preset_apply_metal",
+      "prepare": "glic_metal_prepare",
+      "process": "glic_metal_process_frame",
+      "mode": "GLIC_METAL_MODE_ORIGINAL",
+      "required_resources": ["Presets", "glic_realtime.metallib"]
+    },
+    "spatial": {
+      "execution": "synchronous",
+      "input": "BGRA8_or_RGBA8_CPU_buffer_or_BGRA8Unorm_MTLTexture",
+      "context": "glic_metal_context",
+      "apply": "glic_glitch_preset_apply_metal",
+      "prepare": "glic_metal_prepare",
+      "process": "glic_metal_process_frame_or_texture_api",
+      "mode": "GLIC_METAL_MODE_COMPAT_REALTIME",
+      "required_resources": ["Presets", "glic_realtime.metallib"]
+    },
+    "codec": {
+      "execution": "asynchronous",
+      "input": "CVPixelBufferRef_32BGRA",
+      "context": "glic_codec_glitch_context",
+      "apply": "glic_glitch_preset_apply_codec",
+      "prepare": "glic_codec_glitch_prepare",
+      "process": "glic_codec_glitch_submit_pixel_buffer",
+      "output": "glic_codec_glitch_copy_latest_pixel_buffer",
+      "required_resources": []
+    }
+  },
+  "macos_link_frameworks": [
+    "Foundation", "Metal", "CoreImage", "CoreGraphics", "CoreMedia",
+    "CoreVideo", "VideoToolbox"
+  ],
+  "runtime_resources": {
+    "Presets": "required_by_original_and_spatial_image_lanes",
+    "glic_realtime.metallib": "required_by_metal_image_lanes",
+    "selected-presets.json": "optional_data_copy_for_inspection_and_exchange",
+    "integration-manifest.json": "optional_machine_readable_integration_contract"
+  },
+  "threading": {
+    "image_context": "one_serial_processing_queue_per_context",
+    "codec_submit": "nonblocking_and_may_return_backpressure",
+    "prepare": "control_or_background_queue_only",
+    "render_callback": "process_or_submit_only",
+    "context_thread_safety": "not_concurrently_thread_safe"
+  },
+  "realtime_acceptance": {
+    "minimum_width": 960,
+    "minimum_height": 540,
+    "minimum_frames_per_second": 20,
+    "maximum_p95_frame_milliseconds": 50,
+    "codec_requires_hardware_encoder": true,
+    "codec_requires_hardware_decoder": true
+  },
+  "fail_closed_rules": [
+    "do_not_route_codec_presets_to_glic_metal_context",
+    "do_not_route_original_or_spatial_presets_to_codec_controls",
+    "do_not_call_prepare_from_a_render_or_capture_callback",
+    "do_not_share_one_context_across_concurrent_streams",
+    "do_not_modify_or_decode_compressed_h264_payloads",
+    "do_not_claim_pixel_exact_equivalence_with_processing_glic"
+  ],
+  "verification": [
+    "python3 scripts/check_public_release.py --source .",
+    "cmake --build build --parallel",
+    "ctest --test-dir build --output-on-failure"
+  ],
+  "documentation": {
+    "human": "docs/EMBEDDING.md",
+    "agent": "docs/AI_INTEGRATION.md",
+    "codec": "docs/CODEC_GLITCH.md"
+  }
+}

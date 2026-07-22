@@ -1,5 +1,9 @@
 # Embedding GLIC Metal
 
+> For AI coding agents, start with [AI_INTEGRATION.md](AI_INTEGRATION.md) and
+> `resources/integration-manifest.json`. This document is the human-facing
+> integration guide.
+
 GLIC Metal exposes a versioned C ABI so a host does not need to depend on the
 project's internal C++ classes. The same API can be called from C, C++,
 Objective-C, Objective-C++, Swift through a bridging header, JUCE, openFrameworks,
@@ -13,8 +17,9 @@ The public surface is:
 - `include/glic_metal/glitch_presets.h` — adopted cross-lane preset bank;
 - `GlicMetal::GlicMetal` — CMake target;
 - `glic_realtime.metallib` — Metal kernels to copy into the host bundle;
-- `presets/` — runtime preset data.
+- `presets/` — runtime preset data;
 - `selected-presets.json` — portable data copy of the adopted 19 presets.
+- `integration-manifest.json` — machine-readable integration contract.
 
 Internal headers under `src/` are not part of the stable API.
 
@@ -24,7 +29,9 @@ The shipped bank contains the exact 19 presets selected for production: 14
 original-style presets, four allocation-free spatial Metal presets, and one
 hardware H.264 codec preset. Stable names such as `original__vv01`,
 `spatial__poster_solar`, and `codec__bitrate_meltdown` can be stored by a host
-application. The public API preserves the order in `selected-presets.json`.
+application. The compiled C API is the authoritative runtime catalog and
+preserves the order in `selected-presets.json`; the JSON is an optional
+inspection/exchange copy.
 
 ```c
 #include <glic_metal/glitch_presets.h>
@@ -46,7 +53,11 @@ image_config.metal_library_path = metallib_path;
 glic_glitch_preset_apply_metal("spatial__poster_solar", &image_config);
 
 glic_codec_glitch_controls codec_controls;
-glic_glitch_preset_apply_codec("codec__bitrate_meltdown", &codec_controls);
+if (glic_glitch_preset_apply_codec("codec__bitrate_meltdown",
+                                   &codec_controls) ==
+    GLIC_GLITCH_PRESET_OK) {
+  glic_codec_glitch_set_controls(codec_context, &codec_controls);
+}
 ```
 
 `glic_glitch_preset_apply_metal()` leaves host-owned resolution, resource
@@ -57,7 +68,27 @@ rate, and seed. `glic_glitch_preset_apply_codec()` initializes the controls and
 applies the exact codec effect, amount, rate, feedback, and seed. Category
 mismatches fail closed.
 
+Build the production menu only with `glic_glitch_preset_count()` and
+`glic_glitch_preset_get()`. `glic_metal_enumerate_presets()` intentionally
+returns the complete 144-preset compatibility corpus and must not be used for
+the adopted 19-item menu.
+
+Keep two engine objects when the host supports all three categories:
+
+- one `glic_metal_context` for synchronous Original and Spatial processing;
+- one `glic_codec_glitch_context` for asynchronous Codec processing.
+
+On selection, inspect `descriptor.category`. Route Original and Spatial names
+to `glic_glitch_preset_apply_metal()` followed by `glic_metal_prepare()`.
+Route Codec names to `glic_glitch_preset_apply_codec()` followed by
+`glic_codec_glitch_set_controls()`. Prepare or switch outside the frame
+callback. Use a host-side generation ID to discard late asynchronous Codec
+output after switching lanes.
+
 ## Choose a processing path
+
+This table describes the full library capability surface. The adopted
+production bank is the 14 / 4 / 1 subset described above.
 
 | Mode | Presets | Input | Main use |
 |---|---:|---|---|
@@ -100,7 +131,8 @@ glic_metal_copy_resources(
 
 It copies `${GLIC_METAL_METALLIB}` as `glic_realtime.metallib`, copies
 `${GLIC_METAL_PRESETS_DIR}` into a `Presets` resource folder, and copies
-`${GLIC_METAL_SELECTED_PRESETS_JSON}` as `selected-presets.json`. The same
+`${GLIC_METAL_SELECTED_PRESETS_JSON}` as `selected-presets.json` plus
+`${GLIC_METAL_INTEGRATION_MANIFEST}` as `integration-manifest.json`. The same
 function is available from the installed CMake package.
 
 ## Use an installed CMake package
@@ -121,6 +153,8 @@ target_link_libraries(MyApp PRIVATE GlicMetal::GlicMetal)
 
 # Useful runtime resources exported by GlicMetalConfig.cmake:
 message(STATUS "Presets: ${GLIC_METAL_PRESETS_DIR}")
+message(STATUS "Selected bank: ${GLIC_METAL_SELECTED_PRESETS_JSON}")
+message(STATUS "Agent contract: ${GLIC_METAL_INTEGRATION_MANIFEST}")
 if(APPLE)
   message(STATUS "Metal library: ${GLIC_METAL_METALLIB}")
 endif()
@@ -133,6 +167,7 @@ prefix is outside CMake's normal search path.
 
 ```c
 #include <glic_metal/glic_metal.h>
+#include <glic_metal/glitch_presets.h>
 
 glic_metal_context *engine = NULL;
 glic_metal_context_create(&engine);
@@ -142,9 +177,10 @@ glic_metal_config_init(&config);
 config.width = 960;
 config.height = 540;
 config.preset_directory = preset_directory;
-config.preset_name = "vv02";
-config.backend = GLIC_METAL_BACKEND_AUTO;
-config.mode = GLIC_METAL_MODE_ORIGINAL;
+if (glic_glitch_preset_apply_metal("original__vv01", &config) !=
+    GLIC_GLITCH_PRESET_OK) {
+  return;
+}
 config.fidelity = GLIC_METAL_FIDELITY_STRICT;
 
 if (glic_metal_prepare(engine, &config) != GLIC_METAL_OK) {
@@ -369,8 +405,10 @@ frames in flight for one context because uniforms use a three-slot ring.
 Expose the headers through a bridging header:
 
 ```objc
+#include <glic_metal/codec_glitch.h>
 #include <glic_metal/glic_metal.h>
 #include <glic_metal/glic_metal_metal.h>
+#include <glic_metal/glitch_presets.h>
 ```
 
 The installed `module.modulemap` also defines module `GlicMetal`. Pass an
@@ -386,9 +424,16 @@ copies their values during preparation.
 
 ## Preset menus and switching
 
-Use `glic_metal_enumerate_presets()` to populate a host menu. It calls the
-provided callback once per preset in sorted order. Switch by changing
-`preset_name` and calling `glic_metal_prepare()` off the render queue.
+For the production menu, use `glic_glitch_preset_count()` and
+`glic_glitch_preset_get()` to expose exactly the adopted 19 presets in their
+reviewed order. Store the full stable name and route by `descriptor.category`.
+Switch Original/Spatial by applying the name and calling
+`glic_metal_prepare()` off the render queue. Switch Codec by applying the name
+to controls and calling `glic_codec_glitch_set_controls()`.
+
+Use `glic_metal_enumerate_presets()` only for an explicit advanced browser of
+the complete 144-preset compatibility corpus. It calls the callback once per
+preset in sorted order and is not the adopted production menu.
 
 The 37-preset original-mode support boundary remains fail-closed. An
 unsupported original preset returns `GLIC_METAL_UNSUPPORTED`; it is never
@@ -411,15 +456,34 @@ with their matching init function so `struct_size` and `abi_version` are set.
 
 ## Xcode resource checklist
 
+When using the generated resource bundle, resolve it from the host bundle
+instead of hard-coding a build-machine path:
+
+```objc
+NSURL *bundleURL = [NSBundle.mainBundle
+    URLForResource:@"GlicMetalResources" withExtension:@"bundle"];
+NSBundle *glicResources = [NSBundle bundleWithURL:bundleURL];
+NSString *presetsPath = [glicResources pathForResource:@"Presets" ofType:nil];
+NSString *metallibPath =
+    [glicResources pathForResource:@"glic_realtime" ofType:@"metallib"];
+```
+
+Fail preparation with a visible diagnostic if a required path is missing.
+Never embed a developer-machine absolute path in the host source code.
+
 For an Xcode application that links `libglic_metal.a` directly:
 
 1. Add `include/` to Header Search Paths.
-2. Link `libglic_metal.a`, `libc++.tbd`, `Foundation.framework`, and
-   `Metal.framework`.
+2. Link `libglic_metal.a`, `libc++.tbd`, `Foundation.framework`,
+   `Metal.framework`, `CoreImage.framework`, `CoreGraphics.framework`,
+   `CoreMedia.framework`, `CoreVideo.framework`, and
+   `VideoToolbox.framework`.
 3. Copy `glic_realtime.metallib` into the application Resources phase.
 4. Copy the required preset files into a `Presets` resource directory.
-5. Pass the bundle resource paths in `glic_metal_config`.
-6. If camera input is used, add the host application's camera usage string;
+5. Copy `selected-presets.json` and `integration-manifest.json` when downstream
+   developers or agents need the data/contract beside the binary.
+6. Pass the bundle resource paths in `glic_metal_config`.
+7. If camera input is used, add the host application's camera usage string;
    the library itself does not request camera permission.
 
 Alternatively, build a drop-in XCFramework and resource bundle:
@@ -433,4 +497,6 @@ The command refuses to overwrite an existing output. Set
 installed Xcode supports both architectures.
 
 See `examples/embed_c.c`, `tests/embed_metal_api_tests.mm`, and
-`tests/consumer/` for complete buildable integrations.
+`tests/consumer/` for buildable integrations. AI agents must also follow
+[AI_INTEGRATION.md](AI_INTEGRATION.md); its completion checklist is the handoff
+contract for another application.

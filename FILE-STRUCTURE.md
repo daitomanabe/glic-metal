@@ -8,14 +8,14 @@ glic-metal/
 ├── apps/                     macOS webcam preview entry point
 ├── benchmarks/               realtime and original-style benchmarks
 ├── config/                   reviewed runtime allowlists
-├── docs/                     build, fidelity, codec-glitch, catalog, and release documents
+├── docs/                     build, integration, fidelity, codec, catalog, and release documents
 ├── examples/                 small preset/code examples
 ├── external/stb/             pinned image-I/O Git submodule
 ├── include/glic_metal/       stable image, Metal, and codec-glitch C APIs
 ├── cmake/                    installed CMake package configuration
 ├── output/preset-gallery/    committed generated comparison gallery
 ├── presets/                  144 SHA-256-pinned upstream presets
-├── resources/                macOS bundle metadata
+├── resources/                macOS metadata and machine-readable integration contract
 ├── scripts/                  video processing, visual analysis, search, and QA tools
 ├── src/                      C++20, Objective-C++, and Metal implementation
 ├── tests/                    API consumer, C++, Objective-C++, and Python tests

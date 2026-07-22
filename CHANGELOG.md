@@ -8,6 +8,14 @@ semantic versioning for tagged releases.
 
 ### Added
 
+- A bilingual AI integration contract and machine-readable integration
+  manifest defining category routing, public APIs, runtime resources,
+  frameworks, threading, realtime gates, fail-closed rules, and completion
+  checks for downstream application agents.
+- Automated consistency checks for the integration manifest and distribution
+  of that contract through CMake installs, resource copies, the webcam bundle,
+  and the macOS SDK.
+
 - An adopted 19-entry production preset bank from `selected-presets.json`,
   with a versioned allocation-free C API for ordered enumeration, lookup, and
   exact Original, Spatial Metal, or Codec control application in host apps.
@@ -58,6 +66,10 @@ semantic versioning for tagged releases.
   consumer tests.
 
 ### Changed
+
+- The human embedding guide now provides a production 19-preset quick start,
+  complete category-routing rules, bundle resource resolution, corrected
+  framework requirements, and explicit separation from the 144-preset browser.
 
 - The webcam preview now exposes only the adopted presets: fourteen Original
   Visual presets, four Spatial Metal presets, and one Codec Glitch preset.

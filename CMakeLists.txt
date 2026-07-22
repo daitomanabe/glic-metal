@@ -20,6 +20,9 @@ set(GLIC_METAL_PRESETS_DIR "${PROJECT_SOURCE_DIR}/presets" CACHE PATH
 set(GLIC_METAL_SELECTED_PRESETS_JSON
     "${PROJECT_SOURCE_DIR}/resources/selected-presets.json" CACHE FILEPATH
     "Adopted GLIC preset bank JSON")
+set(GLIC_METAL_INTEGRATION_MANIFEST
+    "${PROJECT_SOURCE_DIR}/resources/integration-manifest.json" CACHE FILEPATH
+    "Machine-readable GLIC Metal integration contract")
 include(cmake/GlicMetalResources.cmake)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -204,6 +207,7 @@ if(APPLE)
     set_property(TARGET glic_webcam_preview APPEND PROPERTY LINK_DEPENDS
         "${PROJECT_SOURCE_DIR}/config/fast-match-allowlist.json"
         "${PROJECT_SOURCE_DIR}/resources/selected-presets.json"
+        "${PROJECT_SOURCE_DIR}/resources/integration-manifest.json"
         "${PROJECT_SOURCE_DIR}/LICENSE"
         "${PROJECT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md")
     add_custom_command(TARGET glic_webcam_preview POST_BUILD
@@ -221,6 +225,9 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${PROJECT_SOURCE_DIR}/resources/selected-presets.json"
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/selected-presets.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/resources/integration-manifest.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/integration-manifest.json"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${PROJECT_SOURCE_DIR}/LICENSE"
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/LICENSE"
@@ -324,6 +331,9 @@ if(BUILD_TESTING)
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/scripts/generate_mixed_glitch_selection.py"
                          --selftest)
+        add_test(NAME glic_integration_manifest
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${PROJECT_SOURCE_DIR}/tests/test_integration_manifest.py")
         add_test(NAME glic_original_metal_reference_analysis
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_compare_original_metal_reference.py")
@@ -508,9 +518,11 @@ install(DIRECTORY presets/
 install(FILES presets.upstream.sha256
         DESTINATION ${CMAKE_INSTALL_DATADIR}/glic-metal)
 install(FILES resources/selected-presets.json
+              resources/integration-manifest.json
         DESTINATION ${CMAKE_INSTALL_DATADIR}/glic-metal)
 install(FILES README.md LICENSE THIRD_PARTY_NOTICES.md
-              docs/BUILDING.md docs/EMBEDDING.md docs/CODEC_GLITCH.md
+              docs/BUILDING.md docs/EMBEDDING.md docs/AI_INTEGRATION.md
+              docs/CODEC_GLITCH.md
         DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/glic-metal)
 if(APPLE)
     install(FILES "${GLIC_METALLIB}" DESTINATION ${CMAKE_INSTALL_LIBDIR}/glic)

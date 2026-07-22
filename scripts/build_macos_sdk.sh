@@ -63,6 +63,9 @@ run cmake -E copy_if_different \
   "${install_dir}/share/glic-metal/selected-presets.json" \
   "${resource_bundle}/Contents/Resources/selected-presets.json"
 run cmake -E copy_if_different \
+  "${install_dir}/share/glic-metal/integration-manifest.json" \
+  "${resource_bundle}/Contents/Resources/integration-manifest.json"
+run cmake -E copy_if_different \
   "${install_dir}/lib/glic/glic_realtime.metallib" \
   "${resource_bundle}/Contents/Resources/glic_realtime.metallib"
 run cmake -E copy_if_different "$repo_root/LICENSE" \
@@ -71,6 +74,9 @@ run cmake -E copy_if_different "$repo_root/THIRD_PARTY_NOTICES.md" \
   "${resource_bundle}/Contents/Resources/THIRD_PARTY_NOTICES.md"
 run cmake -E copy_if_different "$repo_root/resources/SDK-README.md" \
   "${sdk_dir}/README.md"
+run cmake -E copy_if_different \
+  "${install_dir}/share/doc/glic-metal/AI_INTEGRATION.md" \
+  "${sdk_dir}/AI_INTEGRATION.md"
 
 info_plist="${resource_bundle}/Contents/Info.plist"
 run /usr/bin/plutil -create xml1 "$info_plist"
@@ -85,7 +91,8 @@ run /usr/bin/plutil -insert CFBundleVersion -string 1 "$info_plist"
 
 (
   cd "$sdk_dir" || exit 1
-  find GlicMetal.xcframework GlicMetalResources.bundle -type f -print0 |
+  find GlicMetal.xcframework GlicMetalResources.bundle README.md \
+    AI_INTEGRATION.md -type f -print0 |
     sort -z | xargs -0 /usr/bin/shasum -a 256 > SHA256SUMS
 ) || fail "could not create SDK checksums"
 

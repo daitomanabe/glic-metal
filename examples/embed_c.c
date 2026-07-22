@@ -1,4 +1,5 @@
 #include <glic_metal/glic_metal.h>
+#include <glic_metal/glitch_presets.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -6,6 +7,7 @@
 
 int main(int argc, char **argv) {
   const char *preset_directory = argc > 1 ? argv[1] : "presets";
+  const char *selected_preset = argc > 3 ? argv[3] : "original__vv01";
   const int width = 320;
   const int height = 180;
   const size_t row_bytes = (size_t)width * 4u;
@@ -44,9 +46,19 @@ int main(int argc, char **argv) {
   config.width = width;
   config.height = height;
   config.preset_directory = preset_directory;
-  config.preset_name = "vv02";
   if (argc > 2)
     config.metal_library_path = argv[2];
+
+  glic_glitch_preset_status preset_status =
+      glic_glitch_preset_apply_metal(selected_preset, &config);
+  if (preset_status != GLIC_GLITCH_PRESET_OK) {
+    fprintf(stderr, "selected preset failed: %s (%s)\n", selected_preset,
+            glic_glitch_preset_status_string(preset_status));
+    glic_metal_context_destroy(context);
+    free(input);
+    free(output);
+    return 1;
+  }
 
   status = glic_metal_prepare(context, &config);
   if (status == GLIC_METAL_OK) {
@@ -67,9 +79,10 @@ int main(int argc, char **argv) {
   glic_metal_frame_stats stats;
   glic_metal_frame_stats_init(&stats);
   (void)glic_metal_get_last_stats(context, &stats);
-  printf("backend=%s frame_ms=%.3f gpu_ms=%.3f segments=%llu\n",
-         glic_metal_get_active_backend(context), stats.total_milliseconds,
-         stats.gpu_milliseconds, (unsigned long long)stats.total_segments);
+  printf("preset=%s backend=%s frame_ms=%.3f gpu_ms=%.3f segments=%llu\n",
+         selected_preset, glic_metal_get_active_backend(context),
+         stats.total_milliseconds, stats.gpu_milliseconds,
+         (unsigned long long)stats.total_segments);
 
   glic_metal_context_destroy(context);
   free(input);

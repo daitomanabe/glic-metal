@@ -21,6 +21,8 @@
 
 ## Important paths
 
+- `docs/AI_INTEGRATION.md` is the first-read contract for downstream app
+  integration; keep it aligned with `resources/integration-manifest.json`.
 - `FILE-STRUCTURE.md` maps the normalized public layout.
 - `docs/BUILDING.md` is the reproducible build entry point.
 - `docs/ORIGINAL_PRESET_REALTIME.md` defines compatibility claims.

@@ -37,6 +37,11 @@ endif()
 if(NOT EXISTS "${consumer_build_dir}/Resources/Presets/default")
   message(FATAL_ERROR "subdirectory consumer did not copy preset resources")
 endif()
+if(NOT EXISTS "${consumer_build_dir}/Resources/selected-presets.json" OR
+   NOT EXISTS "${consumer_build_dir}/Resources/integration-manifest.json")
+  message(FATAL_ERROR
+          "subdirectory consumer did not copy integration metadata")
+endif()
 if(APPLE AND NOT EXISTS
    "${consumer_build_dir}/Resources/glic_realtime.metallib")
   message(FATAL_ERROR "subdirectory consumer did not copy the Metal library")

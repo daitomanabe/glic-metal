@@ -10,6 +10,8 @@ set_and_check(GLIC_METAL_PRESETS_DIR
               "@PACKAGE_CMAKE_INSTALL_DATADIR@/glic-metal/presets")
 set_and_check(GLIC_METAL_SELECTED_PRESETS_JSON
               "@PACKAGE_CMAKE_INSTALL_DATADIR@/glic-metal/selected-presets.json")
+set_and_check(GLIC_METAL_INTEGRATION_MANIFEST
+              "@PACKAGE_CMAKE_INSTALL_DATADIR@/glic-metal/integration-manifest.json")
 if(APPLE)
   set_and_check(GLIC_METAL_METALLIB
                 "@PACKAGE_CMAKE_INSTALL_LIBDIR@/glic/glic_realtime.metallib")
