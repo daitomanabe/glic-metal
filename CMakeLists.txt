@@ -308,6 +308,10 @@ if(BUILD_TESTING)
                          "${PROJECT_SOURCE_DIR}/tests/test_evaluate_codec_glitch_videos.py")
         set_tests_properties(glic_codec_glitch_video_evaluator
                              PROPERTIES TIMEOUT 60)
+        add_test(NAME glic_codec_glitch_candidate_bank
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${PROJECT_SOURCE_DIR}/scripts/generate_codec_glitch_candidate_bank.py"
+                         --selftest)
         add_test(NAME glic_original_metal_reference_analysis
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_compare_original_metal_reference.py")

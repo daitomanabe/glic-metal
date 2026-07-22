@@ -169,6 +169,17 @@ ffmpeg -i input.mov -f rawvideo -pix_fmt bgra - \
 rankingできます。MAE、変化率、輝度、色差、edge、時間差を測り、reliability hard gateを
 通った候補だけをfingerprintのmax-min距離で並べます。
 
+全12 effectを異なる強度、時間周期、feedback、seedで展開した最大50候補をまとめて
+生成する場合は、candidate bank generatorを使います。動画、処理report、ranking、
+選択状態を保存するcheckbox式`index.html`を同じ出力folderへ生成します。
+
+```bash
+python3 scripts/generate_codec_glitch_candidate_bank.py input.mov \
+  --output-dir test-videos/codec-glitch \
+  --filter-bin build/glic_codec_glitch_filter \
+  --limit 50 --overwrite
+```
+
 ```bash
 python3 scripts/evaluate_codec_glitch_videos.py \
   --control control.mp4 \

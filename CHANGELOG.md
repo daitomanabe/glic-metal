@@ -24,6 +24,9 @@ semantic versioning for tagged releases.
   separating designed temporal holds from non-intentional fallback.
 - Headless codec-video evaluation with dry/wet, luminance, chroma, edge, and
   temporal metrics plus reliability-gated max-min diversity ranking.
+- A reproducible 50-entry Codec Glitch candidate bank generator covering all
+  twelve effects, with parameter/seed variation, strict ranking, and a
+  checkbox-based HTML review page.
 - Last-good-frame fallback and forced-IDR watchdog recovery for unexpected
   codec failure, independently of intentional P-frame/IDR holds.
 - Five realtime Metal/CPU glitch families: tile shuffle, vertical tear,
