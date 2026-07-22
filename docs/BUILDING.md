@@ -22,6 +22,11 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
+This unfiltered command includes the `hardware`-labelled webcam and
+VideoToolbox codec tests and is the release check on a physical Mac. Hosted CI
+uses `ctest --test-dir build --output-on-failure -LE hardware` because its
+virtual macOS runner does not provide a reliable hardware decoder.
+
 If the repository was cloned without submodules:
 
 ```bash

@@ -47,7 +47,10 @@ jobs:
         run: cmake --build build --parallel
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        # GitHub's virtual macOS runners expose Metal but not a reliable
+        # VideoToolbox hardware decoder. Run hardware-labelled codec tests on
+        # a physical Mac with the normal unfiltered ctest command.
+        run: ctest --test-dir build --output-on-failure -LE hardware
 
       - name: Check public source layout
         run: python scripts/check_public_release.py --source .

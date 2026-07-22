@@ -458,8 +458,10 @@ if(BUILD_TESTING)
         target_link_libraries(glic_codec_glitch_tests PRIVATE glic_core)
         add_test(NAME glic_codec_glitch_all_effects
                  COMMAND glic_codec_glitch_tests)
-        set_tests_properties(glic_codec_glitch_all_effects
-                             PROPERTIES TIMEOUT 60)
+        set_tests_properties(
+            glic_webcam_preview_selftest
+            glic_codec_glitch_all_effects
+            PROPERTIES LABELS "hardware" TIMEOUT 60)
 
         add_executable(glic_original_realtime_metal_tests
                        tests/original_realtime_metal_tests.mm)

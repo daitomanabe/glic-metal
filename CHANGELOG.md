@@ -77,6 +77,8 @@ semantic versioning for tagged releases.
 - The original CPU and Metal worker pools now use the Xcode 15-compatible
   `std::thread`; macOS retains the strict Processing leaf/RNG trace oracle
   while other hosts run the remaining portable CPU reference coverage.
+- Hardware VideoToolbox/webcam tests are explicitly labelled for physical-Mac
+  release runs and excluded only from virtual hosted CI.
 - GitHub Actions use the current Node 24-based official action releases.
 
 - The human embedding guide now provides a production 19-preset quick start,
