@@ -340,7 +340,7 @@ glic_metal_status glic_metal_prepare(glic_metal_context *context,
       config->fidelity < GLIC_METAL_FIDELITY_STRICT ||
       config->fidelity > GLIC_METAL_FIDELITY_FAST_MATCH ||
       config->effect_family < GLIC_METAL_EFFECT_LEGACY_BLOCK ||
-      config->effect_family > GLIC_METAL_EFFECT_POSTER_SOLAR ||
+      config->effect_family > GLIC_METAL_EFFECT_QUAD_MIRROR ||
       !std::isfinite(config->effect_strength) ||
       !std::isfinite(config->effect_amount) ||
       !std::isfinite(config->effect_scale) ||

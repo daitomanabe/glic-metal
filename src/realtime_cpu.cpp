@@ -541,6 +541,121 @@ private:
       affected = solarized * 255.0f;
       break;
     }
+    case RealtimeEffectFamily::TILE_SHUFFLE: {
+      const int tileSize = 8 + static_cast<int>(std::lround(scale * 88.0f));
+      const int tileX = x / tileSize;
+      const int tileY = y / tileSize;
+      const uint32_t tileHash = realtime::pixelHash(
+          tileX, tileY, 0, heldFrame, options_.seed);
+      const float density = 0.15f + amount * 0.75f;
+      if (static_cast<float>(tileHash & 0xffffu) < density * 65535.0f) {
+        const int radius = 1 + static_cast<int>(std::lround(amount * 4.0f));
+        const int span = radius * 2 + 1;
+        const int offsetX =
+            static_cast<int>((tileHash >> 16u) % static_cast<uint32_t>(span)) -
+            radius;
+        const uint32_t secondHash = realtime::pixelHash(
+            tileY, tileX, 1, heldFrame, options_.seed);
+        const int offsetY =
+            static_cast<int>((secondHash >> 16u) %
+                             static_cast<uint32_t>(span)) -
+            radius;
+        affected = static_cast<float>(sourceWrapped(
+            channel, x + offsetX * tileSize, y + offsetY * tileSize));
+      }
+      break;
+    }
+    case RealtimeEffectFamily::VERTICAL_TEAR: {
+      const int bandWidth = 1 + static_cast<int>(std::lround(scale * 15.0f));
+      const int band = x / bandWidth;
+      const uint32_t bandHash = realtime::pixelHash(
+          band, 0, 0, heldFrame, options_.seed);
+      const float density = 0.10f + amount * 0.65f;
+      if (static_cast<float>(bandHash & 0xffffu) < density * 65535.0f) {
+        const int maximum = std::min(240, std::max(4, options_.height / 3));
+        const int maximumShift =
+            4 + static_cast<int>(std::lround(amount * (maximum - 4)));
+        int shift =
+            1 + static_cast<int>((bandHash >> 16u) %
+                                 static_cast<uint32_t>(
+                                     std::max(1, maximumShift)));
+        if ((bandHash & 0x80000000u) != 0u)
+          shift = -shift;
+        affected = static_cast<float>(sourceWrapped(channel, x, y + shift));
+      }
+      break;
+    }
+    case RealtimeEffectFamily::DIAGONAL_SLIP: {
+      const int bandWidth = 4 + static_cast<int>(std::lround(scale * 60.0f));
+      const int band = (x + y) / bandWidth;
+      const uint32_t bandHash = realtime::pixelHash(
+          band, bandWidth, 0, heldFrame, options_.seed);
+      const float density = 0.12f + amount * 0.68f;
+      if (static_cast<float>(bandHash & 0xffffu) < density * 65535.0f) {
+        const int maximum = std::min(
+            180, std::max(4, std::min(options_.width, options_.height) / 4));
+        const int maximumShift =
+            4 + static_cast<int>(std::lround(amount * (maximum - 4)));
+        int shift =
+            1 + static_cast<int>((bandHash >> 16u) %
+                                 static_cast<uint32_t>(
+                                     std::max(1, maximumShift)));
+        if ((bandHash & 0x80000000u) != 0u)
+          shift = -shift;
+        const int chroma =
+            (channel - 1) *
+            static_cast<int>(std::lround(amount * 5.0f));
+        affected = static_cast<float>(sourceWrapped(
+            channel, x + shift + chroma, y - shift / 2));
+      }
+      break;
+    }
+    case RealtimeEffectFamily::SCANLINE_WEAVE: {
+      const int groupHeight =
+          1 + static_cast<int>(std::lround(scale * 7.0f));
+      const int group = y / groupHeight;
+      const int direction =
+          ((static_cast<uint64_t>(group) + heldFrame) & 1u) == 0u ? -1 : 1;
+      const int shift =
+          direction * (2 + static_cast<int>(std::lround(amount * 72.0f)));
+      const int rowOffset =
+          ((static_cast<uint64_t>(group) + heldFrame / 2u) & 1u) == 0u ? -1
+                                                                       : 1;
+      const int chroma =
+          (channel - 1) *
+          static_cast<int>(std::lround(amount * 6.0f));
+      affected = static_cast<float>(
+          sourceWrapped(channel, x + shift + chroma, y + rowOffset));
+      if (((y + static_cast<int>(heldFrame)) & 1) != 0)
+        affected *= 1.0f - amount * 0.18f;
+      break;
+    }
+    case RealtimeEffectFamily::QUAD_MIRROR: {
+      const int halfWidth =
+          10 + static_cast<int>(std::lround(scale * 90.0f));
+      const int halfHeight =
+          10 + static_cast<int>(std::lround((1.0f - scale) * 70.0f));
+      const int periodX = halfWidth * 2;
+      const int periodY = halfHeight * 2;
+      const int phaseX =
+          static_cast<int>(heldFrame % static_cast<uint64_t>(periodX));
+      const int phaseY = static_cast<int>(
+          (heldFrame * 2u) % static_cast<uint64_t>(periodY));
+      const int shiftedX = x + phaseX;
+      const int shiftedY = y + phaseY;
+      const int localX = shiftedX % periodX;
+      const int localY = shiftedY % periodY;
+      const int foldedX =
+          localX <= halfWidth ? localX : periodX - 1 - localX;
+      const int foldedY =
+          localY <= halfHeight ? localY : periodY - 1 - localY;
+      const int cellX = shiftedX / periodX;
+      const int cellY = shiftedY / periodY;
+      affected = static_cast<float>(sourceWrapped(
+          channel, cellX * periodX + foldedX - phaseX,
+          cellY * periodY + foldedY - phaseY));
+      break;
+    }
     case RealtimeEffectFamily::LEGACY_BLOCK:
     case RealtimeEffectFamily::COUNT:
       break;

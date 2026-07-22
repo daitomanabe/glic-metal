@@ -8,6 +8,10 @@ semantic versioning for tagged releases.
 
 ### Added
 
+- Five realtime Metal/CPU glitch families: tile shuffle, vertical tear,
+  diagonal slip, scanline weave, and quad mirror.
+- Search seeding from the complete 144-preset upstream GLIC value corpus, with
+  source-preset and mapping-fidelity provenance in ranking and review exports.
 - Deterministic selection of moderately complex generated patterns that stay
   visually distant from a prior ranked image corpus.
 - Checkbox-based preset review with persistent browser state and checked-only
@@ -25,6 +29,10 @@ semantic versioning for tagged releases.
 
 ### Changed
 
+- Preset search now balances fourteen mechanisms across upstream-base,
+  light/strong upstream mutation, archive mutation, and random lanes.
+- Review selection balances mechanism, artifact scale, orientation, source
+  origin, and source-preset reuse while enforcing minimum perceptual distance.
 - Ranking tools now require the external visual-liveliness runner through
   `VISUAL_LIVELINESS_RUNNER`; no maintainer-specific home-directory fallback is
   used.

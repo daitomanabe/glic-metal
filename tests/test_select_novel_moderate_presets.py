@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -55,12 +56,44 @@ def main() -> int:
         "_nearest_selected_distance"
     ] == 1.0
 
+    expanded = []
+    for index in range(28):
+        row = candidate(100 + index, f"family_{index % 14:02d}", 0.75, 0.65)
+        row["source_preset"] = f"upstream_{index % 14:02d}"
+        row["source_preset_mapping"] = "approximated"
+        row["artifact_scale_bucket"] = ("fine", "medium", "coarse")[index % 3]
+        row["artifact_orientation"] = ("horizontal", "vertical")[index % 2]
+        expanded.append(row)
+    balanced = MODULE.select_maxmin(expanded, 20)
+    assert len(balanced) == 20
+    assert len({row["mechanism_family"] for row in balanced}) == 14
+    source_counts = {}
+    for row in balanced:
+        source = row["source_preset"]
+        source_counts[source] = source_counts.get(source, 0) + 1
+    assert max(source_counts.values()) <= 2
+
+    with tempfile.TemporaryDirectory() as temporary:
+        asset_dir = Path(temporary)
+        keep = asset_dir / "01_line_tear_0123456789abcdef.png"
+        stale = asset_dir / "02_line_tear_fedcba9876543210.png"
+        unrelated = asset_dir / "notes.png"
+        keep.touch()
+        stale.touch()
+        unrelated.touch()
+        MODULE.remove_stale_generated_assets(asset_dir, {keep.name}, ".png")
+        assert keep.is_file()
+        assert not stale.exists()
+        assert unrelated.is_file()
+
     public_items = [
         {
             "selection_rank": 1,
             "name": "first</script>",
             "recipe_hash": "abc123",
             "mechanism_family": "line",
+            "source_preset": "colour_waves",
+            "source_preset_mapping": "exact-compatible",
             "preview": "previews/first.png",
             "canonical": "v2|first</script>",
             "complexity_score": 0.5,
@@ -92,6 +125,7 @@ def main() -> int:
     assert 'fields.join(",") + "\\n" + rows.join("\\n") + "\\n"' in review_html
     assert "first</script>" not in review_html
     assert "first\\u003c/script\\u003e" in review_html
+    assert "source colour_waves" in review_html
     assert MODULE.selection_set_id(public_items) == MODULE.selection_set_id(public_items)
     assert MODULE.selection_set_id(public_items) != MODULE.selection_set_id(public_items[:1])
     print("novel moderate preset selector tests: PASS")

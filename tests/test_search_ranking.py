@@ -286,6 +286,26 @@ class HardGateTests(unittest.TestCase):
                 metric[field] = value
                 self.assertIn(reason, ranking.hard_gate_reasons(metric))
 
+    def test_effect_specific_gates_match_search(self) -> None:
+        sparse = valid_metrics()
+        sparse.update(
+            {"mae": 2.0, "changed_ratio": 0.03, "min_input_changed_ratio": 0.02}
+        )
+        self.assertNotIn(
+            "no_op", ranking.hard_gate_reasons(sparse, "vertical_tear")
+        )
+        self.assertIn("no_op", ranking.hard_gate_reasons(sparse, "legacy_block"))
+
+        dense = valid_metrics()
+        dense["changed_ratio"] = 0.98
+        self.assertNotIn(
+            "excessive_change",
+            ranking.hard_gate_reasons(dense, "bitplane_dither"),
+        )
+        self.assertIn(
+            "excessive_change", ranking.hard_gate_reasons(dense, "legacy_block")
+        )
+
     def test_missing_is_not_imputed(self) -> None:
         metric = valid_metrics()
         del metric["structure"]
@@ -674,6 +694,9 @@ class PreviewReproductionTests(unittest.TestCase):
                         "candidate_id": "1",
                         "recipe_hash": recipe_hash,
                         "canonical": canonical,
+                        "generation": "upstream_preset_variant_light",
+                        "source_preset": "colour_waves",
+                        "source_preset_mapping": "exact-compatible",
                         "preview": "elites/candidate.png",
                         "metrics": source["raw_metrics"],
                         "recipe": recipe,
@@ -696,6 +719,10 @@ class PreviewReproductionTests(unittest.TestCase):
                 candidates, analysis, {recipe_hash: certification}, run_dir
             )
         self.assertEqual(prepared[0]["canonical"], canonical)
+        self.assertEqual(prepared[0]["source_preset"], "colour_waves")
+        self.assertEqual(
+            prepared[0]["source_preset_mapping"], "exact-compatible"
+        )
 
     def test_canonical_recipe_is_preserved_and_has_priority_in_ready_args(self) -> None:
         canonical = (

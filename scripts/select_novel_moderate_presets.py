@@ -26,9 +26,11 @@ from typing import Any, Iterable
 from rank_search_results import perceptual_distance
 
 
-SCHEMA = "glic-novel-moderate-preset-selection-v1"
+SCHEMA = "glic-novel-moderate-preset-selection-v2"
 ADOPTED_SCHEMA = "glic-adopted-preset-selection-v1"
-POLICY = "middle-complexity-reference-novelty-maxmin-v1"
+POLICY = "middle-complexity-reference-novelty-source-balanced-maxmin-v2"
+DEFAULT_MINIMUM_SELECTION_DISTANCE = 0.12
+DEFAULT_MINIMUM_PRIOR_DISTANCE = 0.08
 COMPLEXITY_FIELDS = (
     "edge_density",
     "local_contrast",
@@ -270,32 +272,73 @@ def mechanism(item: dict[str, Any]) -> str:
     return str(item.get("mechanism_family") or item.get("recipe_family") or "unknown")
 
 
-def select_maxmin(candidates: list[dict[str, Any]], count: int) -> list[dict[str, Any]]:
+def selection_stratum(item: dict[str, Any]) -> str:
+    origin = "upstream" if item.get("source_preset") else "synthetic"
+    return ":".join(
+        (
+            mechanism(item),
+            str(item.get("artifact_scale_bucket") or "none"),
+            str(item.get("artifact_orientation") or "none"),
+            origin,
+        )
+    )
+
+
+def select_maxmin(
+    candidates: list[dict[str, Any]], count: int, minimum_distance: float = 0.0
+) -> list[dict[str, Any]]:
     remaining = list(candidates)
     selected: list[dict[str, Any]] = []
     family_counts: Counter[str] = Counter()
+    stratum_counts: Counter[str] = Counter()
+    source_counts: Counter[str] = Counter()
     coverage_target = min(count, len({mechanism(item) for item in remaining}))
+    family_limit = max(2, math.ceil(count / max(1, coverage_target)) + 1)
+    stratum_total = len({selection_stratum(item) for item in remaining})
+    stratum_limit = max(2, math.ceil(count / max(1, stratum_total)) + 1)
+    source_total = len(
+        {str(item.get("source_preset")) for item in remaining if item.get("source_preset")}
+    )
+    source_limit = max(1, math.ceil(count / max(1, source_total)))
     while remaining and len(selected) < count:
         require_new_family = len(selected) < coverage_target
         options: list[tuple[float, float, dict[str, Any]]] = []
         for item in remaining:
             family = mechanism(item)
+            stratum = selection_stratum(item)
+            source = str(item.get("source_preset") or "")
             if require_new_family and family_counts[family] > 0:
                 continue
-            if family_counts[family] >= 2:
+            if family_counts[family] >= family_limit:
+                continue
+            if stratum_counts[stratum] >= stratum_limit:
+                continue
+            if source and source_counts[source] >= source_limit:
                 continue
             nearest_selected = (
                 1.0
                 if not selected
                 else min(perceptual_distance(item, other) for other in selected)
             )
-            family_bonus = 1.0 if family_counts[family] == 0 else 0.0
-            gain = 0.48 * item["_base_score"] + 0.42 * nearest_selected + 0.10 * family_bonus
+            if selected and nearest_selected < minimum_distance:
+                continue
+            family_bonus = 1.0 / (1.0 + family_counts[family])
+            stratum_bonus = 1.0 / (1.0 + stratum_counts[stratum])
+            gain = (
+                0.46 * item["_base_score"]
+                + 0.40 * nearest_selected
+                + 0.08 * family_bonus
+                + 0.06 * stratum_bonus
+            )
             options.append((gain, nearest_selected, item))
         if not options and require_new_family:
             coverage_target = len(selected)
             continue
         if not options:
+            if family_limit < count:
+                family_limit += 1
+                stratum_limit += 1
+                continue
             break
         options.sort(
             key=lambda row: (
@@ -310,6 +353,10 @@ def select_maxmin(candidates: list[dict[str, Any]], count: int) -> list[dict[str
         chosen["_nearest_selected_distance"] = nearest_selected
         selected.append(chosen)
         family_counts[mechanism(chosen)] += 1
+        stratum_counts[selection_stratum(chosen)] += 1
+        source = str(chosen.get("source_preset") or "")
+        if source:
+            source_counts[source] += 1
         remaining.remove(chosen)
     return selected
 
@@ -329,6 +376,31 @@ def resolve_preview(run_dir: Path, item: dict[str, Any]) -> Path:
     return resolved
 
 
+def is_generated_selection_asset(path: Path, suffix: str) -> bool:
+    if not path.is_file() or path.suffix != suffix:
+        return False
+    stem = path.stem
+    if len(stem) < 20 or not stem[:2].isdigit() or stem[2] != "_":
+        return False
+    recipe_hash = stem.rsplit("_", 1)[-1]
+    return len(recipe_hash) == 16 and all(
+        character in "0123456789abcdef" for character in recipe_hash.lower()
+    )
+
+
+def remove_stale_generated_assets(
+    directory: Path, desired_names: set[str], suffix: str
+) -> None:
+    if not directory.is_dir():
+        return
+    for path in directory.iterdir():
+        if path.name not in desired_names and is_generated_selection_asset(path, suffix):
+            path.unlink()
+            sidecar = Path(str(path) + ".json")
+            if sidecar.is_file():
+                sidecar.unlink()
+
+
 def public_item(item: dict[str, Any], index: int, preview_name: str) -> dict[str, Any]:
     return {
         "selection_rank": index,
@@ -339,7 +411,11 @@ def public_item(item: dict[str, Any], index: int, preview_name: str) -> dict[str
         "recipe": item.get("recipe"),
         "ready_to_run_args": item.get("ready_to_run_args"),
         "preview": preview_name,
+        "generation": item.get("generation"),
+        "source_preset": item.get("source_preset"),
+        "source_preset_mapping": item.get("source_preset_mapping"),
         "mechanism_family": mechanism(item),
+        "selection_stratum": selection_stratum(item),
         "artifact_scale_bucket": item.get("artifact_scale_bucket"),
         "artifact_orientation": item.get("artifact_orientation"),
         "complexity_score": item["_complexity_score"],
@@ -358,6 +434,7 @@ def public_item(item: dict[str, Any], index: int, preview_name: str) -> dict[str
 def write_csv(path: Path, items: list[dict[str, Any]]) -> None:
     fields = (
         "selection_rank", "name", "recipe_hash", "mechanism_family",
+        "generation", "source_preset", "source_preset_mapping",
         "artifact_scale_bucket", "complexity_score", "moderate_fit",
         "nearest_prior_distance", "nearest_selected_distance", "core_utility",
         "preview", "canonical",
@@ -425,7 +502,7 @@ def build_html(items: list[dict[str, Any]], summary: dict[str, Any]) -> str:
                 f'<source src="{html.escape(item["video"])}" type="video/mp4"></video>'
             )
         cards.append(
-            f'''<article class="preset-card" data-preset-key="{recipe_hash}"><div class="media-wrap">{media}<label class="decision"><input class="preset-checkbox" type="checkbox" value="{recipe_hash}" aria-label="{name}を採用"><span><span class="checkmark">✓</span>採用する</span></label></div><div class="card-copy"><small>#{item["selection_rank"]} · {html.escape(item["mechanism_family"])}</small><h2>{name}</h2><p>complexity <b>{item["complexity_score"]:.3f}</b> · prior distance <b>{item["nearest_prior_distance"]:.3f}</b> · selected distance <b>{item["nearest_selected_distance"]:.3f}</b></p><details><summary>canonical recipe</summary><code>{canonical}</code></details></div></article>'''
+            f'''<article class="preset-card" data-preset-key="{recipe_hash}"><div class="media-wrap">{media}<label class="decision"><input class="preset-checkbox" type="checkbox" value="{recipe_hash}" aria-label="{name}を採用"><span><span class="checkmark">✓</span>採用する</span></label></div><div class="card-copy"><small>#{item["selection_rank"]} · {html.escape(item["mechanism_family"])} · source {html.escape(str(item.get("source_preset") or "synthetic"))}</small><h2>{name}</h2><p>complexity <b>{item["complexity_score"]:.3f}</b> · prior distance <b>{item["nearest_prior_distance"]:.3f}</b> · selected distance <b>{item["nearest_selected_distance"]:.3f}</b></p><details><summary>canonical recipe</summary><code>{canonical}</code></details></div></article>'''
         )
     set_id = selection_set_id(items)
     browser_data = {
@@ -621,7 +698,7 @@ code{display:block;margin-top:10px;color:#bbb;overflow-wrap:anywhere}
   });
 
   exportCsv.addEventListener("click", () => {
-    const fields = ["selection_rank", "name", "recipe_hash", "mechanism_family", "canonical", "ready_to_run_args"];
+    const fields = ["selection_rank", "name", "recipe_hash", "mechanism_family", "generation", "source_preset", "source_preset_mapping", "canonical", "ready_to_run_args"];
     const rows = adoptedPresets().map((preset) => fields.map((field) => csvCell(preset[field])).join(","));
     download("adopted-presets.csv", "text/csv;charset=utf-8", "\ufeff" + fields.join(",") + "\\n" + rows.join("\\n") + "\\n");
     status.textContent = `${selected.size}件だけを adopted-presets.csv に保存しました。`;
@@ -711,6 +788,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reference-ranking", type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--count", type=int, default=12)
+    parser.add_argument(
+        "--min-distance", type=float,
+        default=DEFAULT_MINIMUM_SELECTION_DISTANCE,
+        help="Minimum perceptual distance between adopted review candidates.",
+    )
+    parser.add_argument(
+        "--min-prior-distance", type=float,
+        default=DEFAULT_MINIMUM_PRIOR_DISTANCE,
+        help="Minimum perceptual distance from the prior reference corpus.",
+    )
     return parser.parse_args()
 
 
@@ -721,6 +808,13 @@ def main() -> int:
     output_dir = (args.output_dir or run_dir / "novel-moderate-selection").expanduser().resolve()
     if args.count <= 0:
         raise SystemExit("--count must be positive")
+    if not math.isfinite(args.min_distance) or not 0.0 <= args.min_distance <= 1.0:
+        raise SystemExit("--min-distance must be finite and between 0 and 1")
+    if (
+        not math.isfinite(args.min_prior_distance)
+        or not 0.0 <= args.min_prior_distance <= 1.0
+    ):
+        raise SystemExit("--min-prior-distance must be finite and between 0 and 1")
     ranking = load_ranking(ranking_path)
     candidates = eligible_candidates(ranking)
     if not candidates:
@@ -734,23 +828,41 @@ def main() -> int:
     calibration = calibrate_complexity(candidates)
     complexity_bands = attach_complexity(candidates, calibration)
     novelty_bands = attach_novelty(candidates, references)
+    minimum_prior_distance = max(novelty_bands["q20"], args.min_prior_distance)
     moderate = [
         item for item in candidates
         if complexity_bands["q20"] <= item["_complexity_score"] <= complexity_bands["q80"]
-        and item["_nearest_reference_distance"] >= novelty_bands["q20"]
+        and item["_nearest_reference_distance"] >= minimum_prior_distance
         and finite(item["perceptual"].get("residual_mask_coverage")) >= 0.05
     ]
     if len(moderate) < args.count:
+        relaxed = [
+            item for item in candidates
+            if item["_nearest_reference_distance"] >= minimum_prior_distance
+            and finite(item["perceptual"].get("residual_mask_coverage")) >= 0.05
+        ]
         moderate = sorted(
-            candidates,
+            relaxed,
             key=lambda item: (-item["_moderate_fit"], -item["_reference_novelty_score"]),
-        )[: max(args.count, len(candidates) // 2)]
-    selected = select_maxmin(moderate, min(args.count, len(moderate)))
+        )[: max(args.count, len(relaxed) // 2)]
+    selected = select_maxmin(
+        moderate, min(args.count, len(moderate)), args.min_distance
+    )
     if not selected:
         raise SystemExit("moderate-complexity selection produced no candidates")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "previews").mkdir(parents=True, exist_ok=True)
+    preview_names = {
+        f"{index:02d}_{mechanism(item)}_{item['recipe_hash']}.png"
+        for index, item in enumerate(selected, 1)
+    }
+    video_names = {
+        f"{index:02d}_{mechanism(item)}_{item['recipe_hash']}.mp4"
+        for index, item in enumerate(selected, 1)
+    }
+    remove_stale_generated_assets(output_dir / "previews", preview_names, ".png")
+    remove_stale_generated_assets(output_dir / "videos", video_names, ".mp4")
     public_items = []
     for index, item in enumerate(selected, 1):
         source = resolve_preview(run_dir, item)
@@ -765,7 +877,10 @@ def main() -> int:
     summary = {
         "eligible": len(candidates),
         "moderate_pool": len(moderate),
+        "requested": args.count,
         "selected": len(public_items),
+        "minimum_selection_distance": args.min_distance,
+        "minimum_prior_distance_required": minimum_prior_distance,
         "reference_candidates": len(references),
         "unique_mechanisms": len({item["mechanism_family"] for item in public_items}),
         "minimum_pairwise_distance": min(
@@ -790,6 +905,7 @@ def main() -> int:
             "complexity_calibration": calibration,
             "complexity_middle_band": complexity_bands,
             "reference_novelty_band": novelty_bands,
+            "minimum_prior_distance": minimum_prior_distance,
             "weights": COMPLEXITY_WEIGHTS,
         },
         "summary": summary,

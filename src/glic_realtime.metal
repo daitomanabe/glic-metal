@@ -428,6 +428,92 @@ static float realtimeFamilyValue(texture2d<float, access::read> input,
             affected = quantized > threshold ? 1.0 - quantized : quantized;
             break;
         }
+        case 9u: { // TILE_SHUFFLE: move coherent cells to neighboring cells.
+            int tileSize = 8 + int(round(scale * 88.0));
+            int tileX = point.x / tileSize;
+            int tileY = point.y / tileSize;
+            uint tileHash = pixelHash(tileX, tileY, 0, heldFrame, preset.seed);
+            float density = 0.15 + amount * 0.75;
+            if (float(tileHash & 0xffffu) < density * 65535.0) {
+                int radius = 1 + int(round(amount * 4.0));
+                int span = radius * 2 + 1;
+                int offsetX = int((tileHash >> 16u) % uint(span)) - radius;
+                uint secondHash = pixelHash(tileY, tileX, 1, heldFrame, preset.seed);
+                int offsetY = int((secondHash >> 16u) % uint(span)) - radius;
+                affected = effectChannelAtWrapped(
+                    input, point + int2(offsetX * tileSize, offsetY * tileSize),
+                    channel, preset);
+            }
+            break;
+        }
+        case 10u: { // VERTICAL_TEAR: narrow columns displaced vertically.
+            int bandWidth = 1 + int(round(scale * 15.0));
+            int band = point.x / bandWidth;
+            uint bandHash = pixelHash(band, 0, 0, heldFrame, preset.seed);
+            float density = 0.10 + amount * 0.65;
+            if (float(bandHash & 0xffffu) < density * 65535.0) {
+                int maximum = min(240, max(4, int(preset.height) / 3));
+                int maximumShift = 4 + int(round(amount * float(maximum - 4)));
+                int shift = 1 + int((bandHash >> 16u) % uint(max(1, maximumShift)));
+                if ((bandHash & 0x80000000u) != 0u) shift = -shift;
+                affected = effectChannelAtWrapped(
+                    input, point + int2(0, shift), channel, preset);
+            }
+            break;
+        }
+        case 11u: { // DIAGONAL_SLIP: diagonal bands slide in opposing directions.
+            int bandWidth = 4 + int(round(scale * 60.0));
+            int band = (point.x + point.y) / bandWidth;
+            uint bandHash = pixelHash(band, bandWidth, 0, heldFrame, preset.seed);
+            float density = 0.12 + amount * 0.68;
+            if (float(bandHash & 0xffffu) < density * 65535.0) {
+                int maximum = min(
+                    180, max(4, min(int(preset.width), int(preset.height)) / 4));
+                int maximumShift = 4 + int(round(amount * float(maximum - 4)));
+                int shift = 1 + int((bandHash >> 16u) % uint(max(1, maximumShift)));
+                if ((bandHash & 0x80000000u) != 0u) shift = -shift;
+                int chroma = (channel - 1) * int(round(amount * 5.0));
+                affected = effectChannelAtWrapped(
+                    input, point + int2(shift + chroma, -(shift / 2)),
+                    channel, preset);
+            }
+            break;
+        }
+        case 12u: { // SCANLINE_WEAVE: alternating rows pull from opposite sides.
+            int groupHeight = 1 + int(round(scale * 7.0));
+            int group = point.y / groupHeight;
+            int direction = ((uint(group) + heldFrame) & 1u) == 0u ? -1 : 1;
+            int shift = direction * (2 + int(round(amount * 72.0)));
+            int rowOffset = ((uint(group) + heldFrame / 2u) & 1u) == 0u ? -1 : 1;
+            int chroma = (channel - 1) * int(round(amount * 6.0));
+            affected = effectChannelAtWrapped(
+                input, point + int2(shift + chroma, rowOffset), channel, preset);
+            if (((point.y + int(heldFrame)) & 1) != 0)
+                affected *= 1.0 - amount * 0.18;
+            break;
+        }
+        case 13u: { // QUAD_MIRROR: fold both axes into animated mirror tiles.
+            int halfWidth = 10 + int(round(scale * 90.0));
+            int halfHeight = 10 + int(round((1.0 - scale) * 70.0));
+            int periodX = halfWidth * 2;
+            int periodY = halfHeight * 2;
+            int phaseX = int(heldFrame % uint(periodX));
+            int phaseY = int((heldFrame * 2u) % uint(periodY));
+            int shiftedX = point.x + phaseX;
+            int shiftedY = point.y + phaseY;
+            int localX = shiftedX % periodX;
+            int localY = shiftedY % periodY;
+            int foldedX = localX <= halfWidth ? localX : periodX - 1 - localX;
+            int foldedY = localY <= halfHeight ? localY : periodY - 1 - localY;
+            int cellX = shiftedX / periodX;
+            int cellY = shiftedY / periodY;
+            affected = effectChannelAtWrapped(
+                input,
+                int2(cellX * periodX + foldedX - phaseX,
+                     cellY * periodY + foldedY - phaseY),
+                channel, preset);
+            break;
+        }
         default:
             break;
     }

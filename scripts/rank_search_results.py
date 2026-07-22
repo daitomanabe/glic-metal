@@ -381,7 +381,9 @@ def raw_metrics(candidate: dict[str, Any]) -> dict[str, Any]:
     return metrics if isinstance(metrics, dict) else {}
 
 
-def hard_gate_reasons(metrics: dict[str, Any]) -> list[str]:
+def hard_gate_reasons(
+    metrics: dict[str, Any], mechanism_name: str = ""
+) -> list[str]:
     values: dict[str, float] = {}
     reasons: list[str] = []
     for name in REQUIRED_METRICS:
@@ -396,13 +398,26 @@ def hard_gate_reasons(metrics: dict[str, Any]) -> list[str]:
         reasons.append("below_30_fps_lowres_prefilter")
     if values["mean_process_ms"] <= 0.0:
         reasons.append("invalid_process_time")
+    sparse = mechanism_name in {
+        "line_tear",
+        "channel_shear",
+        "analog_sync",
+        "edge_echo",
+        "vertical_tear",
+        "diagonal_slip",
+    }
+    dense_tonal = mechanism_name in {"bitplane_dither", "poster_solar"}
+    minimum_mae = 1.5 if sparse else 8.0
+    minimum_changed = 0.02 if sparse else 0.20
+    minimum_input_changed = 0.01 if sparse else 0.15
     if (
-        values["mae"] < 8.0
-        or values["changed_ratio"] < 0.20
-        or values["min_input_changed_ratio"] < 0.15
+        values["mae"] < minimum_mae
+        or values["changed_ratio"] < minimum_changed
+        or values["min_input_changed_ratio"] < minimum_input_changed
     ):
         reasons.append("no_op")
-    if values["mae"] > 75.0 or values["changed_ratio"] > 0.95:
+    maximum_changed = 0.995 if dense_tonal else 0.95
+    if values["mae"] > 75.0 or values["changed_ratio"] > maximum_changed:
         reasons.append("excessive_change")
     if values["entropy"] < 0.12 or values["output_stddev"] < 0.031:
         reasons.append("collapsed_output")
@@ -729,7 +744,7 @@ def prepare_items(
             or record.get("preview")
             or ""
         )
-        reasons = hard_gate_reasons(metrics) + performance_reasons
+        reasons = hard_gate_reasons(metrics, mechanism_family(recipe)) + performance_reasons
         if not recipe_hash:
             reasons.append("missing_recipe_hash")
         if not preview_path:
@@ -795,6 +810,14 @@ def prepare_items(
             "archive_cell": str(candidate.get("archive_cell") or record.get("cell") or ""),
             "generation": str(record.get("generation") or ""),
             "parent_hash": str(record.get("parent_hash") or ""),
+            "source_preset": str(
+                record.get("source_preset") or recipe.get("source_preset") or ""
+            ),
+            "source_preset_mapping": str(
+                record.get("source_preset_mapping")
+                or recipe.get("source_preset_mapping")
+                or ""
+            ),
             # Keep recipe_family as an output alias for existing report readers,
             # but all v3 quotas use the explicit mechanism identity.
             "mechanism_family": explicit_mechanism,
@@ -1967,7 +1990,7 @@ def build_html(payload: dict[str, Any], output_dir: Path, media_root: Path) -> s
               {image}<div class="body">
               <div class="eyebrow">#{item["rank"]} · {html.escape(item["tier"])} · Pareto {item["pareto_front"]}</div>
               <h2>{html.escape(item["recipe_hash"])}</h2>
-              <p>{html.escape(item["archive_cell"])} · {html.escape(item.get("mechanism_family", item["recipe_family"]))} · {html.escape(item.get("artifact_scale_bucket", "none"))} · {html.escape(item["cluster_id"])}</p>
+              <p>{html.escape(item["archive_cell"])} · {html.escape(item.get("mechanism_family", item["recipe_family"]))} · {html.escape(item.get("artifact_scale_bucket", "none"))} · {html.escape(item["cluster_id"])} · source {html.escape(item.get("source_preset") or "synthetic")}</p>
               <div class="certification">CERTIFIED · {certification_text}</div>
               <div class="utility">balanced utility <strong>{item["core_utility"]:.3f}</strong></div>
               <div class="metrics">{family_rows}</div>
@@ -2003,6 +2026,10 @@ def write_csv(path: Path, candidates: list[dict[str, Any]]) -> None:
         "recipe_hash",
         "canonical",
         "archive_cell",
+        "generation",
+        "parent_hash",
+        "source_preset",
+        "source_preset_mapping",
         "mechanism_family",
         "recipe_family",
         "artifact_scale_bucket",
@@ -2079,6 +2106,8 @@ def sanitized_item(item: dict[str, Any]) -> dict[str, Any]:
         "archive_cell",
         "generation",
         "parent_hash",
+        "source_preset",
+        "source_preset_mapping",
         "mechanism_family",
         "recipe_family",
         "artifact_scale_bucket",

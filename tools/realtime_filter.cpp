@@ -62,7 +62,8 @@ void printUsage(const char *program) {
       << "  --strength <0..2>        Glitch intensity (default: 1)\n"
       << "  --effect-family <name>   legacy_block, line_tear, "
          "channel_shear, analog_sync, mirror_fold, edge_echo, "
-         "bitplane_dither, wave_warp, or poster_solar\n"
+         "bitplane_dither, wave_warp, poster_solar, tile_shuffle, "
+         "vertical_tear, diagonal_slip, scanline_weave, or quad_mirror\n"
       << "  --effect-amount <0..1>   Family-specific amount (default: 0.7)\n"
       << "  --effect-scale <0..1>    Family-specific spatial scale (default: 0.5)\n"
       << "  --effect-rate <0..1>     Family-specific animation rate (default: 0.5)\n"
@@ -143,6 +144,16 @@ bool parseEffectFamily(std::string_view name,
     family = glic::RealtimeEffectFamily::WAVE_WARP;
   else if (name == "poster_solar")
     family = glic::RealtimeEffectFamily::POSTER_SOLAR;
+  else if (name == "tile_shuffle")
+    family = glic::RealtimeEffectFamily::TILE_SHUFFLE;
+  else if (name == "vertical_tear")
+    family = glic::RealtimeEffectFamily::VERTICAL_TEAR;
+  else if (name == "diagonal_slip")
+    family = glic::RealtimeEffectFamily::DIAGONAL_SLIP;
+  else if (name == "scanline_weave")
+    family = glic::RealtimeEffectFamily::SCANLINE_WEAVE;
+  else if (name == "quad_mirror")
+    family = glic::RealtimeEffectFamily::QUAD_MIRROR;
   else
     return false;
   return true;
@@ -168,6 +179,16 @@ const char *effectFamilyName(glic::RealtimeEffectFamily family) noexcept {
     return "wave_warp";
   case glic::RealtimeEffectFamily::POSTER_SOLAR:
     return "poster_solar";
+  case glic::RealtimeEffectFamily::TILE_SHUFFLE:
+    return "tile_shuffle";
+  case glic::RealtimeEffectFamily::VERTICAL_TEAR:
+    return "vertical_tear";
+  case glic::RealtimeEffectFamily::DIAGONAL_SLIP:
+    return "diagonal_slip";
+  case glic::RealtimeEffectFamily::SCANLINE_WEAVE:
+    return "scanline_weave";
+  case glic::RealtimeEffectFamily::QUAD_MIRROR:
+    return "quad_mirror";
   case glic::RealtimeEffectFamily::COUNT:
     break;
   }

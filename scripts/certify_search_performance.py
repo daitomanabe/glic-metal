@@ -201,6 +201,7 @@ def extract_targets(archive: Any) -> list[Target]:
     if archive.get("schema") not in (
         "glic-realtime-search-archive-v1",
         "glic-realtime-search-archive-v2",
+        "glic-realtime-search-archive-v3",
     ):
         raise CertificationError("ranking archive schema is not supported")
     cells = archive.get("cells")
@@ -745,6 +746,22 @@ def run_selftest() -> int:
     if recipe_sha256(recipe_a) != recipe_sha256(recipe_b):
         raise AssertionError("canonical recipe JSON is order-dependent")
     sample_hash = "0123456789abcdef"
+    targets = extract_targets(
+        {
+            "schema": "glic-realtime-search-archive-v3",
+            "cells": {
+                "selftest": [
+                    {
+                        "candidate_id": 1,
+                        "recipe_hash": sample_hash,
+                        "recipe": recipe_a,
+                    }
+                ]
+            },
+        }
+    )
+    if len(targets) != 1 or targets[0].recipe_hash != sample_hash:
+        raise AssertionError("archive v3 target extraction failed")
     validate_tool_row(make_boundary_tool_row(sample_hash, MAX_P95_MS, True), sample_hash)
     invalid = make_boundary_tool_row(sample_hash, math.nextafter(MAX_P95_MS, math.inf), True)
     try:

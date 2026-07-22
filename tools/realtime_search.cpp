@@ -1,4 +1,5 @@
 #include "glic.hpp"
+#include "preset_loader.hpp"
 #include "realtime.hpp"
 #include "realtime_certification.hpp"
 
@@ -53,12 +54,15 @@ void handleSignal(int) { gStopRequested = 1; }
 struct Options {
   std::vector<fs::path> inputPaths;
   fs::path outputDirectory;
+  fs::path presetsDirectory = "presets";
   std::string backend = "auto";
   uint64_t durationSeconds = 18'000;
   uint64_t maxCandidates = 0;
   uint64_t seed = 0x474c494353454152ULL;
   double statusIntervalSeconds = 30.0;
   double renderScale = 1.0;
+  size_t presetSeedCount = 0;
+  uint64_t presetSeedFingerprint = 0;
   bool resume = false;
 };
 
@@ -66,6 +70,14 @@ struct Recipe {
   glic::CodecConfig config;
   glic::RealtimeEffectConfig effect{};
   float strength = 1.0f;
+  std::string sourcePreset;
+  std::string sourcePresetMapping;
+};
+
+struct PresetSeed {
+  std::string name;
+  glic::CodecConfig config;
+  std::string mappingFidelity;
 };
 
 struct Metrics {
@@ -116,6 +128,8 @@ void printUsage(const char *program) {
       << "Runs a deterministic, API-free realtime glitch preset search.\n"
       << "  --input <png>              Input image; repeat at least twice\n"
       << "  --output-dir <path>        Search database/checkpoint directory\n"
+      << "  --presets-dir <path>       Upstream GLIC preset seed directory "
+         "(default: presets)\n"
       << "  --duration-seconds <n>     Wall-clock budget (default: 18000)\n"
       << "  --max-candidates <n>       Global candidate limit, 0=unlimited\n"
       << "  --seed <u64>               Deterministic search seed\n"
@@ -171,6 +185,11 @@ bool parseOptions(int argc, char **argv, Options &options) {
       if (value == nullptr)
         return false;
       options.outputDirectory = value;
+    } else if (argument == "--presets-dir") {
+      const char *value = takeValue();
+      if (value == nullptr)
+        return false;
+      options.presetsDirectory = value;
     } else if (argument == "--duration-seconds" || argument == "--duration") {
       const char *value = takeValue();
       if (value == nullptr ||
@@ -542,6 +561,16 @@ const char *effectFamilyName(glic::RealtimeEffectFamily family) noexcept {
     return "wave_warp";
   case glic::RealtimeEffectFamily::POSTER_SOLAR:
     return "poster_solar";
+  case glic::RealtimeEffectFamily::TILE_SHUFFLE:
+    return "tile_shuffle";
+  case glic::RealtimeEffectFamily::VERTICAL_TEAR:
+    return "vertical_tear";
+  case glic::RealtimeEffectFamily::DIAGONAL_SLIP:
+    return "diagonal_slip";
+  case glic::RealtimeEffectFamily::SCANLINE_WEAVE:
+    return "scanline_weave";
+  case glic::RealtimeEffectFamily::QUAD_MIRROR:
+    return "quad_mirror";
   case glic::RealtimeEffectFamily::COUNT:
     break;
   }
@@ -693,6 +722,169 @@ void randomizeLegacyCodec(Recipe &recipe, DeterministicRng &rng) {
   }
 }
 
+uint64_t presetValueSignature(const glic::CodecConfig &config) {
+  uint64_t signature = 0x6a09e667f3bcc909ULL;
+  const auto mix = [&](uint64_t value) {
+    signature = splitMix64(signature ^
+                           (value + 0x9e3779b97f4a7c15ULL));
+  };
+  mix(static_cast<uint64_t>(config.colorSpace));
+  mix(config.borderColorR);
+  mix(config.borderColorG);
+  mix(config.borderColorB);
+  for (const auto &channel : config.channels) {
+    mix(static_cast<uint64_t>(channel.minBlockSize));
+    mix(static_cast<uint64_t>(channel.maxBlockSize));
+    mix(static_cast<uint64_t>(std::lround(
+        static_cast<double>(channel.segmentationPrecision) * 1000.0)));
+    mix(static_cast<uint64_t>(static_cast<int64_t>(channel.predictionMethod)));
+    mix(static_cast<uint64_t>(channel.quantizationValue));
+    mix(static_cast<uint64_t>(channel.clampMethod));
+    mix(static_cast<uint64_t>(channel.transformType));
+    mix(static_cast<uint64_t>(static_cast<int64_t>(channel.waveletType)));
+    mix(static_cast<uint64_t>(std::lround(
+        static_cast<double>(channel.transformCompress) * 1000.0)));
+    mix(static_cast<uint64_t>(static_cast<int64_t>(channel.transformScale)));
+    mix(static_cast<uint64_t>(channel.encodingMethod));
+  }
+  return signature;
+}
+
+float signatureUnit(uint64_t signature, uint64_t salt) {
+  const uint64_t mixed = splitMix64(signature ^ salt);
+  return static_cast<float>((mixed >> 40u) & 0xffffffu) /
+         static_cast<float>(0xffffffu);
+}
+
+glic::RealtimeEffectConfig presetDerivedEffect(
+    const glic::CodecConfig &config, glic::RealtimeEffectFamily family) {
+  glic::RealtimeEffectConfig effect;
+  effect.family = family;
+  if (family == glic::RealtimeEffectFamily::LEGACY_BLOCK)
+    return effect;
+  const uint64_t signature = presetValueSignature(config);
+  effect.amount = 0.28f + signatureUnit(signature, 0x243f6a8885a308d3ULL) * 0.70f;
+  effect.scale = 0.02f + signatureUnit(signature, 0x13198a2e03707344ULL) * 0.96f;
+  effect.rate = 0.05f + signatureUnit(signature, 0xa4093822299f31d0ULL) * 0.95f;
+  return effect;
+}
+
+void varyPresetCodec(Recipe &recipe, DeterministicRng &rng, bool strong) {
+  const int mutationCount = strong ? rng.integer(5, 9) : rng.integer(2, 4);
+  const int quantDelta = strong ? 64 : 24;
+  const int compressDelta = strong ? 72 : 28;
+  const int scaleDelta = strong ? 32 : 12;
+  for (int mutation = 0; mutation < mutationCount; ++mutation) {
+    auto &channel =
+        recipe.config.channels[static_cast<size_t>(rng.integer(0, 2))];
+    switch (rng.integer(0, 10)) {
+    case 0:
+      recipe.strength +=
+          static_cast<float>(rng.integer(strong ? -400 : -180,
+                                         strong ? 400 : 180)) /
+          1000.0f;
+      break;
+    case 1:
+      channel.quantizationValue += rng.integer(-quantDelta, quantDelta);
+      break;
+    case 2:
+      channel.transformCompress +=
+          static_cast<float>(rng.integer(-compressDelta, compressDelta));
+      break;
+    case 3:
+      channel.transformScale += rng.integer(-scaleDelta, scaleDelta);
+      break;
+    case 4:
+      channel.segmentationPrecision +=
+          static_cast<float>(rng.integer(strong ? -32 : -12,
+                                         strong ? 32 : 12));
+      break;
+    case 5:
+      channel.minBlockSize = std::clamp(
+          channel.minBlockSize * (rng.chance(1, 2) ? 2 : 1) /
+              (rng.chance(1, 2) ? 2 : 1),
+          1, 256);
+      break;
+    case 6:
+      channel.maxBlockSize = std::clamp(
+          channel.maxBlockSize * (rng.chance(1, 2) ? 2 : 1) /
+              (rng.chance(1, 2) ? 2 : 1),
+          1, 256);
+      break;
+    case 7:
+      channel.predictionMethod =
+          static_cast<glic::PredictionMethod>(rng.integer(-3, 23));
+      break;
+    case 8:
+      channel.encodingMethod =
+          static_cast<glic::EncodingMethod>(rng.integer(0, 5));
+      break;
+    case 9: {
+      const size_t first = static_cast<size_t>(rng.integer(0, 2));
+      size_t second = static_cast<size_t>(rng.integer(0, 1));
+      if (second >= first)
+        ++second;
+      std::swap(recipe.config.channels[first], recipe.config.channels[second]);
+      break;
+    }
+    case 10:
+      recipe.config.colorSpace =
+          static_cast<glic::ColorSpace>(rng.integer(0, 15));
+      break;
+    }
+  }
+}
+
+Recipe generatePresetRecipe(uint64_t searchSeed, uint64_t candidateId,
+                            const PresetSeed &preset,
+                            glic::RealtimeEffectFamily family,
+                            bool variant, bool strongVariant) {
+  DeterministicRng rng(splitMix64(searchSeed ^
+                                  (candidateId * 0x94d049bb133111ebULL) ^
+                                  presetValueSignature(preset.config)));
+  Recipe recipe;
+  recipe.sourcePreset = preset.name;
+  recipe.sourcePresetMapping = preset.mappingFidelity;
+  const uint64_t signature = presetValueSignature(preset.config);
+  recipe.effect = presetDerivedEffect(preset.config, family);
+  recipe.strength =
+      0.60f + signatureUnit(signature, 0x082efa98ec4e6c89ULL) * 1.20f;
+  if (family == glic::RealtimeEffectFamily::LEGACY_BLOCK) {
+    recipe.config = preset.config;
+    if (variant)
+      varyPresetCodec(recipe, rng, strongVariant);
+  } else {
+    // The direct RGB mechanisms do not consume codec channels. Deriving their
+    // active controls from the upstream values retains real preset influence
+    // without creating distinct hashes from inert codec metadata.
+    makeNeutralCodec(recipe.config);
+    if (variant) {
+      const int mutations = strongVariant ? 5 : 2;
+      const int limit = strongVariant ? 300 : 140;
+      for (int mutation = 0; mutation < mutations; ++mutation) {
+        const float delta =
+            static_cast<float>(rng.integer(-limit, limit)) / 1000.0f;
+        switch (rng.integer(0, 3)) {
+        case 0:
+          recipe.effect.amount += delta;
+          break;
+        case 1:
+          recipe.effect.scale += delta;
+          break;
+        case 2:
+          recipe.effect.rate += delta;
+          break;
+        case 3:
+          recipe.strength += delta;
+          break;
+        }
+      }
+    }
+  }
+  normalizeRecipe(recipe);
+  return recipe;
+}
+
 Recipe generateRecipe(uint64_t searchSeed, uint64_t candidateId) {
   DeterministicRng rng(
       splitMix64(searchSeed ^ (candidateId * 0xd6e8feb86659fd93ULL)));
@@ -726,7 +918,7 @@ Recipe mutateRecipe(uint64_t searchSeed, uint64_t candidateId,
                                   0xe7037ed1a0b428dbULL));
   Recipe recipe = parent;
 
-  // Family transitions are scheduled by the deterministic nine-candidate
+  // Family transitions are scheduled by the deterministic full-family
   // sweep. Keeping mutation inside its requested family guarantees equal trial
   // counts while still evolving every family independently.
 
@@ -981,6 +1173,76 @@ std::string hexHash(uint64_t hash) {
   return output.str();
 }
 
+bool resolvePresetDirectory(const char *program, Options &options,
+                            std::string &error) {
+  std::vector<fs::path> candidates = {options.presetsDirectory};
+  std::error_code pathError;
+  const fs::path executable = fs::absolute(program, pathError);
+  if (!pathError) {
+    candidates.push_back(executable.parent_path().parent_path() / "presets");
+    candidates.push_back(executable.parent_path().parent_path() / "share" /
+                         "glic-metal" / "presets");
+    candidates.push_back(executable.parent_path() / "presets");
+  }
+  for (const auto &candidate : candidates) {
+    pathError.clear();
+    if (!fs::is_directory(candidate, pathError) || pathError)
+      continue;
+    options.presetsDirectory = fs::weakly_canonical(candidate, pathError);
+    if (pathError)
+      options.presetsDirectory = fs::absolute(candidate);
+    return true;
+  }
+  error = "upstream preset seed directory was not found: " +
+          options.presetsDirectory.string();
+  return false;
+}
+
+bool loadPresetSeeds(Options &options, std::vector<PresetSeed> &seeds,
+                     std::string &error) {
+  const auto names =
+      glic::PresetLoader::listPresets(options.presetsDirectory.string());
+  if (names.empty()) {
+    error = "upstream preset seed directory is empty: " +
+            options.presetsDirectory.string();
+    return false;
+  }
+  uint64_t fingerprint = 1469598103934665603ULL;
+  const auto addText = [&](std::string_view text) {
+    for (const unsigned char value : text) {
+      fingerprint ^= value;
+      fingerprint *= 1099511628211ULL;
+    }
+    fingerprint ^= 0xffu;
+    fingerprint *= 1099511628211ULL;
+  };
+  for (const auto &name : names) {
+    glic::CodecConfig config;
+    glic::PresetMappingInfo mapping;
+    if (!glic::PresetLoader::loadOriginalPresetByName(
+            options.presetsDirectory.string(), name, config, &mapping)) {
+      error = "failed to decode upstream preset seed: " + name;
+      return false;
+    }
+    Recipe normalized;
+    normalized.config = config;
+    normalized.effect.family = glic::RealtimeEffectFamily::LEGACY_BLOCK;
+    normalized.strength = 1.0f;
+    normalizeRecipe(normalized);
+    PresetSeed seed{.name = name,
+                    .config = normalized.config,
+                    .mappingFidelity =
+                        glic::presetMappingFidelityName(mapping.fidelity)};
+    addText(seed.name);
+    addText(seed.mappingFidelity);
+    addText(canonicalRecipeV1(normalized));
+    seeds.push_back(std::move(seed));
+  }
+  options.presetSeedCount = seeds.size();
+  options.presetSeedFingerprint = fingerprint;
+  return true;
+}
+
 void appendHashByte(uint64_t &hash, uint8_t value) {
     hash ^= value;
     hash *= 1099511628211ULL;
@@ -1010,7 +1272,10 @@ uint64_t hashPixels(const std::vector<glic::Color> &pixels) {
 std::string recipeJson(const Recipe &recipe) {
   std::ostringstream output;
   output << std::fixed << std::setprecision(3)
-         << "{\"color_space\":"
+         << "{\"source_preset\":\"" << jsonEscape(recipe.sourcePreset)
+         << "\",\"source_preset_mapping\":\""
+         << jsonEscape(recipe.sourcePresetMapping)
+         << "\",\"color_space\":"
          << static_cast<int>(recipe.config.colorSpace)
          << ",\"border_rgb\":["
          << static_cast<int>(recipe.config.borderColorR) << ','
@@ -1399,7 +1664,7 @@ uint64_t configurationFingerprint(const Options &options,
       addByte(value);
     addByte(0xffu);
   };
-  addText("glic-search-config-v6");
+  addText("glic-search-config-v7");
   addText(backend);
   addText("metal");
   addText(std::to_string(glic::kRealtimeCertificationWidth));
@@ -1411,6 +1676,8 @@ uint64_t configurationFingerprint(const Options &options,
   addText("synchronous-buffer-roundtrip-v1");
   addText(std::to_string(options.seed));
   addText(std::to_string(options.renderScale));
+  addText(std::to_string(options.presetSeedCount));
+  addText(hexHash(options.presetSeedFingerprint));
   addText(std::to_string(width));
   addText(std::to_string(height));
   for (const uint32_t seed : kEvaluationSeeds)
@@ -1432,13 +1699,18 @@ std::string runConfigurationJson(const Options &options,
                                  int height, uint64_t fingerprint) {
   std::ostringstream output;
   output << std::fixed << std::setprecision(8)
-         << "{\n  \"schema\": \"glic-realtime-search-run-config-v6\",\n"
-         << "  \"algorithm\": \"map-elites-family-stratified-v6\",\n"
+         << "{\n  \"schema\": \"glic-realtime-search-run-config-v7\",\n"
+         << "  \"algorithm\": \"map-elites-upstream-seeded-v7\",\n"
          << "  \"recipe_schema\": \"glic-realtime-recipe-v2\",\n"
          << "  \"fingerprint\": \"" << hexHash(fingerprint) << "\",\n"
          << "  \"backend\": \"" << jsonEscape(backend) << "\",\n"
          << "  \"seed\": " << options.seed << ",\n"
          << "  \"render_scale\": " << options.renderScale << ",\n"
+         << "  \"preset_seed_directory\": \""
+         << jsonEscape(options.presetsDirectory.string()) << "\",\n"
+         << "  \"preset_seed_count\": " << options.presetSeedCount << ",\n"
+         << "  \"preset_seed_fingerprint\": \""
+         << hexHash(options.presetSeedFingerprint) << "\",\n"
          << "  \"width\": " << width << ",\n"
          << "  \"height\": " << height << ",\n"
          << "  \"realtime_gate\": {\"backend\":\"metal\",\"width\":"
@@ -1460,7 +1732,9 @@ bool sparseEffectFamily(glic::RealtimeEffectFamily family) {
   return family == glic::RealtimeEffectFamily::LINE_TEAR ||
          family == glic::RealtimeEffectFamily::CHANNEL_SHEAR ||
          family == glic::RealtimeEffectFamily::ANALOG_SYNC ||
-         family == glic::RealtimeEffectFamily::EDGE_ECHO;
+         family == glic::RealtimeEffectFamily::EDGE_ECHO ||
+         family == glic::RealtimeEffectFamily::VERTICAL_TEAR ||
+         family == glic::RealtimeEffectFamily::DIAGONAL_SLIP;
 }
 
 bool denseTonalEffectFamily(glic::RealtimeEffectFamily family) {
@@ -1774,7 +2048,7 @@ std::string candidateJson(uint64_t candidateId, uint64_t hash,
                           std::string_view parentHash) {
   std::ostringstream output;
   output << std::fixed << std::setprecision(8)
-         << "{\"schema\":\"glic-realtime-search-candidate-v2\""
+         << "{\"schema\":\"glic-realtime-search-candidate-v3\""
          << ",\"timestamp\":\"" << utcTimestamp() << "\""
          << ",\"candidate_id\":" << candidateId
          << ",\"recipe_hash\":\"" << hexHash(hash) << "\""
@@ -1783,6 +2057,10 @@ std::string candidateJson(uint64_t candidateId, uint64_t hash,
          << "\""
          << ",\"generation\":\"" << jsonEscape(generation) << "\""
          << ",\"parent_hash\":\"" << jsonEscape(parentHash) << "\""
+         << ",\"source_preset\":\""
+         << jsonEscape(recipe.sourcePreset) << "\""
+         << ",\"source_preset_mapping\":\""
+         << jsonEscape(recipe.sourcePresetMapping) << "\""
          << ",\"canonical\":\"" << jsonEscape(canonical) << "\""
          << ",\"accepted\":" << (accepted ? "true" : "false")
          << ",\"admitted\":" << (admitted ? "true" : "false")
@@ -2061,6 +2339,9 @@ bool replayCandidateLog(const fs::path &path, ResumeState &state,
 
     const auto cell = extractString(line, "cell");
     const auto quality = extractNumber(line, "quality");
+    const auto sourcePreset = extractString(line, "source_preset");
+    const auto sourcePresetMapping =
+        extractString(line, "source_preset_mapping");
     Recipe recipe;
     Metrics metrics;
     glic::RealtimeCertificationResult realtimeGate;
@@ -2071,6 +2352,8 @@ bool replayCandidateLog(const fs::path &path, ResumeState &state,
               std::to_string(lineNumber);
       return false;
     }
+    recipe.sourcePreset = sourcePreset.value_or("");
+    recipe.sourcePresetMapping = sourcePresetMapping.value_or("");
     ++state.counters.accepted;
     Elite elite;
     elite.candidateId = candidateId;
@@ -2101,15 +2384,18 @@ std::string archiveJson(const Options &options, std::string_view backend,
                         std::string_view stopReason) {
   std::ostringstream output;
   output << std::fixed << std::setprecision(8)
-         << "{\n  \"schema\": \"glic-realtime-search-archive-v2\",\n"
+         << "{\n  \"schema\": \"glic-realtime-search-archive-v3\",\n"
          << "  \"updated_at\": \"" << utcTimestamp() << "\",\n"
          << "  \"running\": " << (running ? "true" : "false") << ",\n"
          << "  \"stop_reason\": \"" << jsonEscape(stopReason) << "\",\n"
          << "  \"seed\": " << options.seed << ",\n"
-         << "  \"algorithm\": \"map-elites-family-stratified-v6\",\n"
+         << "  \"algorithm\": \"map-elites-upstream-seeded-v7\",\n"
          << "  \"recipe_schema\": \"glic-realtime-recipe-v2\",\n"
          << "  \"backend\": \"" << jsonEscape(backend) << "\",\n"
          << "  \"render_scale\": " << options.renderScale << ",\n"
+         << "  \"preset_seed_count\": " << options.presetSeedCount << ",\n"
+         << "  \"preset_seed_fingerprint\": \""
+         << hexHash(options.presetSeedFingerprint) << "\",\n"
          << "  \"width\": " << width << ",\n"
          << "  \"height\": " << height << ",\n"
          << "  \"realtime_gate\": {\"backend\":\"metal\",\"width\":"
@@ -2282,6 +2568,12 @@ int main(int argc, char **argv) {
   }
 
   std::string error;
+  std::vector<PresetSeed> presetSeeds;
+  if (!resolvePresetDirectory(argv[0], options, error) ||
+      !loadPresetSeeds(options, presetSeeds, error)) {
+    std::cerr << "Failed to load upstream preset seeds: " << error << '\n';
+    return 3;
+  }
   if (!recoverPartialLastLine(candidateLog, error)) {
     std::cerr << error << '\n';
     return 3;
@@ -2379,6 +2671,7 @@ int main(int argc, char **argv) {
             << 'x' << glic::kRealtimeCertificationHeight << '@'
             << glic::kRealtimeCertificationTargetFps << "fps"
             << " inputs=" << inputs.size()
+            << " upstream_preset_seeds=" << presetSeeds.size()
             << " resume_at=" << state.nextCandidateId
             << " duration_seconds=" << options.durationSeconds << '\n';
 
@@ -2406,15 +2699,16 @@ int main(int argc, char **argv) {
 
     const uint64_t candidateId = state.nextCandidateId++;
     ++state.counters.attempted;
-    // Search in nine-candidate family sweeps. One sweep in three is a global
-    // restart, so every restart epoch visits all nine families exactly once;
-    // the other two sweeps mutate archive elites.
+    // Search in complete family sweeps. Three of every five sweeps originate
+    // from the pinned upstream GLIC preset values, one mutates archive elites,
+    // and one is unconstrained random exploration.
     constexpr uint64_t familyCount =
         static_cast<uint64_t>(glic::RealtimeEffectFamily::COUNT);
     const auto desiredFamily = static_cast<glic::RealtimeEffectFamily>(
         candidateId % familyCount);
-    const bool useMutation =
-        candidateId >= 128 && ((candidateId / familyCount) % 3) != 0;
+    const uint64_t sweep = candidateId / familyCount;
+    const uint64_t lane = sweep % 5u;
+    const bool useMutation = lane == 2u;
     const Elite *parent =
         useMutation
             ? state.archive.selectParentForFamily(
@@ -2422,12 +2716,29 @@ int main(int argc, char **argv) {
                   splitMix64(options.seed ^ candidateId ^
                              0x243f6a8885a308d3ULL))
             : nullptr;
-    Recipe recipe =
-        parent != nullptr
-            ? mutateRecipe(options.seed, candidateId, parent->recipe,
-                           desiredFamily)
-            : generateRecipe(options.seed, candidateId);
-    const std::string generation = parent != nullptr ? "mutation" : "random";
+    const uint64_t presetCycle = candidateId / presetSeeds.size();
+    const size_t presetIndex = static_cast<size_t>(
+        (candidateId + presetCycle * 37u) % presetSeeds.size());
+    Recipe recipe;
+    std::string generation;
+    if (parent != nullptr) {
+      recipe = mutateRecipe(options.seed, candidateId, parent->recipe,
+                            desiredFamily);
+      generation = "archive_mutation";
+    } else if (lane == 4u) {
+      recipe = generateRecipe(options.seed, candidateId);
+      generation = "random";
+    } else {
+      const bool variant = lane != 0u;
+      const bool strongVariant = lane == 3u;
+      recipe = generatePresetRecipe(options.seed, candidateId,
+                                    presetSeeds[presetIndex], desiredFamily,
+                                    variant, strongVariant);
+      generation = !variant ? "upstream_preset_base"
+                            : (strongVariant
+                                   ? "upstream_preset_variant_strong"
+                                   : "upstream_preset_variant_light");
+    }
     const std::string parentHash =
         parent != nullptr ? hexHash(parent->recipeHash) : std::string{};
     const std::string canonical = canonicalRecipe(recipe);

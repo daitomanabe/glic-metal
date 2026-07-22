@@ -110,6 +110,11 @@ bool runEffectFamilies(glic::RealtimeBackend &backend,
       glic::RealtimeEffectFamily::BITPLANE_DITHER,
       glic::RealtimeEffectFamily::WAVE_WARP,
       glic::RealtimeEffectFamily::POSTER_SOLAR,
+      glic::RealtimeEffectFamily::TILE_SHUFFLE,
+      glic::RealtimeEffectFamily::VERTICAL_TEAR,
+      glic::RealtimeEffectFamily::DIAGONAL_SLIP,
+      glic::RealtimeEffectFamily::SCANLINE_WEAVE,
+      glic::RealtimeEffectFamily::QUAD_MIRROR,
   };
 
   glic::CodecConfig config;
@@ -194,6 +199,11 @@ bool runEffectFamilyParity(const std::vector<glic::Color> &input, int width,
       glic::RealtimeEffectFamily::BITPLANE_DITHER,
       glic::RealtimeEffectFamily::WAVE_WARP,
       glic::RealtimeEffectFamily::POSTER_SOLAR,
+      glic::RealtimeEffectFamily::TILE_SHUFFLE,
+      glic::RealtimeEffectFamily::VERTICAL_TEAR,
+      glic::RealtimeEffectFamily::DIAGONAL_SLIP,
+      glic::RealtimeEffectFamily::SCANLINE_WEAVE,
+      glic::RealtimeEffectFamily::QUAD_MIRROR,
   };
   glic::CodecConfig config;
   // A grayscale preset would expose any accidental colour-space conversion in

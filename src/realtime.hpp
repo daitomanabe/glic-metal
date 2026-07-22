@@ -21,7 +21,12 @@ enum class RealtimeEffectFamily : uint32_t {
   BITPLANE_DITHER = 6,
   WAVE_WARP = 7,
   POSTER_SOLAR = 8,
-  COUNT = 9
+  TILE_SHUFFLE = 9,
+  VERTICAL_TEAR = 10,
+  DIAGONAL_SLIP = 11,
+  SCANLINE_WEAVE = 12,
+  QUAD_MIRROR = 13,
+  COUNT = 14
 };
 
 struct RealtimeEffectConfig {

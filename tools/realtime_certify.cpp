@@ -177,6 +177,16 @@ const char *effectFamilyName(glic::RealtimeEffectFamily family) noexcept {
     return "wave_warp";
   case glic::RealtimeEffectFamily::POSTER_SOLAR:
     return "poster_solar";
+  case glic::RealtimeEffectFamily::TILE_SHUFFLE:
+    return "tile_shuffle";
+  case glic::RealtimeEffectFamily::VERTICAL_TEAR:
+    return "vertical_tear";
+  case glic::RealtimeEffectFamily::DIAGONAL_SLIP:
+    return "diagonal_slip";
+  case glic::RealtimeEffectFamily::SCANLINE_WEAVE:
+    return "scanline_weave";
+  case glic::RealtimeEffectFamily::QUAD_MIRROR:
+    return "quad_mirror";
   case glic::RealtimeEffectFamily::COUNT:
     break;
   }
