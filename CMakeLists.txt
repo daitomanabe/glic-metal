@@ -312,6 +312,10 @@ if(BUILD_TESTING)
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/scripts/generate_codec_glitch_candidate_bank.py"
                          --selftest)
+        add_test(NAME glic_mixed_glitch_selection
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${PROJECT_SOURCE_DIR}/scripts/generate_mixed_glitch_selection.py"
+                         --selftest)
         add_test(NAME glic_original_metal_reference_analysis
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_compare_original_metal_reference.py")

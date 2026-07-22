@@ -180,6 +180,16 @@ python3 scripts/generate_codec_glitch_candidate_bank.py input.mov \
   --limit 50 --overwrite
 ```
 
+Codecだけへ偏らない最終review用bankは、非codecの空間Metal family 14、原作スタイル
+18、Codec Glitch 18を合わせた50 patternとして生成できます。各categoryへquotaを設け、
+全動画を同じdry入力、解像度、frame数で再解析します。
+
+```bash
+python3 scripts/generate_mixed_glitch_selection.py input.mov \
+  --output-dir test-videos/glitch-selection-50 \
+  --codec-dir test-videos/codec-glitch --overwrite
+```
+
 ```bash
 python3 scripts/evaluate_codec_glitch_videos.py \
   --control control.mp4 \

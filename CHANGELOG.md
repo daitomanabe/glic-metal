@@ -27,6 +27,9 @@ semantic versioning for tagged releases.
 - A reproducible 50-entry Codec Glitch candidate bank generator covering all
   twelve effects, with parameter/seed variation, strict ranking, and a
   checkbox-based HTML review page.
+- A balanced mixed 50-pattern selection and review generator: fourteen
+  non-codec spatial Metal families, eighteen original-style presets, and
+  eighteen stateful Codec Glitch variants ranked with one dry/wet fingerprint.
 - Last-good-frame fallback and forced-IDR watchdog recovery for unexpected
   codec failure, independently of intentional P-frame/IDR holds.
 - Five realtime Metal/CPU glitch families: tile shuffle, vertical tear,
