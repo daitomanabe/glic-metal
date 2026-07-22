@@ -10,11 +10,52 @@ The public surface is:
 - `include/glic_metal/glic_metal.h` — portable C API;
 - `include/glic_metal/glic_metal_metal.h` — typed Objective-C Metal helpers;
 - `include/glic_metal/codec_glitch.h` — macOS VideoToolbox codec-glitch C API;
+- `include/glic_metal/glitch_presets.h` — adopted cross-lane preset bank;
 - `GlicMetal::GlicMetal` — CMake target;
 - `glic_realtime.metallib` — Metal kernels to copy into the host bundle;
 - `presets/` — runtime preset data.
+- `selected-presets.json` — portable data copy of the adopted 19 presets.
 
 Internal headers under `src/` are not part of the stable API.
+
+## Use the adopted preset bank
+
+The shipped bank contains the exact 19 presets selected for production: 14
+original-style presets, four allocation-free spatial Metal presets, and one
+hardware H.264 codec preset. Stable names such as `original__vv01`,
+`spatial__poster_solar`, and `codec__bitrate_meltdown` can be stored by a host
+application. The public API preserves the order in `selected-presets.json`.
+
+```c
+#include <glic_metal/glitch_presets.h>
+
+for (uint32_t i = 0; i < glic_glitch_preset_count(); ++i) {
+  glic_glitch_preset_descriptor preset;
+  glic_glitch_preset_descriptor_init(&preset);
+  if (glic_glitch_preset_get(i, &preset) == GLIC_GLITCH_PRESET_OK) {
+    add_menu_item(preset.name, preset.category);
+  }
+}
+
+glic_metal_config image_config;
+glic_metal_config_init(&image_config);
+image_config.width = 960;
+image_config.height = 540;
+image_config.preset_directory = preset_directory;
+image_config.metal_library_path = metallib_path;
+glic_glitch_preset_apply_metal("spatial__poster_solar", &image_config);
+
+glic_codec_glitch_controls codec_controls;
+glic_glitch_preset_apply_codec("codec__bitrate_meltdown", &codec_controls);
+```
+
+`glic_glitch_preset_apply_metal()` leaves host-owned resolution, resource
+paths, Metal device, and library path untouched. Original presets select
+`GLIC_METAL_MODE_ORIGINAL`; spatial presets select
+`GLIC_METAL_MODE_COMPAT_REALTIME` and apply their exact family, amount, scale,
+rate, and seed. `glic_glitch_preset_apply_codec()` initializes the controls and
+applies the exact codec effect, amount, rate, feedback, and seed. Category
+mismatches fail closed.
 
 ## Choose a processing path
 
@@ -57,9 +98,10 @@ glic_metal_copy_resources(
   DESTINATION "$<TARGET_BUNDLE_CONTENT_DIR:MyApp>/Resources")
 ```
 
-It copies `${GLIC_METAL_METALLIB}` as `glic_realtime.metallib` and copies
-`${GLIC_METAL_PRESETS_DIR}` into a `Presets` resource folder. The same function
-is available from the installed CMake package.
+It copies `${GLIC_METAL_METALLIB}` as `glic_realtime.metallib`, copies
+`${GLIC_METAL_PRESETS_DIR}` into a `Presets` resource folder, and copies
+`${GLIC_METAL_SELECTED_PRESETS_JSON}` as `selected-presets.json`. The same
+function is available from the installed CMake package.
 
 ## Use an installed CMake package
 

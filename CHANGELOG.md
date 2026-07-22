@@ -8,6 +8,12 @@ semantic versioning for tagged releases.
 
 ### Added
 
+- An adopted 19-entry production preset bank from `selected-presets.json`,
+  with a versioned allocation-free C API for ordered enumeration, lookup, and
+  exact Original, Spatial Metal, or Codec control application in host apps.
+- Distribution of the selected preset JSON through installs, the macOS SDK
+  resource bundle, the CMake resource-copy helper, and the webcam app bundle.
+
 - A macOS-only Codec Glitch lane using the VideoToolbox hardware H.264
   encoder/decoder, Metal-compatible pixel buffers, and a Metal-backed
   post/composite path.
@@ -52,6 +58,9 @@ semantic versioning for tagged releases.
   consumer tests.
 
 ### Changed
+
+- The webcam preview now exposes only the adopted presets: fourteen Original
+  Visual presets, four Spatial Metal presets, and one Codec Glitch preset.
 
 - `slice_dropout` and `slice_transplant` now use safe Metal-backed post-decode
   horizontal-row history composites instead of removing or transplanting

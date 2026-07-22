@@ -60,6 +60,9 @@ run cmake -E copy_directory \
   "${install_dir}/share/glic-metal/presets" \
   "${resource_bundle}/Contents/Resources/Presets"
 run cmake -E copy_if_different \
+  "${install_dir}/share/glic-metal/selected-presets.json" \
+  "${resource_bundle}/Contents/Resources/selected-presets.json"
+run cmake -E copy_if_different \
   "${install_dir}/lib/glic/glic_realtime.metallib" \
   "${resource_bundle}/Contents/Resources/glic_realtime.metallib"
 run cmake -E copy_if_different "$repo_root/LICENSE" \

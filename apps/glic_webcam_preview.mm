@@ -1,7 +1,9 @@
 #include "codec_glitch.hpp"
+#include "realtime.hpp"
 #include "original_realtime.hpp"
 #include "original_realtime_metal.hpp"
 #include "preset_loader.hpp"
+#include <glic_metal/glitch_presets.h>
 
 #import <AVFoundation/AVFoundation.h>
 #import <Accelerate/Accelerate.h>
@@ -49,7 +51,8 @@ enum class QualityMode : int {
 
 enum class ProcessingLane : int {
   OriginalVisual = 0,
-  CodecGlitch = 1,
+  SpatialMetal = 1,
+  CodecGlitch = 2,
 };
 
 enum class FrameSlotState {
@@ -70,49 +73,58 @@ struct FrameSlot {
 
 struct CodecPresetChoice {
   glic::CodecGlitchEffect effect;
-  const char *title;
+  std::string name;
+  std::string title;
   glic::CodecGlitchControls controls;
 };
 
 std::vector<CodecPresetChoice> makeCodecPresetChoices() {
-  const auto make = [](glic::CodecGlitchEffect effect, const char *title,
-                       float amount, float rate, float feedback) {
+  std::vector<CodecPresetChoice> choices;
+  for (uint32_t index = 0; index < glic_glitch_preset_count(); ++index) {
+    glic_glitch_preset_descriptor descriptor;
+    glic_glitch_preset_descriptor_init(&descriptor);
+    if (glic_glitch_preset_get(index, &descriptor) !=
+            GLIC_GLITCH_PRESET_OK ||
+        descriptor.category != GLIC_GLITCH_PRESET_CODEC)
+      continue;
     glic::CodecGlitchControls controls;
-    controls.effect = effect;
-    controls.amount = amount;
-    controls.rate = rate;
-    controls.feedback = feedback;
-    return CodecPresetChoice{effect, title, controls};
-  };
+    controls.effect =
+        static_cast<glic::CodecGlitchEffect>(descriptor.codec_effect);
+    controls.amount = descriptor.amount;
+    controls.rate = descriptor.rate;
+    controls.feedback = descriptor.feedback;
+    controls.seed = descriptor.seed;
+    choices.push_back({controls.effect, descriptor.name, descriptor.name,
+                       controls});
+  }
+  return choices;
+}
 
-  std::vector<CodecPresetChoice> choices{
-      make(glic::CodecGlitchEffect::QpPump, "QP Pump", 0.72f, 0.42f, 0.35f),
-      make(glic::CodecGlitchEffect::BitrateCrush, "Bitrate Crush", 0.70f, 0.32f,
-           0.45f),
-      make(glic::CodecGlitchEffect::SliceDropout, "Slice Dropout", 0.48f, 0.35f,
-           0.45f),
-      make(glic::CodecGlitchEffect::SliceTransplant, "Slice Transplant", 0.58f,
-           0.30f, 0.70f),
-      make(glic::CodecGlitchEffect::PFrameLoss, "P-Frame Loss", 0.40f, 0.25f,
-           0.55f),
-      make(glic::CodecGlitchEffect::IdrStarvation, "IDR Starvation", 0.62f,
-           0.18f, 0.65f),
-      make(glic::CodecGlitchEffect::PayloadXor, "Payload XOR", 0.18f, 0.28f,
-           0.45f),
-      make(glic::CodecGlitchEffect::ReferenceTimewarp, "Reference Timewarp",
-           0.58f, 0.26f, 0.72f),
-      make(glic::CodecGlitchEffect::CodecFeedback, "Codec Feedback", 0.60f,
-           0.30f, 0.78f),
-      make(glic::CodecGlitchEffect::GenerationCascade, "Generation Cascade",
-           0.55f, 0.22f, 0.60f),
-      make(glic::CodecGlitchEffect::ResolutionHop, "Resolution Hop", 0.75f,
-           0.24f, 0.50f),
-      make(glic::CodecGlitchEffect::ChromaCodecEcho, "Chroma Codec Echo", 0.68f,
-           0.28f, 0.72f),
-  };
-  choices[1].controls.crushedBitRate = 100000;
-  choices[9].controls.cascadeGenerations = 3;
-  choices[10].controls.reducedResolutionScale = 0.25f;
+struct SpatialPresetChoice {
+  std::string name;
+  glic::RealtimePrepareOptions options;
+};
+
+std::vector<SpatialPresetChoice> makeSpatialPresetChoices() {
+  std::vector<SpatialPresetChoice> choices;
+  for (uint32_t index = 0; index < glic_glitch_preset_count(); ++index) {
+    glic_glitch_preset_descriptor descriptor;
+    glic_glitch_preset_descriptor_init(&descriptor);
+    if (glic_glitch_preset_get(index, &descriptor) !=
+            GLIC_GLITCH_PRESET_OK ||
+        descriptor.category != GLIC_GLITCH_PRESET_SPATIAL)
+      continue;
+    glic::RealtimePrepareOptions options;
+    options.width = kProcessingWidth;
+    options.height = kProcessingHeight;
+    options.seed = static_cast<uint32_t>(descriptor.seed);
+    options.effect.family =
+        static_cast<glic::RealtimeEffectFamily>(descriptor.spatial_effect);
+    options.effect.amount = descriptor.amount;
+    options.effect.scale = descriptor.scale;
+    options.effect.rate = descriptor.rate;
+    choices.push_back({descriptor.name, options});
+  }
   return choices;
 }
 
@@ -188,6 +200,26 @@ loadSupportedPresets(const std::filesystem::path &directory) {
   return choices;
 }
 
+std::vector<PresetChoice>
+loadSelectedOriginalPresets(const std::filesystem::path &directory) {
+  std::vector<PresetChoice> choices;
+  for (uint32_t index = 0; index < glic_glitch_preset_count(); ++index) {
+    glic_glitch_preset_descriptor descriptor;
+    glic_glitch_preset_descriptor_init(&descriptor);
+    if (glic_glitch_preset_get(index, &descriptor) !=
+            GLIC_GLITCH_PRESET_OK ||
+        descriptor.category != GLIC_GLITCH_PRESET_ORIGINAL)
+      continue;
+    glic::OriginalPresetConfig config;
+    if (!glic::PresetLoader::loadOriginalPresetByName(
+            directory.string(), descriptor.original_preset_name, config) ||
+        !glic::evaluateOriginalRealtimeSupport(config).supported)
+      continue;
+    choices.push_back({descriptor.original_preset_name, config});
+  }
+  return choices;
+}
+
 int findPresetIndex(const std::vector<PresetChoice> &choices,
                     std::string_view name) {
   const auto match =
@@ -208,6 +240,12 @@ int runSelfTest() {
   if (choices.size() != 37u) {
     std::fprintf(stderr, "FAIL expected 37 supported presets, got %zu\n",
                  choices.size());
+    return 3;
+  }
+  const auto selectedOriginalPresets = loadSelectedOriginalPresets(*directory);
+  if (selectedOriginalPresets.size() != 14u) {
+    std::fprintf(stderr, "FAIL expected 14 selected original presets, got %zu\n",
+                 selectedOriginalPresets.size());
     return 3;
   }
 
@@ -278,11 +316,38 @@ int runSelfTest() {
               secondFastStats.totalMilliseconds);
 
   const auto codecPresets = makeCodecPresetChoices();
-  if (codecPresets.size() !=
-      static_cast<std::size_t>(glic::CodecGlitchEffect::Count)) {
-    std::fprintf(stderr, "FAIL expected 12 codec presets, got %zu\n",
+  const auto spatialPresets = makeSpatialPresetChoices();
+  if (codecPresets.size() != 1u || spatialPresets.size() != 4u) {
+    std::fprintf(stderr,
+                 "FAIL expected selected 4 spatial/1 codec presets, got "
+                 "%zu/%zu\n",
+                 spatialPresets.size(),
                  codecPresets.size());
     return 8;
+  }
+  auto spatialLane =
+      glic::createRealtimeBackend(glic::RealtimeBackendKind::METAL, error);
+  if (!spatialLane) {
+    std::fprintf(stderr, "FAIL selected spatial Metal initialization: %s\n",
+                 error.c_str());
+    return 8;
+  }
+  for (const auto &preset : spatialPresets) {
+    const auto start = std::chrono::steady_clock::now();
+    if (!spatialLane->prepare(preset.options, error) ||
+        !spatialLane->process(input, output, 0, error) ||
+        !spatialLane->isHardwareAccelerated() || output == input) {
+      std::fprintf(stderr, "FAIL selected spatial preset %s: %s\n",
+                   preset.name.c_str(), error.c_str());
+      return 8;
+    }
+    const double elapsed =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start)
+            .count();
+    std::printf("spatial_preset=%s prepare_and_frame_ms=%.3f gpu_ms=%.3f\n",
+                preset.name.c_str(), elapsed,
+                spatialLane->lastFrameStats().gpuMilliseconds);
   }
   std::unordered_set<std::string> codecNames;
   for (const auto &preset : codecPresets) {
@@ -362,7 +427,7 @@ int runSelfTest() {
   uint64_t codecFrameIndex = 0;
   for (const auto &preset : codecPresets) {
     if (!codecLane->reset(error)) {
-      std::fprintf(stderr, "FAIL codec reset %s: %s\n", preset.title,
+      std::fprintf(stderr, "FAIL codec reset %s: %s\n", preset.title.c_str(),
                    error.c_str());
       CFRelease(codecInput);
       return 12;
@@ -374,14 +439,14 @@ int runSelfTest() {
       const CMTime timestamp =
           CMTimeMake(static_cast<int64_t>(codecFrameIndex), 30);
       if (!codecLane->submit(codecInput, codecFrameIndex++, timestamp, error)) {
-        std::fprintf(stderr, "FAIL codec submit %s: %s\n", preset.title,
+        std::fprintf(stderr, "FAIL codec submit %s: %s\n", preset.title.c_str(),
                      error.c_str());
         CFRelease(codecInput);
         return 13;
       }
     }
     if (!codecLane->flush(std::chrono::seconds(5), error)) {
-      std::fprintf(stderr, "FAIL codec flush %s: %s\n", preset.title,
+      std::fprintf(stderr, "FAIL codec flush %s: %s\n", preset.title.c_str(),
                    error.c_str());
       CFRelease(codecInput);
       return 14;
@@ -389,7 +454,8 @@ int runSelfTest() {
     const uint64_t emitted = codecOutputCount.load() - outputBefore;
     if (emitted == 0 || codecOutputInvalid.load(std::memory_order_acquire)) {
       std::fprintf(stderr, "FAIL codec output %s emitted=%llu valid=%s\n",
-                   preset.title, static_cast<unsigned long long>(emitted),
+                   preset.title.c_str(),
+                   static_cast<unsigned long long>(emitted),
                    codecOutputInvalid.load() ? "false" : "true");
       CFRelease(codecInput);
       return 15;
@@ -411,9 +477,11 @@ int runSelfTest() {
   }
   CFRelease(codecInput);
   std::printf(
-      "PASS webcam preview lanes original_presets=%zu codec_presets=%zu "
+      "PASS webcam preview lanes original_presets=%zu spatial_presets=%zu "
+      "codec_presets=%zu "
       "resolution=%dx%d codec_hw=true\n",
-      choices.size(), codecPresets.size(), kProcessingWidth, kProcessingHeight);
+      selectedOriginalPresets.size(), spatialPresets.size(),
+      codecPresets.size(), kProcessingWidth, kProcessingHeight);
   return 0;
 }
 
@@ -489,15 +557,18 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
 
   std::filesystem::path _presetDirectory;
   std::vector<PresetChoice> _presets;
+  std::vector<SpatialPresetChoice> _spatialPresets;
   std::vector<CodecPresetChoice> _codecPresets;
   std::unordered_set<std::string> _fastMatchAllowlist;
   std::unique_ptr<glic::OriginalRealtimeMetalLane> _lane;
+  std::unique_ptr<glic::RealtimeBackend> _spatialLane;
   std::unique_ptr<glic::CodecGlitchEngine> _codecLane;
   std::array<FrameSlot, 3> _frameSlots;
   std::mutex _frameSlotMutex;
   uint64_t _captureSequence;
   std::atomic<int> _pendingLane;
   std::atomic<int> _pendingPresetIndex;
+  std::atomic<int> _pendingSpatialPresetIndex;
   std::atomic<int> _pendingCodecPresetIndex;
   std::atomic<int> _pendingQualityMode;
   std::atomic<float> _pendingCodecAmount;
@@ -511,6 +582,7 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   ProcessingLane _activeLane;
   uint64_t _activeGeneration;
   int _activePresetIndex;
+  int _activeSpatialPresetIndex;
   int _activeCodecPresetIndex;
   QualityMode _activeQualityMode;
   bool _activeFastMatch;
@@ -538,8 +610,10 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
     _processingQueue = dispatch_queue_create("ws.daito.glic.webcam.processing",
                                              DISPATCH_QUEUE_SERIAL);
     _codecPresets = makeCodecPresetChoices();
+    _spatialPresets = makeSpatialPresetChoices();
     _pendingLane.store(static_cast<int>(ProcessingLane::OriginalVisual));
     _pendingPresetIndex.store(-1);
+    _pendingSpatialPresetIndex.store(0);
     _pendingCodecPresetIndex.store(0);
     _pendingQualityMode.store(static_cast<int>(QualityMode::Auto20));
     _pendingCodecAmount.store(_codecPresets.front().controls.amount);
@@ -553,6 +627,7 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
     _activeLane = ProcessingLane::OriginalVisual;
     _activeGeneration = 0;
     _activePresetIndex = -1;
+    _activeSpatialPresetIndex = -1;
     _activeCodecPresetIndex = -1;
     _activeQualityMode = QualityMode::Auto20;
     _activeFastMatch = false;
@@ -621,6 +696,7 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
         self->_codecLane.reset();
       }
       self->_lane.reset();
+      self->_spatialLane.reset();
       std::lock_guard lock(self->_frameSlotMutex);
       for (auto &slot : self->_frameSlots) {
         if (slot.pixelBuffer != nullptr) {
@@ -676,12 +752,13 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
 
   _lanePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
   _lanePopup.translatesAutoresizingMaskIntoConstraints = NO;
-  [_lanePopup addItemsWithTitles:@[ @"Original Visual", @"Codec Glitch" ]];
+  [_lanePopup addItemsWithTitles:
+                  @[ @"Original Visual", @"Spatial Metal", @"Codec Glitch" ]];
   [_lanePopup selectItemAtIndex:0];
   _lanePopup.target = self;
   _lanePopup.action = @selector(selectLane:);
   _lanePopup.toolTip =
-      @"Choose the original GLIC image lane or H.264 codec glitch lane";
+      @"Choose an adopted Original, Spatial Metal, or H.264 Codec preset";
 
   _presetPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
   _presetPopup.translatesAutoresizingMaskIntoConstraints = NO;
@@ -837,9 +914,10 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
                                              keyEquivalent:@""];
   [mainMenu addItem:laneItem];
   _laneMenu = [[NSMenu alloc] initWithTitle:@"Lane"];
-  for (NSInteger index = 0; index < 2; ++index) {
+  for (NSInteger index = 0; index < 3; ++index) {
     NSMenuItem *item = [[NSMenuItem alloc]
-        initWithTitle:@[ @"Original Visual", @"Codec Glitch" ][index]
+        initWithTitle:
+            @[ @"Original Visual", @"Spatial Metal", @"Codec Glitch" ][index]
                action:@selector(selectLane:)
         keyEquivalent:@""];
     item.target = self;
@@ -932,10 +1010,32 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
     _qualityPopup.hidden = NO;
     _codecControlsStack.hidden = YES;
     _qualityRootMenuItem.enabled = YES;
+  } else if (lane == ProcessingLane::SpatialMetal) {
+    for (std::size_t index = 0; index < _spatialPresets.size(); ++index) {
+      NSString *title = [NSString
+          stringWithUTF8String:_spatialPresets[index].name.c_str()];
+      [_presetPopup addItemWithTitle:title];
+      NSMenuItem *item =
+          [[NSMenuItem alloc] initWithTitle:title
+                                     action:@selector(selectPreset:)
+                              keyEquivalent:@""];
+      item.target = self;
+      item.tag = static_cast<NSInteger>(index);
+      [_presetMenu addItem:item];
+    }
+    int index = _pendingSpatialPresetIndex.load(std::memory_order_acquire);
+    if (index < 0 ||
+        static_cast<std::size_t>(index) >= _spatialPresets.size())
+      index = 0;
+    [_presetPopup selectItemAtIndex:index];
+    _presetPopup.toolTip = @"Selected allocation-free spatial Metal preset";
+    _qualityPopup.hidden = YES;
+    _codecControlsStack.hidden = YES;
+    _qualityRootMenuItem.enabled = NO;
   } else {
     for (std::size_t index = 0; index < _codecPresets.size(); ++index) {
       NSString *title =
-          [NSString stringWithUTF8String:_codecPresets[index].title];
+          [NSString stringWithUTF8String:_codecPresets[index].title.c_str()];
       [_presetPopup addItemWithTitle:title];
       NSMenuItem *item =
           [[NSMenuItem alloc] initWithTitle:title
@@ -982,7 +1082,7 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
     return;
   }
   _presetDirectory = *directory;
-  _presets = loadSupportedPresets(_presetDirectory);
+  _presets = loadSelectedOriginalPresets(_presetDirectory);
   [self loadFastMatchAllowlist];
   if (_presets.empty()) {
     [self showStatus:@"No supported presets" error:YES];
@@ -990,7 +1090,7 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
     return;
   }
 
-  int initialIndex = findPresetIndex(_presets, "vv02");
+  int initialIndex = findPresetIndex(_presets, "vv01");
   if (initialIndex < 0)
     initialIndex = 0;
   _pendingPresetIndex.store(initialIndex, std::memory_order_release);
@@ -1021,14 +1121,21 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
     index = [(NSMenuItem *)sender tag];
   const auto lane =
       static_cast<ProcessingLane>(_pendingLane.load(std::memory_order_acquire));
-  const std::size_t count = lane == ProcessingLane::OriginalVisual
-                                ? _presets.size()
-                                : _codecPresets.size();
+  const std::size_t count =
+      lane == ProcessingLane::OriginalVisual
+          ? _presets.size()
+          : (lane == ProcessingLane::SpatialMetal ? _spatialPresets.size()
+                                                   : _codecPresets.size());
   if (index < 0 || static_cast<std::size_t>(index) >= count)
     return;
   [_presetPopup selectItemAtIndex:index];
   if (lane == ProcessingLane::OriginalVisual) {
     const int previous = _pendingPresetIndex.exchange(static_cast<int>(index));
+    if (previous != static_cast<int>(index))
+      _requestedGeneration.fetch_add(1, std::memory_order_acq_rel);
+  } else if (lane == ProcessingLane::SpatialMetal) {
+    const int previous =
+        _pendingSpatialPresetIndex.exchange(static_cast<int>(index));
     if (previous != static_cast<int>(index))
       _requestedGeneration.fetch_add(1, std::memory_order_acq_rel);
   } else {
@@ -1268,6 +1375,8 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
                           error))
     return false;
   [self deactivateCodecLane];
+  _spatialLane.reset();
+  _activeSpatialPresetIndex = -1;
   _lane = std::move(candidate);
   _activeLane = ProcessingLane::OriginalVisual;
   _activeGeneration = _requestedGeneration.load(std::memory_order_acquire);
@@ -1275,6 +1384,45 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   _activeQualityMode = requestedQuality;
   _activeFastMatch = useFastMatch;
   _governorReuseFrames = useFastMatch ? 2u : 1u;
+  _frameIndex = 0;
+  _droppedCaptureFrames.store(0, std::memory_order_release);
+  _rateFrameCount = 0;
+  _rateStart = std::chrono::steady_clock::now();
+  _smoothedTotalMilliseconds = 0.0;
+  _smoothedGpuMilliseconds = 0.0;
+  return true;
+}
+
+- (bool)activatePendingSpatialPreset:(std::string &)error {
+  const int pending =
+      _pendingSpatialPresetIndex.load(std::memory_order_acquire);
+  if (pending < 0 ||
+      static_cast<std::size_t>(pending) >= _spatialPresets.size()) {
+    error = "Spatial preset index is out of range";
+    return false;
+  }
+  const uint64_t requestedGeneration =
+      _requestedGeneration.load(std::memory_order_acquire);
+  if (_activeLane == ProcessingLane::SpatialMetal && _spatialLane != nullptr &&
+      _activeSpatialPresetIndex == pending) {
+    _activeGeneration = requestedGeneration;
+    return true;
+  }
+
+  auto candidate =
+      glic::createRealtimeBackend(glic::RealtimeBackendKind::METAL, error);
+  if (!candidate ||
+      !candidate->prepare(
+          _spatialPresets[static_cast<std::size_t>(pending)].options, error))
+    return false;
+
+  [self deactivateCodecLane];
+  _lane.reset();
+  _activePresetIndex = -1;
+  _spatialLane = std::move(candidate);
+  _activeLane = ProcessingLane::SpatialMetal;
+  _activeGeneration = requestedGeneration;
+  _activeSpatialPresetIndex = pending;
   _frameIndex = 0;
   _droppedCaptureFrames.store(0, std::memory_order_release);
   _rateFrameCount = 0;
@@ -1309,6 +1457,8 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
 
   _lane.reset();
   _activePresetIndex = -1;
+  _spatialLane.reset();
+  _activeSpatialPresetIndex = -1;
   if (_codecLane) {
     _codecLane->setOutputCallback({});
     std::string drainError;
@@ -1372,6 +1522,8 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
       static_cast<ProcessingLane>(_pendingLane.load(std::memory_order_acquire));
   if (lane == ProcessingLane::CodecGlitch)
     return [self activatePendingCodecPreset:error];
+  if (lane == ProcessingLane::SpatialMetal)
+    return [self activatePendingSpatialPreset:error];
   return [self activatePendingOriginalPreset:error];
 }
 
@@ -1656,9 +1808,25 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
       continue;
     }
 
-    glic::OriginalRealtimeMetalFrameStats stats;
-    const bool processed =
-        _lane->process(slot->input, slot->output, _frameIndex++, &stats, error);
+    bool processed = false;
+    double totalMilliseconds = 0.0;
+    double gpuMilliseconds = 0.0;
+    if (_activeLane == ProcessingLane::SpatialMetal) {
+      const auto processStart = std::chrono::steady_clock::now();
+      processed = _spatialLane->process(slot->input, slot->output,
+                                        _frameIndex++, error);
+      totalMilliseconds =
+          std::chrono::duration<double, std::milli>(
+              std::chrono::steady_clock::now() - processStart)
+              .count();
+      gpuMilliseconds = _spatialLane->lastFrameStats().gpuMilliseconds;
+    } else {
+      glic::OriginalRealtimeMetalFrameStats stats;
+      processed = _lane->process(slot->input, slot->output, _frameIndex++,
+                                 &stats, error);
+      totalMilliseconds = stats.totalMilliseconds;
+      gpuMilliseconds = stats.gpuMilliseconds;
+    }
     if (processed)
       [self presentOutputFrame:slot->output generation:_activeGeneration];
     {
@@ -1676,16 +1844,17 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
 
     constexpr double smoothing = 0.12;
     if (_smoothedTotalMilliseconds == 0.0) {
-      _smoothedTotalMilliseconds = stats.totalMilliseconds;
-      _smoothedGpuMilliseconds = stats.gpuMilliseconds;
+      _smoothedTotalMilliseconds = totalMilliseconds;
+      _smoothedGpuMilliseconds = gpuMilliseconds;
     } else {
       _smoothedTotalMilliseconds +=
-          smoothing * (stats.totalMilliseconds - _smoothedTotalMilliseconds);
+          smoothing * (totalMilliseconds - _smoothedTotalMilliseconds);
       _smoothedGpuMilliseconds +=
-          smoothing * (stats.gpuMilliseconds - _smoothedGpuMilliseconds);
+          smoothing * (gpuMilliseconds - _smoothedGpuMilliseconds);
     }
 
-    if (_activeQualityMode == QualityMode::Auto20 && _activeFastMatch) {
+    if (_activeLane == ProcessingLane::OriginalVisual &&
+        _activeQualityMode == QualityMode::Auto20 && _activeFastMatch) {
       uint32_t desiredReuse = _governorReuseFrames;
       if (_smoothedTotalMilliseconds > kGovernorHighWaterMilliseconds)
         desiredReuse = 4;
@@ -1705,14 +1874,19 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
       const double processedFps =
           static_cast<double>(_rateFrameCount) / elapsed;
       const uint64_t dropped = _droppedCaptureFrames.load();
+      const bool spatial = _activeLane == ProcessingLane::SpatialMetal;
       const std::string preset =
-          _presets[static_cast<std::size_t>(_activePresetIndex)].name;
-      std::string quality = qualityModeName(_activeQualityMode);
-      if (_activeQualityMode == QualityMode::Auto20)
+          spatial
+              ? _spatialPresets[static_cast<std::size_t>(
+                                    _activeSpatialPresetIndex)]
+                    .name
+              : _presets[static_cast<std::size_t>(_activePresetIndex)].name;
+      std::string quality = spatial ? "Spatial" : qualityModeName(_activeQualityMode);
+      if (!spatial && _activeQualityMode == QualityMode::Auto20)
         quality += _activeFastMatch ? "/Fast" : "/Strict";
       const double totalMilliseconds = _smoothedTotalMilliseconds;
       const double gpuMilliseconds = _smoothedGpuMilliseconds;
-      const uint32_t reuseFrames = _governorReuseFrames;
+      const uint32_t reuseFrames = spatial ? 1u : _governorReuseFrames;
       const uint64_t generation = _activeGeneration;
       _rateFrameCount = 0;
       _rateStart = now;

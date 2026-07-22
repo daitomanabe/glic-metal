@@ -1,5 +1,6 @@
 #include <glic_metal/codec_glitch.h>
 #include <glic_metal/glic_metal.h>
+#include <glic_metal/glitch_presets.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -10,6 +11,14 @@
 #endif
 
 int main(void) {
+  glic_glitch_preset_descriptor selected;
+  glic_glitch_preset_descriptor_init(&selected);
+  if (glic_glitch_preset_count() != 19 ||
+      glic_glitch_preset_find("spatial__poster_solar", &selected) !=
+          GLIC_GLITCH_PRESET_OK ||
+      selected.category != GLIC_GLITCH_PRESET_SPATIAL)
+    return 1;
+
   glic_codec_glitch_config codec_config;
   glic_codec_glitch_config_init(&codec_config);
   glic_codec_glitch_controls codec_controls;

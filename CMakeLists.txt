@@ -17,6 +17,9 @@ option(GLIC_INSTALL "Install GLIC Metal and its CMake package"
 
 set(GLIC_METAL_PRESETS_DIR "${PROJECT_SOURCE_DIR}/presets" CACHE PATH
     "Runtime directory containing GLIC preset files")
+set(GLIC_METAL_SELECTED_PRESETS_JSON
+    "${PROJECT_SOURCE_DIR}/resources/selected-presets.json" CACHE FILEPATH
+    "Adopted GLIC preset bank JSON")
 include(cmake/GlicMetalResources.cmake)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -38,6 +41,7 @@ set(CORE_SOURCES
     src/bitio.cpp
     src/effects.cpp
     src/glic_metal_c.cpp
+    src/glitch_presets.cpp
     src/codec_glitch_c_stub.cpp
     src/preset_loader.cpp
     src/realtime.cpp
@@ -199,6 +203,7 @@ if(APPLE)
             "${PROJECT_SOURCE_DIR}/resources/GLICWebcamPreview-Info.plist")
     set_property(TARGET glic_webcam_preview APPEND PROPERTY LINK_DEPENDS
         "${PROJECT_SOURCE_DIR}/config/fast-match-allowlist.json"
+        "${PROJECT_SOURCE_DIR}/resources/selected-presets.json"
         "${PROJECT_SOURCE_DIR}/LICENSE"
         "${PROJECT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md")
     add_custom_command(TARGET glic_webcam_preview POST_BUILD
@@ -213,6 +218,9 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${PROJECT_SOURCE_DIR}/config/fast-match-allowlist.json"
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/fast-match-allowlist.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/resources/selected-presets.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/selected-presets.json"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${PROJECT_SOURCE_DIR}/LICENSE"
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/LICENSE"
@@ -372,6 +380,13 @@ if(BUILD_TESTING)
         "GLIC_TEST_PRESETS_DIR=\"${PROJECT_SOURCE_DIR}/presets\"")
     add_test(NAME glic_embed_c_api COMMAND glic_embed_c_api_tests)
 
+    add_executable(glic_glitch_presets_tests tests/glitch_presets_tests.c)
+    set_target_properties(glic_glitch_presets_tests
+                          PROPERTIES LINKER_LANGUAGE CXX)
+    target_link_libraries(glic_glitch_presets_tests PRIVATE
+                          GlicMetal::GlicMetal)
+    add_test(NAME glic_selected_preset_bank COMMAND glic_glitch_presets_tests)
+
     add_test(NAME glic_installed_consumer
              COMMAND "${CMAKE_COMMAND}"
                      "-DGLIC_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
@@ -491,6 +506,8 @@ endif()
 install(DIRECTORY presets/
         DESTINATION ${CMAKE_INSTALL_DATADIR}/glic-metal/presets)
 install(FILES presets.upstream.sha256
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/glic-metal)
+install(FILES resources/selected-presets.json
         DESTINATION ${CMAKE_INSTALL_DATADIR}/glic-metal)
 install(FILES README.md LICENSE THIRD_PARTY_NOTICES.md
               docs/BUILDING.md docs/EMBEDDING.md docs/CODEC_GLITCH.md

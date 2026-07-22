@@ -17,6 +17,10 @@ function(glic_metal_copy_resources)
     message(FATAL_ERROR
             "GLIC Metal preset directory is missing: ${GLIC_METAL_PRESETS_DIR}")
   endif()
+  if(NOT EXISTS "${GLIC_METAL_SELECTED_PRESETS_JSON}")
+    message(FATAL_ERROR
+            "GLIC Metal selected preset bank is missing: ${GLIC_METAL_SELECTED_PRESETS_JSON}")
+  endif()
 
   add_custom_command(TARGET "${GLIC_RESOURCE_TARGET}" POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E make_directory
@@ -24,6 +28,9 @@ function(glic_metal_copy_resources)
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${GLIC_METAL_PRESETS_DIR}"
             "${GLIC_RESOURCE_DESTINATION}/Presets"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${GLIC_METAL_SELECTED_PRESETS_JSON}"
+            "${GLIC_RESOURCE_DESTINATION}/selected-presets.json"
     VERBATIM)
 
   if(APPLE)
