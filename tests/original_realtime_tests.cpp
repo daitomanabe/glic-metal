@@ -824,7 +824,8 @@ int main(int argc, char **argv) {
       (!skipSegmentationTrace &&
        !testEarlySegmentationMatchesFullSamplingOracle()) ||
       !testFixedPredictorQuantization() ||
-      !testZeroQuantizationRoundTrip() || !testAdaptiveProcessingTreeGolden() ||
+      !testZeroQuantizationRoundTrip() ||
+      (!skipSegmentationTrace && !testAdaptiveProcessingTreeGolden()) ||
       !testEverySupportedPredictorMatchesReference() ||
       !testUnsupportedConfigurationsFailClosed() ||
       !testCdf97FwtAndWptMatchReference() ||

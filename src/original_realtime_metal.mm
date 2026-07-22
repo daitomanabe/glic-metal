@@ -919,7 +919,7 @@ private:
     }
     for (int worker = 0; worker < static_cast<int>(workers_.size()); ++worker)
       workers_[static_cast<std::size_t>(worker)] =
-          std::jthread([this, worker] { workerLoop(worker); });
+          std::thread([this, worker] { workerLoop(worker); });
   }
 
   void stopWorkers() noexcept {
@@ -1138,7 +1138,7 @@ private:
 
   const Color *input_ = nullptr;
   Color *output_ = nullptr;
-  std::array<std::jthread, 5> workers_{};
+  std::array<std::thread, 5> workers_{};
   std::mutex workerMutex_;
   std::condition_variable workerCondition_;
   std::condition_variable workerCompletion_;

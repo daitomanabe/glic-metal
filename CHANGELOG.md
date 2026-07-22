@@ -74,9 +74,9 @@ semantic versioning for tagged releases.
 - Public CI now supports both current and older Xcode Metal compilers, installs
   its native FFmpeg test dependency, and validates the documented non-macOS
   VideoToolbox-unavailable contract in external consumers.
-- The original CPU worker pool now uses the Xcode 15-compatible `std::thread`;
-  macOS retains the strict Processing leaf/RNG trace oracle while other hosts
-  run the remaining portable CPU reference coverage.
+- The original CPU and Metal worker pools now use the Xcode 15-compatible
+  `std::thread`; macOS retains the strict Processing leaf/RNG trace oracle
+  while other hosts run the remaining portable CPU reference coverage.
 - GitHub Actions use the current Node 24-based official action releases.
 
 - The human embedding guide now provides a production 19-preset quick start,
