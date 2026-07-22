@@ -23,7 +23,7 @@
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>NSCameraUsageDescription</key>
-  <string>GLIC Webcam Preview uses the camera for realtime Metal glitch processing.</string>
+  <string>GLIC Webcam Preview uses the camera for realtime Metal and hardware video-codec glitch processing.</string>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key>

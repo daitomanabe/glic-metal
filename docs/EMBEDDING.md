@@ -9,6 +9,7 @@ The public surface is:
 
 - `include/glic_metal/glic_metal.h` — portable C API;
 - `include/glic_metal/glic_metal_metal.h` — typed Objective-C Metal helpers;
+- `include/glic_metal/codec_glitch.h` — macOS VideoToolbox codec-glitch C API;
 - `GlicMetal::GlicMetal` — CMake target;
 - `glic_realtime.metallib` — Metal kernels to copy into the host bundle;
 - `presets/` — runtime preset data.
@@ -22,6 +23,7 @@ Internal headers under `src/` are not part of the stable API.
 | `GLIC_METAL_MODE_ORIGINAL` + Strict | 37 audited | BGRA/RGBA CPU buffer | Closest original-style result |
 | `GLIC_METAL_MODE_ORIGINAL` + Fast Match | 37 algorithm-supported | BGRA/RGBA CPU buffer | Faster approximate CDF 9/7 |
 | `GLIC_METAL_MODE_COMPAT_REALTIME` | all 144 | CPU buffer or Metal texture | Maximum variety and easiest GPU composition |
+| Codec Glitch | 12 codec effects | `CVPixelBufferRef` | Stateful H.264 encode/decode and codec-history effects |
 
 The original-style lane still performs input conversion and segmentation on
 the CPU before Metal reconstruction, so its public integration path is a
@@ -124,6 +126,170 @@ during successful steady-state frame processing.
 `glic_metal_prepare()` performs preset loading, allocation, pipeline creation,
 and worker startup. Run it on a control/background queue, never inside a render
 callback. If a new preset fails to prepare, the previous engine stays active.
+
+## Codec Glitch C API (macOS only)
+
+### 日本語
+
+Codec Glitchは、上記の同期画像APIとは独立した、VideoToolboxによる非同期H.264
+処理です。GLICのファイルcodec、37 presetの`original_visual`、全144 presetを扱う
+`compat_realtime`のいずれでもありません。入力は`CVPixelBufferRef`で、12種類の
+effect名と安全境界は[CODEC_GLITCH.md](CODEC_GLITCH.md)にあります。
+全effectが圧縮H.264のVCL byteを変更しません。`slice_dropout`、
+`slice_transplant`、`payload_xor`はMetal-backed CoreImageでclean decode結果へ作用し、
+`reference_timewarp`は4〜12 frameへ設定できるdecode済み`CVPixelBuffer`履歴を使います。
+
+`prepare`はqueue、pixel-buffer pool、Metal-backed post path、通常stageのhardware
+encoderを作ってbackendを検証するため、capture callbackではなくcontrol/background
+queueで一度実行します。特殊なQP/cascade/縮小encoderは最初の利用時、decoderは最初の
+encode済みsampleで遅延生成されます。`RealTime`とlow-latency rate controlは既定で有効で、
+既定average bitrateは4,000,000 bpsです。動的bitrateの安全floorは
+`min(averageBitRate, width * height * fps / 4)`です。
+`submit`は非blockで、処理中frame数が上限に達すると
+`GLIC_CODEC_GLITCH_BACKPRESSURE`を返します。出力は非同期なので、
+`copy_latest_pixel_buffer`の`GLIC_CODEC_GLITCH_NO_FRAME_AVAILABLE`はerrorでは
+ありません。
+
+`pframe_loss`／`idr_starvation`による設計上のholdは
+`repeated_previous_frame=true`かつ`intentional_repeat_frame=true`です。障害時の
+fallback repeatは`intentional_repeat_frame=false`なので区別できます。
+最初のdecode前に失敗した場合はretain済みfull-size入力を出し、
+`non_intentional_fallback_frame=true`にします。filterの
+`reliability_passed`は非意図的fallback、全codec処理error、watchdog recovery、
+backpressure drop、output queue dropがすべて0の場合だけtrueになり、意図的repeatは
+`intentional_repeat_frames`へ別集計されます。ABI互換の`poll_queue_drops`はcallbackと
+pollの両方を合算します。20fps gateはさらに960×540以上、120 frame以上、hardware
+encode/decode、frame数維持、実測/stream 20fps以上、p95 50ms以下を要求します。
+
+### English
+
+Codec Glitch is a separate asynchronous VideoToolbox H.264 path, not the
+synchronous image API above. It is distinct from the GLIC file codec,
+37-preset `original_visual` lane, and all-144 `compat_realtime` lane. It accepts
+`CVPixelBufferRef` input and exposes the twelve effects documented in
+[CODEC_GLITCH.md](CODEC_GLITCH.md). No effect modifies compressed H.264 VCL
+bytes. `slice_dropout`, `slice_transplant`, and `payload_xor` use Metal-backed
+CoreImage after a clean decode, while `reference_timewarp` uses a bounded
+history configured from four to twelve decoded `CVPixelBuffer` objects.
+
+Run `prepare` once on a control or background queue because it creates queues,
+pixel-buffer pools, the Metal-backed post path, and the normal-stage hardware
+encoder used to validate the backend. Specialized QP/cascade/downscale encoders
+are lazy, and the decoder is created from the first encoded sample. `RealTime`
+and low-latency rate control are enabled by default, with a dynamic bitrate
+floor of `min(averageBitRate, width * height * fps / 4)`. The default average
+bitrate is 4,000,000 bps.
+`submit` is nonblocking and returns `GLIC_CODEC_GLITCH_BACKPRESSURE` when its
+bounded in-flight set is full. Output is asynchronous, so
+`GLIC_CODEC_GLITCH_NO_FRAME_AVAILABLE` from the poll function is not an error.
+
+```c
+#include <glic_metal/codec_glitch.h>
+#include <CoreVideo/CoreVideo.h>
+
+glic_codec_glitch_context *codec = NULL;
+if (glic_codec_glitch_context_create(&codec) != GLIC_CODEC_GLITCH_OK) {
+  return;
+}
+
+glic_codec_glitch_config config;
+glic_codec_glitch_config_init(&config);
+config.width = 960;
+config.height = 540;
+config.frames_per_second = 30;
+config.average_bit_rate = 4000000;
+config.decoded_history_frames = 12; /* Clamped to [4, 12]. */
+config.require_hardware_encoder = 1;
+config.require_hardware_decoder = 1;
+
+if (glic_codec_glitch_prepare(codec, &config) != GLIC_CODEC_GLITCH_OK) {
+  log_error(glic_codec_glitch_get_last_error(codec));
+  glic_codec_glitch_context_destroy(codec);
+  return;
+}
+
+glic_codec_glitch_controls controls;
+glic_codec_glitch_controls_init(&controls);
+controls.effect = GLIC_CODEC_GLITCH_SLICE_TRANSPLANT;
+controls.amount = 0.52f;
+controls.rate = 0.34f;
+controls.feedback = 0.58f;
+controls.seed = UINT64_C(0x474c4943);
+glic_codec_glitch_set_controls(codec, &controls);
+
+/* input_pixel_buffer is a CVPixelBufferRef owned by the host. */
+glic_codec_glitch_status status = glic_codec_glitch_submit_pixel_buffer(
+    codec, (void *)input_pixel_buffer, frame_index,
+    presentation_time.value, presentation_time.timescale);
+if (status != GLIC_CODEC_GLITCH_OK &&
+    status != GLIC_CODEC_GLITCH_BACKPRESSURE) {
+  log_error(glic_codec_glitch_get_last_error(codec));
+}
+
+glic_codec_glitch_frame output;
+glic_codec_glitch_frame_init(&output);
+status = glic_codec_glitch_copy_latest_pixel_buffer(codec, &output);
+if (status == GLIC_CODEC_GLITCH_OK) {
+  CVPixelBufferRef image = (CVPixelBufferRef)output.pixel_buffer;
+  if (output.repeated_previous_frame && output.intentional_repeat_frame) {
+    /* Expected pframe_loss / idr_starvation hold, not failure fallback. */
+  }
+  if (output.non_intentional_fallback_frame) {
+    /* Reliability failure: this may be last-good or retained initial input. */
+  }
+  present_pixel_buffer(image);
+  glic_codec_glitch_pixel_buffer_release(output.pixel_buffer);
+}
+
+glic_codec_glitch_stats stats;
+glic_codec_glitch_stats_init(&stats);
+glic_codec_glitch_get_stats(codec, &stats);
+
+glic_codec_glitch_flush(codec, 2000);
+glic_codec_glitch_context_destroy(codec);
+```
+
+The host owns the submitted buffer; the engine retains it only as needed for
+the asynchronous encode. A successful poll returns one retained output buffer.
+Release exactly that ownership with
+`glic_codec_glitch_pixel_buffer_release()`. Initialize a fresh frame struct
+before each poll, or clear and release its previous `pixel_buffer` first.
+
+`repeated_previous_frame` reports every repeated last-good frame.
+`intentional_repeat_frame` distinguishes the designed `pframe_loss` /
+`idr_starvation` hold from an unexpected encode/decode fallback. The C++ frame
+uses `repeatedPreviousFrame`, `intentionalRepeat`, `nonIntentionalFallback`,
+and `codecWarmupFrame`. The ABI-compatible
+`packet_was_modified` and C++ `packetWasModified` fields remain false because
+this safe implementation does not mutate compressed VCL bytes. The legacy-named
+`intentional_packet_drops` statistic counts intentionally held encoded frames.
+`codec_errors` counts all codec-processing failures, including encode, sample
+extraction, decode, and operation timeouts. The legacy-named
+`poll_queue_drops` combines losses from the bounded callback and polling output
+queues.
+
+Before any successful decode exists, a failed frame returns the retained
+full-size input with `non_intentional_fallback_frame=true`; later failures can
+return last-good output with the same flag. New stages use 500/300 ms
+encode/decode warm-up deadlines, then sustained work uses 100/45 ms.
+
+Use `glic_codec_glitch_reset()` when switching streams or when the operator
+requests an immediate clean codec history; this explicit operation drains and
+rebuilds codec sessions. Unexpected codec failure is handled internally with
+last-good output, and the watchdog forces the next IDR through the existing
+session without tearing it down. It remains a reliability failure rather than
+an intended visual result. The filter's `reliability_passed` field requires
+zero non-intentional fallback, codec errors, watchdog recoveries, backpressure
+drops, and output-queue drops; intentional repeats are counted separately and
+remain eligible. The 20 fps gate additionally requires at least 960×540, at
+least 120 frames, hardware encode/decode, preserved output frame count,
+processing/stream rates of at least 20 fps, and p95 at or below 50 ms. The API
+cannot ingest arbitrary external H.264.
+
+Linking Codec Glitch directly from Xcode additionally requires
+`CoreImage.framework`, `CoreGraphics.framework`, `CoreMedia.framework`,
+`CoreVideo.framework`, and `VideoToolbox.framework` alongside `Foundation.framework` and
+`Metal.framework`.
 
 ## Zero-copy Metal integration
 

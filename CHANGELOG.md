@@ -8,6 +8,24 @@ semantic versioning for tagged releases.
 
 ### Added
 
+- A macOS-only Codec Glitch lane using the VideoToolbox hardware H.264
+  encoder/decoder, Metal-compatible pixel buffers, and a Metal-backed
+  post/composite path.
+- Twelve stateful codec effects: QP pump, bitrate crush, slice dropout, slice
+  transplant, P-frame loss, IDR starvation, payload XOR, reference timewarp,
+  codec feedback, generation cascade, resolution hop, and chroma codec echo.
+- A versioned asynchronous Codec Glitch C API for `CVPixelBufferRef` input,
+  bounded polling, runtime controls, reset/flush, and recovery/performance
+  statistics.
+- Raw-BGRA Codec Glitch filtering and `process_video.py --processing-mode
+  codec_glitch` with effect controls and JSON hardware, latency, fallback,
+  intentional-repeat, codec-error, watchdog, and reliability metrics.
+- C++ `intentionalRepeat` and C ABI `intentional_repeat_frame` output flags,
+  separating designed temporal holds from non-intentional fallback.
+- Headless codec-video evaluation with dry/wet, luminance, chroma, edge, and
+  temporal metrics plus reliability-gated max-min diversity ranking.
+- Last-good-frame fallback and forced-IDR watchdog recovery for unexpected
+  codec failure, independently of intentional P-frame/IDR holds.
 - Five realtime Metal/CPU glitch families: tile shuffle, vertical tear,
   diagonal slip, scanline weave, and quad mirror.
 - Search seeding from the complete 144-preset upstream GLIC value corpus, with
@@ -29,6 +47,36 @@ semantic versioning for tagged releases.
 
 ### Changed
 
+- `slice_dropout` and `slice_transplant` now use safe Metal-backed post-decode
+  horizontal-row history composites instead of removing or transplanting
+  compressed VCL slices.
+- `payload_xor` now clean-decodes before Metal-backed posterization, RGB
+  rewiring, and displaced macroblock-like tiles; `reference_timewarp` selects
+  from a configurable history of four to twelve decoded pixel buffers. No Codec
+  Glitch effect directly modifies compressed H.264 VCL bytes.
+- Preparation validates hardware operation with the normal encoder; specialized
+  QP, cascade, and downscale encoders are lazy, and each decoder is created from
+  its first encoded sample.
+- VideoToolbox `RealTime` and low-latency rate control remain enabled by
+  default. The default average bitrate is 4,000,000 bps, and the
+  `min(averageBitRate, width * height * fps / 4)` floor prevents aggressive
+  rate changes from dropping encoded frames without exceeding host settings.
+- New encoder/decoder sessions use 500/300 ms warm-up deadlines before the
+  sustained 100/45 ms limits. A failure before the first successful decode
+  emits retained full-size input with `non_intentional_fallback_frame` set.
+- Callback and polling delivery are both bounded. The ABI-compatible
+  `poll_queue_drops` statistic now combines drops from either output path, and
+  `codec_errors` covers encode, sample-extraction, decode, and timeout errors.
+- QP pump, bitrate crush, and later cascade generations use stronger quality
+  pressure, while resolution hop adds pixelation during full-size recovery.
+- Realtime Codec Glitch gates now require at least 960x540, at least 120
+  frames, preserved frame count, hardware encode/decode, 20 fps with p95 at or
+  below 50 ms, and zero non-intentional fallback, codec errors, watchdog
+  recoveries, backpressure drops, or output-queue drops. Designed temporal
+  holds remain eligible and are reported separately.
+- The webcam preview can switch between the 37-preset Original Visual lane and
+  all twelve Codec Glitch effects, with live amount and codec-history reset
+  controls.
 - Preset search now balances fourteen mechanisms across upstream-base,
   light/strong upstream mutation, archive mutation, and random lanes.
 - Review selection balances mechanism, artifact scale, orientation, source
@@ -40,6 +88,10 @@ semantic versioning for tagged releases.
 
 ### Known limitations
 
+- Codec Glitch requires macOS hardware H.264 support. Its 960x540 30 fps target
+  and 20 fps hard floor are per-machine certification gates, not universal
+  guarantees, and exact codec/post-composite artifacts can vary with
+  VideoToolbox.
 - Metal and webcam features require macOS and full Xcode at build time.
 - `original_visual` supports 37 audited presets; the all-144 path is a separate
   visual approximation.

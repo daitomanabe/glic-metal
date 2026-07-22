@@ -1,10 +1,11 @@
+#include "codec_glitch.hpp"
 #include "original_realtime.hpp"
 #include "original_realtime_metal.hpp"
 #include "preset_loader.hpp"
 
+#import <AVFoundation/AVFoundation.h>
 #import <Accelerate/Accelerate.h>
 #import <AppKit/AppKit.h>
-#import <AVFoundation/AVFoundation.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 #import <QuartzCore/QuartzCore.h>
@@ -14,9 +15,9 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -36,8 +37,7 @@ namespace {
 constexpr int kProcessingWidth = 960;
 constexpr int kProcessingHeight = 540;
 constexpr double kMinimumFramesPerSecond = 20.0;
-constexpr double kRealtimeBudgetMilliseconds =
-    1000.0 / kMinimumFramesPerSecond;
+constexpr double kRealtimeBudgetMilliseconds = 1000.0 / kMinimumFramesPerSecond;
 constexpr double kGovernorHighWaterMilliseconds = 45.0;
 constexpr double kGovernorLowWaterMilliseconds = 30.0;
 
@@ -45,6 +45,11 @@ enum class QualityMode : int {
   Strict = 0,
   FastMatch = 1,
   Auto20 = 2,
+};
+
+enum class ProcessingLane : int {
+  OriginalVisual = 0,
+  CodecGlitch = 1,
 };
 
 enum class FrameSlotState {
@@ -57,9 +62,59 @@ enum class FrameSlotState {
 struct FrameSlot {
   std::vector<glic::Color> input;
   std::vector<glic::Color> output;
+  CVPixelBufferRef pixelBuffer = nullptr;
+  CMTime presentationTimeStamp = kCMTimeInvalid;
   uint64_t sequence = 0;
   FrameSlotState state = FrameSlotState::Empty;
 };
+
+struct CodecPresetChoice {
+  glic::CodecGlitchEffect effect;
+  const char *title;
+  glic::CodecGlitchControls controls;
+};
+
+std::vector<CodecPresetChoice> makeCodecPresetChoices() {
+  const auto make = [](glic::CodecGlitchEffect effect, const char *title,
+                       float amount, float rate, float feedback) {
+    glic::CodecGlitchControls controls;
+    controls.effect = effect;
+    controls.amount = amount;
+    controls.rate = rate;
+    controls.feedback = feedback;
+    return CodecPresetChoice{effect, title, controls};
+  };
+
+  std::vector<CodecPresetChoice> choices{
+      make(glic::CodecGlitchEffect::QpPump, "QP Pump", 0.72f, 0.42f, 0.35f),
+      make(glic::CodecGlitchEffect::BitrateCrush, "Bitrate Crush", 0.70f, 0.32f,
+           0.45f),
+      make(glic::CodecGlitchEffect::SliceDropout, "Slice Dropout", 0.48f, 0.35f,
+           0.45f),
+      make(glic::CodecGlitchEffect::SliceTransplant, "Slice Transplant", 0.58f,
+           0.30f, 0.70f),
+      make(glic::CodecGlitchEffect::PFrameLoss, "P-Frame Loss", 0.40f, 0.25f,
+           0.55f),
+      make(glic::CodecGlitchEffect::IdrStarvation, "IDR Starvation", 0.62f,
+           0.18f, 0.65f),
+      make(glic::CodecGlitchEffect::PayloadXor, "Payload XOR", 0.18f, 0.28f,
+           0.45f),
+      make(glic::CodecGlitchEffect::ReferenceTimewarp, "Reference Timewarp",
+           0.58f, 0.26f, 0.72f),
+      make(glic::CodecGlitchEffect::CodecFeedback, "Codec Feedback", 0.60f,
+           0.30f, 0.78f),
+      make(glic::CodecGlitchEffect::GenerationCascade, "Generation Cascade",
+           0.55f, 0.22f, 0.60f),
+      make(glic::CodecGlitchEffect::ResolutionHop, "Resolution Hop", 0.75f,
+           0.24f, 0.50f),
+      make(glic::CodecGlitchEffect::ChromaCodecEcho, "Chroma Codec Echo", 0.68f,
+           0.28f, 0.72f),
+  };
+  choices[1].controls.crushedBitRate = 100000;
+  choices[9].controls.cascadeGenerations = 3;
+  choices[10].controls.reducedResolutionScale = 0.25f;
+  return choices;
+}
 
 const char *qualityModeName(QualityMode mode) {
   switch (mode) {
@@ -106,8 +161,7 @@ std::optional<std::filesystem::path> findPresetDirectory() {
   }
 
   for (const std::filesystem::path &candidate :
-       {std::filesystem::path(GLIC_SOURCE_PRESETS_DIR),
-        std::filesystem::current_path() / "presets"}) {
+       {std::filesystem::current_path() / "presets"}) {
     if (std::filesystem::is_directory(candidate))
       return candidate;
   }
@@ -121,7 +175,7 @@ loadSupportedPresets(const std::filesystem::path &directory) {
        glic::PresetLoader::listPresets(directory.string())) {
     glic::OriginalPresetConfig config;
     if (!glic::PresetLoader::loadOriginalPresetByName(directory.string(), name,
-                                                       config))
+                                                      config))
       continue;
     if (!glic::evaluateOriginalRealtimeSupport(config).supported)
       continue;
@@ -137,9 +191,8 @@ loadSupportedPresets(const std::filesystem::path &directory) {
 int findPresetIndex(const std::vector<PresetChoice> &choices,
                     std::string_view name) {
   const auto match =
-      std::find_if(choices.begin(), choices.end(), [&](const auto &choice) {
-        return choice.name == name;
-      });
+      std::find_if(choices.begin(), choices.end(),
+                   [&](const auto &choice) { return choice.name == name; });
   return match == choices.end()
              ? -1
              : static_cast<int>(std::distance(choices.begin(), match));
@@ -183,7 +236,8 @@ int runSelfTest() {
     const int index = findPresetIndex(choices, name);
     if (index < 0 ||
         !lane->prepare(kProcessingWidth, kProcessingHeight,
-                       choices[static_cast<std::size_t>(index)].config, error)) {
+                       choices[static_cast<std::size_t>(index)].config,
+                       error)) {
       std::fprintf(stderr, "FAIL prepare %.*s: %s\n",
                    static_cast<int>(name.size()), name.data(), error.c_str());
       return 5;
@@ -222,8 +276,144 @@ int runSelfTest() {
               secondFastStats.adaptiveScheduleReused ? 1 : 0,
               firstFastStats.totalMilliseconds,
               secondFastStats.totalMilliseconds);
-  std::printf("PASS webcam preview Metal lane presets=%zu resolution=%dx%d\n",
-              choices.size(), kProcessingWidth, kProcessingHeight);
+
+  const auto codecPresets = makeCodecPresetChoices();
+  if (codecPresets.size() !=
+      static_cast<std::size_t>(glic::CodecGlitchEffect::Count)) {
+    std::fprintf(stderr, "FAIL expected 12 codec presets, got %zu\n",
+                 codecPresets.size());
+    return 8;
+  }
+  std::unordered_set<std::string> codecNames;
+  for (const auto &preset : codecPresets) {
+    const char *name = glic::codecGlitchEffectName(preset.effect);
+    glic::CodecGlitchEffect roundTrip{};
+    if (name == nullptr || name[0] == '\0' ||
+        !codecNames.emplace(name).second ||
+        !glic::codecGlitchEffectFromName(name, roundTrip) ||
+        roundTrip != preset.effect) {
+      std::fprintf(stderr, "FAIL invalid codec preset catalog entry: %s\n",
+                   name == nullptr ? "(null)" : name);
+      return 9;
+    }
+  }
+
+  NSDictionary *pixelAttributes = @{
+    (id)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
+    (id)kCVPixelBufferWidthKey : @(kProcessingWidth),
+    (id)kCVPixelBufferHeightKey : @(kProcessingHeight),
+    (id)kCVPixelBufferMetalCompatibilityKey : @YES,
+    (id)kCVPixelBufferIOSurfacePropertiesKey : @{},
+  };
+  CVPixelBufferRef codecInput = nullptr;
+  if (CVPixelBufferCreate(kCFAllocatorDefault, kProcessingWidth,
+                          kProcessingHeight, kCVPixelFormatType_32BGRA,
+                          (__bridge CFDictionaryRef)pixelAttributes,
+                          &codecInput) != kCVReturnSuccess ||
+      codecInput == nullptr) {
+    std::fprintf(stderr, "FAIL codec self-test input allocation\n");
+    return 10;
+  }
+  CVPixelBufferLockBaseAddress(codecInput, 0);
+  auto *codecBytes =
+      static_cast<uint8_t *>(CVPixelBufferGetBaseAddress(codecInput));
+  const std::size_t codecRowBytes = CVPixelBufferGetBytesPerRow(codecInput);
+  for (int y = 0; y < kProcessingHeight; ++y) {
+    for (int x = 0; x < kProcessingWidth; ++x) {
+      uint8_t *pixel = codecBytes +
+                       static_cast<std::size_t>(y) * codecRowBytes +
+                       static_cast<std::size_t>(x) * 4;
+      pixel[0] = static_cast<uint8_t>((x + y) & 255);
+      pixel[1] = static_cast<uint8_t>((y * 255) / kProcessingHeight);
+      pixel[2] = static_cast<uint8_t>((x * 255) / kProcessingWidth);
+      pixel[3] = 255;
+    }
+  }
+  CVPixelBufferUnlockBaseAddress(codecInput, 0);
+
+  glic::CodecGlitchConfiguration codecConfiguration;
+  codecConfiguration.width = kProcessingWidth;
+  codecConfiguration.height = kProcessingHeight;
+  codecConfiguration.framesPerSecond = 30;
+  codecConfiguration.maximumInFlightFrames = 24;
+  std::atomic<uint64_t> codecOutputCount{0};
+  std::atomic<bool> codecOutputInvalid{false};
+  auto codecLane = glic::createCodecGlitchEngine(codecConfiguration, error);
+  if (!codecLane) {
+    std::fprintf(stderr, "FAIL codec engine initialization: %s\n",
+                 error.c_str());
+    CFRelease(codecInput);
+    return 11;
+  }
+
+  glic::CodecGlitchOutputCallback selfTestCallback =
+      [&](const glic::CodecGlitchFrame &frame) {
+        CVPixelBufferRef pixelBuffer = frame.pixelBuffer();
+        if (pixelBuffer == nullptr ||
+            CVPixelBufferGetWidth(pixelBuffer) != kProcessingWidth ||
+            CVPixelBufferGetHeight(pixelBuffer) != kProcessingHeight ||
+            CVPixelBufferGetPixelFormatType(pixelBuffer) !=
+                kCVPixelFormatType_32BGRA) {
+          codecOutputInvalid.store(true, std::memory_order_release);
+        }
+        codecOutputCount.fetch_add(1, std::memory_order_relaxed);
+      };
+
+  uint64_t codecFrameIndex = 0;
+  for (const auto &preset : codecPresets) {
+    if (!codecLane->reset(error)) {
+      std::fprintf(stderr, "FAIL codec reset %s: %s\n", preset.title,
+                   error.c_str());
+      CFRelease(codecInput);
+      return 12;
+    }
+    codecLane->setOutputCallback(selfTestCallback);
+    codecLane->setControls(preset.controls);
+    const uint64_t outputBefore = codecOutputCount.load();
+    for (int frame = 0; frame < 18; ++frame) {
+      const CMTime timestamp =
+          CMTimeMake(static_cast<int64_t>(codecFrameIndex), 30);
+      if (!codecLane->submit(codecInput, codecFrameIndex++, timestamp, error)) {
+        std::fprintf(stderr, "FAIL codec submit %s: %s\n", preset.title,
+                     error.c_str());
+        CFRelease(codecInput);
+        return 13;
+      }
+    }
+    if (!codecLane->flush(std::chrono::seconds(5), error)) {
+      std::fprintf(stderr, "FAIL codec flush %s: %s\n", preset.title,
+                   error.c_str());
+      CFRelease(codecInput);
+      return 14;
+    }
+    const uint64_t emitted = codecOutputCount.load() - outputBefore;
+    if (emitted == 0 || codecOutputInvalid.load(std::memory_order_acquire)) {
+      std::fprintf(stderr, "FAIL codec output %s emitted=%llu valid=%s\n",
+                   preset.title, static_cast<unsigned long long>(emitted),
+                   codecOutputInvalid.load() ? "false" : "true");
+      CFRelease(codecInput);
+      return 15;
+    }
+    std::printf("codec_preset=%s emitted=%llu\n",
+                glic::codecGlitchEffectName(preset.effect),
+                static_cast<unsigned long long>(emitted));
+  }
+  const auto codecStats = codecLane->stats();
+  codecLane->setOutputCallback({});
+  if (!codecLane->flush(std::chrono::seconds(5), error) ||
+      !codecStats.hardwareEncoder || !codecStats.hardwareDecoder) {
+    std::fprintf(stderr,
+                 "FAIL codec hardware/drain encoder=%s decoder=%s: %s\n",
+                 codecStats.hardwareEncoder ? "true" : "false",
+                 codecStats.hardwareDecoder ? "true" : "false", error.c_str());
+    CFRelease(codecInput);
+    return 16;
+  }
+  CFRelease(codecInput);
+  std::printf(
+      "PASS webcam preview lanes original_presets=%zu codec_presets=%zu "
+      "resolution=%dx%d codec_hw=true\n",
+      choices.size(), codecPresets.size(), kProcessingWidth, kProcessingHeight);
   return 0;
 }
 
@@ -271,15 +461,23 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
 @end
 
 @interface GLICAppController
-    : NSObject <NSApplicationDelegate, AVCaptureVideoDataOutputSampleBufferDelegate> {
+    : NSObject <NSApplicationDelegate,
+                AVCaptureVideoDataOutputSampleBufferDelegate> {
   NSWindow *_window;
   GLICPreviewView *_previewView;
+  NSPopUpButton *_lanePopup;
   NSPopUpButton *_presetPopup;
   NSPopUpButton *_qualityPopup;
+  NSStackView *_codecControlsStack;
+  NSSlider *_codecAmountSlider;
+  NSTextField *_codecAmountLabel;
+  NSButton *_codecResetButton;
   NSTextField *_statusLabel;
   NSTextField *_metricsLabel;
+  NSMenu *_laneMenu;
   NSMenu *_presetMenu;
   NSMenu *_qualityMenu;
+  NSMenuItem *_qualityRootMenuItem;
 
   AVCaptureSession *_captureSession;
   AVCaptureVideoDataOutput *_captureOutput;
@@ -287,21 +485,33 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   dispatch_queue_t _processingQueue;
   CVPixelBufferPoolRef _displayPixelBufferPool;
   CMVideoFormatDescriptionRef _displayFormatDescription;
+  std::mutex _displayFormatMutex;
 
   std::filesystem::path _presetDirectory;
   std::vector<PresetChoice> _presets;
+  std::vector<CodecPresetChoice> _codecPresets;
   std::unordered_set<std::string> _fastMatchAllowlist;
   std::unique_ptr<glic::OriginalRealtimeMetalLane> _lane;
+  std::unique_ptr<glic::CodecGlitchEngine> _codecLane;
   std::array<FrameSlot, 3> _frameSlots;
   std::mutex _frameSlotMutex;
   uint64_t _captureSequence;
+  std::atomic<int> _pendingLane;
   std::atomic<int> _pendingPresetIndex;
+  std::atomic<int> _pendingCodecPresetIndex;
   std::atomic<int> _pendingQualityMode;
+  std::atomic<float> _pendingCodecAmount;
+  std::atomic<uint64_t> _requestedGeneration;
   std::atomic<bool> _processingScheduled;
   std::atomic<bool> _stopping;
   std::atomic<bool> _displayEnqueuePending;
   std::atomic<uint64_t> _droppedCaptureFrames;
+  std::atomic<uint64_t> _droppedCodecSubmissions;
+  std::atomic<uint64_t> _codecRecoveryFrames;
+  ProcessingLane _activeLane;
+  uint64_t _activeGeneration;
   int _activePresetIndex;
+  int _activeCodecPresetIndex;
   QualityMode _activeQualityMode;
   bool _activeFastMatch;
   uint32_t _governorReuseFrames;
@@ -310,6 +520,10 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   std::chrono::steady_clock::time_point _rateStart;
   double _smoothedTotalMilliseconds;
   double _smoothedGpuMilliseconds;
+  std::mutex _codecMetricsMutex;
+  uint64_t _codecRateFrameCount;
+  std::chrono::steady_clock::time_point _codecRateStart;
+  double _smoothedCodecLatencyMilliseconds;
   id _activityToken;
 }
 @end
@@ -320,16 +534,26 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   self = [super init];
   if (self != nil) {
     _captureQueue = dispatch_queue_create("ws.daito.glic.webcam.capture",
-                                           DISPATCH_QUEUE_SERIAL);
+                                          DISPATCH_QUEUE_SERIAL);
     _processingQueue = dispatch_queue_create("ws.daito.glic.webcam.processing",
-                                              DISPATCH_QUEUE_SERIAL);
+                                             DISPATCH_QUEUE_SERIAL);
+    _codecPresets = makeCodecPresetChoices();
+    _pendingLane.store(static_cast<int>(ProcessingLane::OriginalVisual));
     _pendingPresetIndex.store(-1);
+    _pendingCodecPresetIndex.store(0);
     _pendingQualityMode.store(static_cast<int>(QualityMode::Auto20));
+    _pendingCodecAmount.store(_codecPresets.front().controls.amount);
+    _requestedGeneration.store(1);
     _processingScheduled.store(false);
     _stopping.store(false);
     _displayEnqueuePending.store(false);
     _droppedCaptureFrames.store(0);
+    _droppedCodecSubmissions.store(0);
+    _codecRecoveryFrames.store(0);
+    _activeLane = ProcessingLane::OriginalVisual;
+    _activeGeneration = 0;
     _activePresetIndex = -1;
+    _activeCodecPresetIndex = -1;
     _activeQualityMode = QualityMode::Auto20;
     _activeFastMatch = false;
     _governorReuseFrames = 2;
@@ -339,6 +563,9 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
     _rateStart = std::chrono::steady_clock::now();
     _smoothedTotalMilliseconds = 0.0;
     _smoothedGpuMilliseconds = 0.0;
+    _codecRateFrameCount = 0;
+    _codecRateStart = std::chrono::steady_clock::now();
+    _smoothedCodecLatencyMilliseconds = 0.0;
     _displayPixelBufferPool = nullptr;
     _displayFormatDescription = nullptr;
   }
@@ -350,15 +577,28 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   _activityToken = [NSProcessInfo.processInfo
       beginActivityWithOptions:(NSActivityUserInitiatedAllowingIdleSystemSleep |
                                 NSActivityLatencyCritical)
-                      reason:@"Realtime webcam Metal processing"];
+                        reason:@"Realtime webcam Metal and video codec "
+                               @"processing"];
   [self buildWindow];
   [self loadPresetMenu];
   [self requestCameraAccessAndStart];
-  [_window makeKeyAndOrderFront:nil];
+  if (NSApp.isActive)
+    [_window makeKeyAndOrderFront:nil];
+  else
+    [_window orderFront:nil];
 }
 
-- (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
+- (BOOL)applicationShouldTerminateAfterLastWindowClosed:
+    (NSApplication *)sender {
   (void)sender;
+  return YES;
+}
+
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender
+                    hasVisibleWindows:(BOOL)hasVisibleWindows {
+  (void)sender;
+  if (!hasVisibleWindows)
+    [_window makeKeyAndOrderFront:nil];
   return YES;
 }
 
@@ -373,10 +613,29 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
     });
   }
   if (_processingQueue != nil)
-    dispatch_sync(_processingQueue, ^{ self->_lane.reset(); });
-  if (_displayFormatDescription != nullptr) {
-    CFRelease(_displayFormatDescription);
-    _displayFormatDescription = nullptr;
+    dispatch_sync(_processingQueue, ^{
+      if (self->_codecLane) {
+        self->_codecLane->setOutputCallback({});
+        std::string flushError;
+        self->_codecLane->flush(std::chrono::milliseconds(750), flushError);
+        self->_codecLane.reset();
+      }
+      self->_lane.reset();
+      std::lock_guard lock(self->_frameSlotMutex);
+      for (auto &slot : self->_frameSlots) {
+        if (slot.pixelBuffer != nullptr) {
+          CFRelease(slot.pixelBuffer);
+          slot.pixelBuffer = nullptr;
+        }
+        slot.state = FrameSlotState::Empty;
+      }
+    });
+  {
+    std::lock_guard lock(_displayFormatMutex);
+    if (_displayFormatDescription != nullptr) {
+      CFRelease(_displayFormatDescription);
+      _displayFormatDescription = nullptr;
+    }
   }
   if (_displayPixelBufferPool != nullptr) {
     CFRelease(_displayPixelBufferPool);
@@ -397,14 +656,15 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
                   backing:NSBackingStoreBuffered
                     defer:NO];
   _window.title = @"GLIC Webcam Preview";
-  _window.minSize = NSMakeSize(720, 460);
+  _window.minSize = NSMakeSize(720, 480);
   [_window setFrameAutosaveName:@"GLICWebcamPreviewWindow"];
 
   NSView *content = [[NSView alloc] initWithFrame:_window.contentView.bounds];
   content.translatesAutoresizingMaskIntoConstraints = NO;
   _window.contentView = content;
 
-  NSVisualEffectView *header = [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
+  NSVisualEffectView *header =
+      [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
   header.translatesAutoresizingMaskIntoConstraints = NO;
   header.material = NSVisualEffectMaterialHeaderView;
   header.blendingMode = NSVisualEffectBlendingModeWithinWindow;
@@ -414,6 +674,15 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   title.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
   title.textColor = NSColor.secondaryLabelColor;
 
+  _lanePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+  _lanePopup.translatesAutoresizingMaskIntoConstraints = NO;
+  [_lanePopup addItemsWithTitles:@[ @"Original Visual", @"Codec Glitch" ]];
+  [_lanePopup selectItemAtIndex:0];
+  _lanePopup.target = self;
+  _lanePopup.action = @selector(selectLane:);
+  _lanePopup.toolTip =
+      @"Choose the original GLIC image lane or H.264 codec glitch lane";
+
   _presetPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
   _presetPopup.translatesAutoresizingMaskIntoConstraints = NO;
   _presetPopup.target = self;
@@ -422,24 +691,65 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
 
   _qualityPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
   _qualityPopup.translatesAutoresizingMaskIntoConstraints = NO;
-  [_qualityPopup addItemsWithTitles:@[ @"Strict", @"Fast Match", @"Auto 20fps" ]];
+  [_qualityPopup
+      addItemsWithTitles:@[ @"Strict", @"Fast Match", @"Auto 20fps" ]];
   [_qualityPopup selectItemAtIndex:static_cast<NSInteger>(QualityMode::Auto20)];
   _qualityPopup.target = self;
   _qualityPopup.action = @selector(selectQuality:);
   _qualityPopup.toolTip = @"Strict fidelity or realtime Fast Match policy";
 
+  _codecAmountLabel = [NSTextField labelWithString:@"Amount 70%"];
+  _codecAmountLabel.translatesAutoresizingMaskIntoConstraints = NO;
+  _codecAmountLabel.font =
+      [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
+  _codecAmountSlider = [NSSlider sliderWithValue:0.70
+                                        minValue:0.0
+                                        maxValue:1.0
+                                          target:self
+                                          action:@selector(changeCodecAmount:)];
+  _codecAmountSlider.translatesAutoresizingMaskIntoConstraints = NO;
+  _codecAmountSlider.continuous = YES;
+  _codecAmountSlider.toolTip =
+      @"Codec quality, post-effect, and feedback intensity";
+  _codecResetButton = [NSButton buttonWithTitle:@"Reset"
+                                         target:self
+                                         action:@selector(resetCodecStream:)];
+  _codecResetButton.translatesAutoresizingMaskIntoConstraints = NO;
+  _codecResetButton.bezelStyle = NSBezelStyleRounded;
+  _codecResetButton.toolTip =
+      @"Clear codec history and request a clean recovery frame";
+  _codecControlsStack = [[NSStackView alloc] initWithFrame:NSZeroRect];
+  [_codecControlsStack addArrangedSubview:_codecAmountLabel];
+  [_codecControlsStack addArrangedSubview:_codecAmountSlider];
+  [_codecControlsStack addArrangedSubview:_codecResetButton];
+  _codecControlsStack.translatesAutoresizingMaskIntoConstraints = NO;
+  _codecControlsStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+  _codecControlsStack.alignment = NSLayoutAttributeCenterY;
+  _codecControlsStack.spacing = 8;
+  _codecControlsStack.hidden = YES;
+
   _statusLabel = [NSTextField labelWithString:@"Starting…"];
   _statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
   _statusLabel.font = [NSFont monospacedSystemFontOfSize:12
-                                                 weight:NSFontWeightMedium];
+                                                  weight:NSFontWeightMedium];
   _statusLabel.alignment = NSTextAlignmentRight;
+  _statusLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
+  [_statusLabel
+      setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                               forOrientation:
+                                   NSLayoutConstraintOrientationHorizontal];
 
   _metricsLabel = [NSTextField labelWithString:@"960×540 · ≥20 fps"];
   _metricsLabel.translatesAutoresizingMaskIntoConstraints = NO;
-  _metricsLabel.font = [NSFont monospacedDigitSystemFontOfSize:11
-                                                     weight:NSFontWeightRegular];
+  _metricsLabel.font =
+      [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
   _metricsLabel.textColor = NSColor.secondaryLabelColor;
   _metricsLabel.alignment = NSTextAlignmentRight;
+  _metricsLabel.lineBreakMode = NSLineBreakByTruncatingHead;
+  [_metricsLabel
+      setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                               forOrientation:
+                                   NSLayoutConstraintOrientationHorizontal];
 
   NSStackView *rightStack = [[NSStackView alloc] initWithFrame:NSZeroRect];
   [rightStack addArrangedSubview:_statusLabel];
@@ -450,8 +760,10 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   rightStack.spacing = 2;
 
   [header addSubview:title];
+  [header addSubview:_lanePopup];
   [header addSubview:_presetPopup];
   [header addSubview:_qualityPopup];
+  [header addSubview:_codecControlsStack];
   [header addSubview:rightStack];
 
   _previewView = [[GLICPreviewView alloc] initWithFrame:NSZeroRect];
@@ -464,25 +776,42 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
     [header.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
     [header.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
     [header.topAnchor constraintEqualToAnchor:content.topAnchor],
-    [header.heightAnchor constraintEqualToConstant:64],
-    [title.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:18],
-    [title.centerYAnchor constraintEqualToAnchor:header.centerYAnchor],
-    [_presetPopup.leadingAnchor constraintEqualToAnchor:title.trailingAnchor
-                                                constant:18],
-    [_presetPopup.centerYAnchor constraintEqualToAnchor:header.centerYAnchor],
-    [_presetPopup.widthAnchor constraintEqualToConstant:250],
-    [_qualityPopup.leadingAnchor constraintEqualToAnchor:_presetPopup.trailingAnchor
-                                                 constant:10],
-    [_qualityPopup.centerYAnchor constraintEqualToAnchor:header.centerYAnchor],
+    [header.heightAnchor constraintEqualToConstant:92],
+    [title.leadingAnchor constraintEqualToAnchor:header.leadingAnchor
+                                        constant:18],
+    [title.topAnchor constraintEqualToAnchor:header.topAnchor constant:14],
+    [_lanePopup.leadingAnchor constraintEqualToAnchor:header.leadingAnchor
+                                             constant:18],
+    [_lanePopup.bottomAnchor constraintEqualToAnchor:header.bottomAnchor
+                                            constant:-10],
+    [_lanePopup.widthAnchor constraintEqualToConstant:150],
+    [_presetPopup.leadingAnchor
+        constraintEqualToAnchor:_lanePopup.trailingAnchor
+                       constant:8],
+    [_presetPopup.centerYAnchor
+        constraintEqualToAnchor:_lanePopup.centerYAnchor],
+    [_presetPopup.widthAnchor constraintEqualToConstant:220],
+    [_qualityPopup.leadingAnchor
+        constraintEqualToAnchor:_presetPopup.trailingAnchor
+                       constant:8],
+    [_qualityPopup.centerYAnchor
+        constraintEqualToAnchor:_lanePopup.centerYAnchor],
     [_qualityPopup.widthAnchor constraintEqualToConstant:128],
+    [_codecControlsStack.leadingAnchor
+        constraintEqualToAnchor:_presetPopup.trailingAnchor
+                       constant:8],
+    [_codecControlsStack.centerYAnchor
+        constraintEqualToAnchor:_lanePopup.centerYAnchor],
+    [_codecAmountSlider.widthAnchor constraintEqualToConstant:96],
     [rightStack.trailingAnchor constraintEqualToAnchor:header.trailingAnchor
-                                               constant:-18],
-    [rightStack.centerYAnchor constraintEqualToAnchor:header.centerYAnchor],
-    [rightStack.leadingAnchor constraintGreaterThanOrEqualToAnchor:
-                                  _qualityPopup.trailingAnchor
-                                                         constant:18],
+                                              constant:-18],
+    [rightStack.topAnchor constraintEqualToAnchor:header.topAnchor constant:8],
+    [rightStack.leadingAnchor
+        constraintGreaterThanOrEqualToAnchor:title.trailingAnchor
+                                    constant:18],
     [_previewView.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
-    [_previewView.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+    [_previewView.trailingAnchor
+        constraintEqualToAnchor:content.trailingAnchor],
     [_previewView.topAnchor constraintEqualToAnchor:header.bottomAnchor],
     [_previewView.bottomAnchor constraintEqualToAnchor:content.bottomAnchor],
   ]];
@@ -496,11 +825,28 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
                                                            action:nil
                                                     keyEquivalent:@""];
   [mainMenu addItem:applicationItem];
-  NSMenu *applicationMenu = [[NSMenu alloc] initWithTitle:@"GLIC Webcam Preview"];
+  NSMenu *applicationMenu =
+      [[NSMenu alloc] initWithTitle:@"GLIC Webcam Preview"];
   [applicationMenu addItemWithTitle:@"Quit GLIC Webcam Preview"
-                              action:@selector(terminate:)
-                       keyEquivalent:@"q"];
+                             action:@selector(terminate:)
+                      keyEquivalent:@"q"];
   applicationItem.submenu = applicationMenu;
+
+  NSMenuItem *laneItem = [[NSMenuItem alloc] initWithTitle:@"Lane"
+                                                    action:nil
+                                             keyEquivalent:@""];
+  [mainMenu addItem:laneItem];
+  _laneMenu = [[NSMenu alloc] initWithTitle:@"Lane"];
+  for (NSInteger index = 0; index < 2; ++index) {
+    NSMenuItem *item = [[NSMenuItem alloc]
+        initWithTitle:@[ @"Original Visual", @"Codec Glitch" ][index]
+               action:@selector(selectLane:)
+        keyEquivalent:@""];
+    item.target = self;
+    item.tag = index;
+    [_laneMenu addItem:item];
+  }
+  laneItem.submenu = _laneMenu;
 
   NSMenuItem *presetItem = [[NSMenuItem alloc] initWithTitle:@"Preset"
                                                       action:nil
@@ -509,10 +855,10 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   _presetMenu = [[NSMenu alloc] initWithTitle:@"Preset"];
   presetItem.submenu = _presetMenu;
 
-  NSMenuItem *qualityItem = [[NSMenuItem alloc] initWithTitle:@"Quality"
-                                                      action:nil
-                                               keyEquivalent:@""];
-  [mainMenu addItem:qualityItem];
+  _qualityRootMenuItem = [[NSMenuItem alloc] initWithTitle:@"Quality"
+                                                    action:nil
+                                             keyEquivalent:@""];
+  [mainMenu addItem:_qualityRootMenuItem];
   _qualityMenu = [[NSMenu alloc] initWithTitle:@"Quality"];
   for (NSInteger index = 0; index < 3; ++index) {
     NSMenuItem *item = [[NSMenuItem alloc]
@@ -523,16 +869,16 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
     item.tag = index;
     [_qualityMenu addItem:item];
   }
-  qualityItem.submenu = _qualityMenu;
+  _qualityRootMenuItem.submenu = _qualityMenu;
   NSApp.mainMenu = mainMenu;
 }
 
 - (void)loadFastMatchAllowlist {
   _fastMatchAllowlist.clear();
   NSMutableArray<NSString *> *candidates = [NSMutableArray array];
-  NSString *bundlePath = [NSBundle.mainBundle
-      pathForResource:@"fast-match-allowlist"
-               ofType:@"json"];
+  NSString *bundlePath =
+      [NSBundle.mainBundle pathForResource:@"fast-match-allowlist"
+                                    ofType:@"json"];
   if (bundlePath != nil)
     [candidates addObject:bundlePath];
   [candidates addObject:@"config/fast-match-allowlist.json"];
@@ -559,6 +905,75 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   }
 }
 
+- (void)rebuildPresetControls {
+  const auto lane =
+      static_cast<ProcessingLane>(_pendingLane.load(std::memory_order_acquire));
+  [_presetPopup removeAllItems];
+  [_presetMenu removeAllItems];
+
+  if (lane == ProcessingLane::OriginalVisual) {
+    for (std::size_t index = 0; index < _presets.size(); ++index) {
+      NSString *name =
+          [NSString stringWithUTF8String:_presets[index].name.c_str()];
+      [_presetPopup addItemWithTitle:name];
+      NSMenuItem *item =
+          [[NSMenuItem alloc] initWithTitle:name
+                                     action:@selector(selectPreset:)
+                              keyEquivalent:@""];
+      item.target = self;
+      item.tag = static_cast<NSInteger>(index);
+      [_presetMenu addItem:item];
+    }
+    int index = _pendingPresetIndex.load(std::memory_order_acquire);
+    if (index < 0 || static_cast<std::size_t>(index) >= _presets.size())
+      index = 0;
+    [_presetPopup selectItemAtIndex:index];
+    _presetPopup.toolTip = @"Original GLIC preset";
+    _qualityPopup.hidden = NO;
+    _codecControlsStack.hidden = YES;
+    _qualityRootMenuItem.enabled = YES;
+  } else {
+    for (std::size_t index = 0; index < _codecPresets.size(); ++index) {
+      NSString *title =
+          [NSString stringWithUTF8String:_codecPresets[index].title];
+      [_presetPopup addItemWithTitle:title];
+      NSMenuItem *item =
+          [[NSMenuItem alloc] initWithTitle:title
+                                     action:@selector(selectPreset:)
+                              keyEquivalent:@""];
+      item.target = self;
+      item.tag = static_cast<NSInteger>(index);
+      [_presetMenu addItem:item];
+    }
+    int index = _pendingCodecPresetIndex.load(std::memory_order_acquire);
+    if (index < 0 || static_cast<std::size_t>(index) >= _codecPresets.size())
+      index = 0;
+    [_presetPopup selectItemAtIndex:index];
+    const float amount = _pendingCodecAmount.load(std::memory_order_acquire);
+    _codecAmountSlider.doubleValue = amount;
+    _codecAmountLabel.stringValue =
+        [NSString stringWithFormat:@"Amount %.0f%%", amount * 100.0f];
+    _presetPopup.toolTip = @"Stateful H.264 codec glitch preset";
+    _qualityPopup.hidden = YES;
+    _codecControlsStack.hidden = NO;
+    _qualityRootMenuItem.enabled = NO;
+  }
+
+  [_lanePopup selectItemAtIndex:static_cast<NSInteger>(lane)];
+  for (NSMenuItem *item in _laneMenu.itemArray)
+    item.state = item.tag == static_cast<NSInteger>(lane)
+                     ? NSControlStateValueOn
+                     : NSControlStateValueOff;
+  const NSInteger quality = _qualityPopup.indexOfSelectedItem;
+  for (NSMenuItem *item in _qualityMenu.itemArray)
+    item.state =
+        item.tag == quality ? NSControlStateValueOn : NSControlStateValueOff;
+  const NSInteger selected = _presetPopup.indexOfSelectedItem;
+  for (NSMenuItem *item in _presetMenu.itemArray)
+    item.state =
+        item.tag == selected ? NSControlStateValueOn : NSControlStateValueOff;
+}
+
 - (void)loadPresetMenu {
   const auto directory = findPresetDirectory();
   if (!directory) {
@@ -575,23 +990,27 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
     return;
   }
 
-  [_presetPopup removeAllItems];
-  [_presetMenu removeAllItems];
-  for (std::size_t index = 0; index < _presets.size(); ++index) {
-    NSString *name = [NSString stringWithUTF8String:_presets[index].name.c_str()];
-    [_presetPopup addItemWithTitle:name];
-    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:name
-                                                  action:@selector(selectPreset:)
-                                           keyEquivalent:@""];
-    item.target = self;
-    item.tag = static_cast<NSInteger>(index);
-    [_presetMenu addItem:item];
-  }
   int initialIndex = findPresetIndex(_presets, "vv02");
   if (initialIndex < 0)
     initialIndex = 0;
-  [_presetPopup selectItemAtIndex:initialIndex];
   _pendingPresetIndex.store(initialIndex, std::memory_order_release);
+  [self rebuildPresetControls];
+}
+
+- (void)selectLane:(id)sender {
+  NSInteger index = -1;
+  if ([sender isKindOfClass:NSPopUpButton.class])
+    index = [(NSPopUpButton *)sender indexOfSelectedItem];
+  else if ([sender isKindOfClass:NSMenuItem.class])
+    index = [(NSMenuItem *)sender tag];
+  if (index < 0 || index > static_cast<NSInteger>(ProcessingLane::CodecGlitch))
+    return;
+  const int previous = _pendingLane.exchange(static_cast<int>(index));
+  if (previous != static_cast<int>(index))
+    _requestedGeneration.fetch_add(1, std::memory_order_acq_rel);
+  [self rebuildPresetControls];
+  [self flushPreviewRenderer];
+  [self showStatus:@"Switching processing lane…" error:NO];
 }
 
 - (void)selectPreset:(id)sender {
@@ -600,10 +1019,34 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
     index = [(NSPopUpButton *)sender indexOfSelectedItem];
   else if ([sender isKindOfClass:NSMenuItem.class])
     index = [(NSMenuItem *)sender tag];
-  if (index < 0 || static_cast<std::size_t>(index) >= _presets.size())
+  const auto lane =
+      static_cast<ProcessingLane>(_pendingLane.load(std::memory_order_acquire));
+  const std::size_t count = lane == ProcessingLane::OriginalVisual
+                                ? _presets.size()
+                                : _codecPresets.size();
+  if (index < 0 || static_cast<std::size_t>(index) >= count)
     return;
   [_presetPopup selectItemAtIndex:index];
-  _pendingPresetIndex.store(static_cast<int>(index), std::memory_order_release);
+  if (lane == ProcessingLane::OriginalVisual) {
+    const int previous = _pendingPresetIndex.exchange(static_cast<int>(index));
+    if (previous != static_cast<int>(index))
+      _requestedGeneration.fetch_add(1, std::memory_order_acq_rel);
+  } else {
+    const int previous =
+        _pendingCodecPresetIndex.exchange(static_cast<int>(index));
+    const float amount =
+        _codecPresets[static_cast<std::size_t>(index)].controls.amount;
+    _pendingCodecAmount.store(amount, std::memory_order_release);
+    _codecAmountSlider.doubleValue = amount;
+    _codecAmountLabel.stringValue =
+        [NSString stringWithFormat:@"Amount %.0f%%", amount * 100.0f];
+    if (previous != static_cast<int>(index))
+      _requestedGeneration.fetch_add(1, std::memory_order_acq_rel);
+  }
+  for (NSMenuItem *item in _presetMenu.itemArray)
+    item.state =
+        item.tag == index ? NSControlStateValueOn : NSControlStateValueOff;
+  [self flushPreviewRenderer];
   [self showStatus:@"Switching preset…" error:NO];
 }
 
@@ -616,9 +1059,30 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   if (index < 0 || index > static_cast<NSInteger>(QualityMode::Auto20))
     return;
   [_qualityPopup selectItemAtIndex:index];
-  _pendingQualityMode.store(static_cast<int>(index),
-                            std::memory_order_release);
+  const int previous = _pendingQualityMode.exchange(static_cast<int>(index));
+  if (previous != static_cast<int>(index))
+    _requestedGeneration.fetch_add(1, std::memory_order_acq_rel);
+  for (NSMenuItem *item in _qualityMenu.itemArray)
+    item.state =
+        item.tag == index ? NSControlStateValueOn : NSControlStateValueOff;
   [self showStatus:@"Switching quality…" error:NO];
+}
+
+- (void)changeCodecAmount:(NSSlider *)sender {
+  const float amount = static_cast<float>(sender.doubleValue);
+  _pendingCodecAmount.store(amount, std::memory_order_release);
+  _codecAmountLabel.stringValue =
+      [NSString stringWithFormat:@"Amount %.0f%%", amount * 100.0f];
+}
+
+- (void)resetCodecStream:(id)sender {
+  (void)sender;
+  if (static_cast<ProcessingLane>(_pendingLane.load()) !=
+      ProcessingLane::CodecGlitch)
+    return;
+  _requestedGeneration.fetch_add(1, std::memory_order_acq_rel);
+  [self flushPreviewRenderer];
+  [self showStatus:@"Resetting codec stream…" error:NO];
 }
 
 - (void)requestCameraAccessAndStart {
@@ -640,17 +1104,16 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
                                  if (granted)
                                    [strongSelf startCapture];
                                  else
-                                   [strongSelf showStatus:
-                                                   @"Camera permission denied"
-                                                        error:YES];
+                                   [strongSelf
+                                       showStatus:@"Camera permission denied"
+                                            error:YES];
                                });
                              }];
     return;
   }
-  [self showStatus:[NSString
-                       stringWithFormat:@"Camera access %@",
-                                        authorizationStatusName(status)]
-                  error:YES];
+  [self showStatus:[NSString stringWithFormat:@"Camera access %@",
+                                              authorizationStatusName(status)]
+             error:YES];
 }
 
 - (void)startCapture {
@@ -763,15 +1226,29 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   });
 }
 
-- (bool)activatePendingPreset:(std::string &)error {
+- (void)deactivateCodecLane {
+  if (!_codecLane)
+    return;
+  _codecLane->setOutputCallback({});
+  std::string flushError;
+  _codecLane->flush(std::chrono::milliseconds(750), flushError);
+  _codecLane.reset();
+  _activeCodecPresetIndex = -1;
+}
+
+- (bool)activatePendingOriginalPreset:(std::string &)error {
   const int pending = _pendingPresetIndex.load(std::memory_order_acquire);
   const int pendingQuality =
       _pendingQualityMode.load(std::memory_order_acquire);
   if (pending < 0)
     return false;
   const auto requestedQuality = static_cast<QualityMode>(pendingQuality);
-  if (pending == _activePresetIndex && requestedQuality == _activeQualityMode)
+  if (_activeLane == ProcessingLane::OriginalVisual &&
+      pending == _activePresetIndex && requestedQuality == _activeQualityMode &&
+      _lane != nullptr) {
+    _activeGeneration = _requestedGeneration.load(std::memory_order_acquire);
     return _lane != nullptr;
+  }
   if (static_cast<std::size_t>(pending) >= _presets.size()) {
     error = "Preset index is out of range";
     return false;
@@ -779,10 +1256,9 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
 
   const std::string &presetName =
       _presets[static_cast<std::size_t>(pending)].name;
-  const bool useFastMatch =
-      requestedQuality == QualityMode::FastMatch ||
-      (requestedQuality == QualityMode::Auto20 &&
-       _fastMatchAllowlist.contains(presetName));
+  const bool useFastMatch = requestedQuality == QualityMode::FastMatch ||
+                            (requestedQuality == QualityMode::Auto20 &&
+                             _fastMatchAllowlist.contains(presetName));
   auto candidate = glic::createOriginalRealtimeMetalLane(
       laneOptions(useFastMatch ? QualityMode::FastMatch : QualityMode::Strict),
       error);
@@ -791,12 +1267,14 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
                           _presets[static_cast<std::size_t>(pending)].config,
                           error))
     return false;
+  [self deactivateCodecLane];
   _lane = std::move(candidate);
+  _activeLane = ProcessingLane::OriginalVisual;
+  _activeGeneration = _requestedGeneration.load(std::memory_order_acquire);
   _activePresetIndex = pending;
   _activeQualityMode = requestedQuality;
   _activeFastMatch = useFastMatch;
-  _governorReuseFrames =
-      useFastMatch ? 2u : 1u;
+  _governorReuseFrames = useFastMatch ? 2u : 1u;
   _frameIndex = 0;
   _droppedCaptureFrames.store(0, std::memory_order_release);
   _rateFrameCount = 0;
@@ -806,10 +1284,102 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   return true;
 }
 
+- (bool)activatePendingCodecPreset:(std::string &)error {
+  const int pending = _pendingCodecPresetIndex.load(std::memory_order_acquire);
+  if (pending < 0 ||
+      static_cast<std::size_t>(pending) >= _codecPresets.size()) {
+    error = "Codec preset index is out of range";
+    return false;
+  }
+
+  const uint64_t requestedGeneration =
+      _requestedGeneration.load(std::memory_order_acquire);
+  const float requestedAmount =
+      _pendingCodecAmount.load(std::memory_order_acquire);
+  if (_activeLane == ProcessingLane::CodecGlitch && _codecLane != nullptr &&
+      _activeCodecPresetIndex == pending &&
+      _activeGeneration == requestedGeneration) {
+    auto controls = _codecLane->controls();
+    if (std::abs(controls.amount - requestedAmount) > 0.0001f) {
+      controls.amount = requestedAmount;
+      _codecLane->setControls(controls);
+    }
+    return true;
+  }
+
+  _lane.reset();
+  _activePresetIndex = -1;
+  if (_codecLane) {
+    _codecLane->setOutputCallback({});
+    std::string drainError;
+    const bool drained =
+        _codecLane->flush(std::chrono::milliseconds(750), drainError);
+    if (!drained || !_codecLane->reset(error))
+      _codecLane.reset();
+  }
+  if (!_codecLane) {
+    glic::CodecGlitchConfiguration configuration;
+    configuration.width = kProcessingWidth;
+    configuration.height = kProcessingHeight;
+    configuration.framesPerSecond = 30;
+    configuration.maximumInFlightFrames = 4;
+    _codecLane = glic::createCodecGlitchEngine(configuration, error);
+    if (!_codecLane)
+      return false;
+  }
+
+  auto controls = _codecPresets[static_cast<std::size_t>(pending)].controls;
+  controls.amount = requestedAmount;
+  _codecLane->setControls(controls);
+  _activeLane = ProcessingLane::CodecGlitch;
+  _activeGeneration = requestedGeneration;
+  _activeCodecPresetIndex = pending;
+  _frameIndex = 0;
+  _droppedCaptureFrames.store(0, std::memory_order_release);
+  _droppedCodecSubmissions.store(0, std::memory_order_release);
+  _codecRecoveryFrames.store(0, std::memory_order_release);
+  {
+    std::lock_guard lock(_codecMetricsMutex);
+    _codecRateFrameCount = 0;
+    _codecRateStart = std::chrono::steady_clock::now();
+    _smoothedCodecLatencyMilliseconds = 0.0;
+  }
+
+  __weak GLICAppController *weakSelf = self;
+  const uint64_t callbackGeneration = _activeGeneration;
+  _codecLane->setOutputCallback([weakSelf, callbackGeneration](
+                                    const glic::CodecGlitchFrame &frame) {
+    @autoreleasepool {
+      GLICAppController *strongSelf = weakSelf;
+      if (strongSelf == nil ||
+          strongSelf->_stopping.load(std::memory_order_acquire) ||
+          strongSelf->_requestedGeneration.load(std::memory_order_acquire) !=
+              callbackGeneration)
+        return;
+      if (frame.watchdogRecoveryFrame)
+        strongSelf->_codecRecoveryFrames.fetch_add(1,
+                                                   std::memory_order_relaxed);
+      [strongSelf recordCodecOutput:frame generation:callbackGeneration];
+      [strongSelf presentOutputPixelBuffer:frame.pixelBuffer()
+                                generation:callbackGeneration];
+    }
+  });
+  return true;
+}
+
+- (bool)activatePendingProcessingLane:(std::string &)error {
+  const auto lane =
+      static_cast<ProcessingLane>(_pendingLane.load(std::memory_order_acquire));
+  if (lane == ProcessingLane::CodecGlitch)
+    return [self activatePendingCodecPreset:error];
+  return [self activatePendingOriginalPreset:error];
+}
+
 - (bool)copyOrScaleInputPixelBuffer:(CVPixelBufferRef)pixelBuffer
-                         destination:(std::vector<glic::Color> &)pixels {
+                        destination:(std::vector<glic::Color> &)pixels {
   const int sourceWidth = static_cast<int>(CVPixelBufferGetWidth(pixelBuffer));
-  const int sourceHeight = static_cast<int>(CVPixelBufferGetHeight(pixelBuffer));
+  const int sourceHeight =
+      static_cast<int>(CVPixelBufferGetHeight(pixelBuffer));
   const std::size_t sourceRowBytes = CVPixelBufferGetBytesPerRow(pixelBuffer);
   const auto *source =
       static_cast<const uint8_t *>(CVPixelBufferGetBaseAddress(pixelBuffer));
@@ -824,17 +1394,18 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
       std::memcpy(destination, source, destinationRowBytes * kProcessingHeight);
     } else {
       for (int y = 0; y < kProcessingHeight; ++y)
-        std::memcpy(destination + static_cast<std::size_t>(y) *
-                                      destinationRowBytes,
+        std::memcpy(destination +
+                        static_cast<std::size_t>(y) * destinationRowBytes,
                     source + static_cast<std::size_t>(y) * sourceRowBytes,
                     destinationRowBytes);
     }
     return true;
   }
 
-  vImage_Buffer sourceBuffer = {
-      const_cast<uint8_t *>(source), static_cast<vImagePixelCount>(sourceHeight),
-      static_cast<vImagePixelCount>(sourceWidth), sourceRowBytes};
+  vImage_Buffer sourceBuffer = {const_cast<uint8_t *>(source),
+                                static_cast<vImagePixelCount>(sourceHeight),
+                                static_cast<vImagePixelCount>(sourceWidth),
+                                sourceRowBytes};
   vImage_Buffer destinationBuffer = {
       destination, static_cast<vImagePixelCount>(kProcessingHeight),
       static_cast<vImagePixelCount>(kProcessingWidth), destinationRowBytes};
@@ -842,50 +1413,49 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
                               kvImageHighQualityResampling) == kvImageNoError;
 }
 
-- (void)presentOutputFrame:(const std::vector<glic::Color> &)pixels {
-  if (_displayPixelBufferPool == nullptr ||
+- (void)flushPreviewRenderer {
+  if (!NSThread.isMainThread) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [self flushPreviewRenderer];
+    });
+    return;
+  }
+  [self->_previewView.sampleBufferLayer.sampleBufferRenderer flush];
+}
+
+- (void)presentOutputPixelBuffer:(CVPixelBufferRef)pixelBuffer
+                      generation:(uint64_t)generation {
+  if (pixelBuffer == nullptr ||
+      generation != _requestedGeneration.load(std::memory_order_acquire) ||
       _displayEnqueuePending.exchange(true, std::memory_order_acq_rel))
     return;
 
-  CVPixelBufferRef displayPixelBuffer = nullptr;
-  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault,
-                                         _displayPixelBufferPool,
-                                         &displayPixelBuffer) !=
-      kCVReturnSuccess) {
-    _displayEnqueuePending.store(false, std::memory_order_release);
-    return;
-  }
-  CVPixelBufferLockBaseAddress(displayPixelBuffer, 0);
-  auto *destination =
-      static_cast<uint8_t *>(CVPixelBufferGetBaseAddress(displayPixelBuffer));
-  const std::size_t destinationRowBytes =
-      CVPixelBufferGetBytesPerRow(displayPixelBuffer);
-  constexpr std::size_t sourceRowBytes =
-      static_cast<std::size_t>(kProcessingWidth) * sizeof(glic::Color);
-  const auto *source =
-      reinterpret_cast<const uint8_t *>(pixels.data());
-  for (int y = 0; y < kProcessingHeight; ++y)
-    std::memcpy(destination + static_cast<std::size_t>(y) *
-                                  destinationRowBytes,
-                source + static_cast<std::size_t>(y) * sourceRowBytes,
-                sourceRowBytes);
-  CVPixelBufferUnlockBaseAddress(displayPixelBuffer, 0);
-
-  if (_displayFormatDescription == nullptr &&
-      CMVideoFormatDescriptionCreateForImageBuffer(
-          kCFAllocatorDefault, displayPixelBuffer,
-          &_displayFormatDescription) != noErr) {
-    CFRelease(displayPixelBuffer);
-    _displayEnqueuePending.store(false, std::memory_order_release);
-    return;
+  CMVideoFormatDescriptionRef formatDescription = nullptr;
+  {
+    std::lock_guard lock(_displayFormatMutex);
+    if (_displayFormatDescription == nullptr ||
+        !CMVideoFormatDescriptionMatchesImageBuffer(_displayFormatDescription,
+                                                    pixelBuffer)) {
+      CMVideoFormatDescriptionRef candidate = nullptr;
+      if (CMVideoFormatDescriptionCreateForImageBuffer(
+              kCFAllocatorDefault, pixelBuffer, &candidate) != noErr) {
+        _displayEnqueuePending.store(false, std::memory_order_release);
+        return;
+      }
+      if (_displayFormatDescription != nullptr)
+        CFRelease(_displayFormatDescription);
+      _displayFormatDescription = candidate;
+    }
+    formatDescription = _displayFormatDescription;
+    CFRetain(formatDescription);
   }
 
   CMSampleTimingInfo timing = kCMTimingInfoInvalid;
   CMSampleBufferRef sampleBuffer = nullptr;
   const OSStatus sampleStatus = CMSampleBufferCreateForImageBuffer(
-      kCFAllocatorDefault, displayPixelBuffer, true, nullptr, nullptr,
-      _displayFormatDescription, &timing, &sampleBuffer);
-  CFRelease(displayPixelBuffer);
+      kCFAllocatorDefault, pixelBuffer, true, nullptr, nullptr,
+      formatDescription, &timing, &sampleBuffer);
+  CFRelease(formatDescription);
   if (sampleStatus != noErr || sampleBuffer == nullptr) {
     _displayEnqueuePending.store(false, std::memory_order_release);
     return;
@@ -900,19 +1470,108 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   }
 
   dispatch_async(dispatch_get_main_queue(), ^{
-    AVSampleBufferDisplayLayer *layer = self->_previewView.sampleBufferLayer;
-    AVSampleBufferVideoRenderer *renderer = layer.sampleBufferRenderer;
-    if (renderer.status == AVQueuedSampleBufferRenderingStatusFailed)
-      [renderer flush];
-    [renderer enqueueSampleBuffer:sampleBuffer];
+    if (generation ==
+        self->_requestedGeneration.load(std::memory_order_acquire)) {
+      AVSampleBufferVideoRenderer *renderer =
+          self->_previewView.sampleBufferLayer.sampleBufferRenderer;
+      if (renderer.status == AVQueuedSampleBufferRenderingStatusFailed)
+        [renderer flush];
+      if (renderer.readyForMoreMediaData)
+        [renderer enqueueSampleBuffer:sampleBuffer];
+    }
     CFRelease(sampleBuffer);
     self->_displayEnqueuePending.store(false, std::memory_order_release);
+  });
+}
+
+- (void)presentOutputFrame:(const std::vector<glic::Color> &)pixels
+                generation:(uint64_t)generation {
+  if (_displayPixelBufferPool == nullptr ||
+      _displayEnqueuePending.load(std::memory_order_acquire))
+    return;
+
+  CVPixelBufferRef displayPixelBuffer = nullptr;
+  if (CVPixelBufferPoolCreatePixelBuffer(
+          kCFAllocatorDefault, _displayPixelBufferPool, &displayPixelBuffer) !=
+      kCVReturnSuccess)
+    return;
+  CVPixelBufferLockBaseAddress(displayPixelBuffer, 0);
+  auto *destination =
+      static_cast<uint8_t *>(CVPixelBufferGetBaseAddress(displayPixelBuffer));
+  const std::size_t destinationRowBytes =
+      CVPixelBufferGetBytesPerRow(displayPixelBuffer);
+  constexpr std::size_t sourceRowBytes =
+      static_cast<std::size_t>(kProcessingWidth) * sizeof(glic::Color);
+  const auto *source = reinterpret_cast<const uint8_t *>(pixels.data());
+  for (int y = 0; y < kProcessingHeight; ++y)
+    std::memcpy(destination + static_cast<std::size_t>(y) * destinationRowBytes,
+                source + static_cast<std::size_t>(y) * sourceRowBytes,
+                sourceRowBytes);
+  CVPixelBufferUnlockBaseAddress(displayPixelBuffer, 0);
+  [self presentOutputPixelBuffer:displayPixelBuffer generation:generation];
+  CFRelease(displayPixelBuffer);
+}
+
+- (void)recordCodecOutput:(const glic::CodecGlitchFrame &)frame
+               generation:(uint64_t)generation {
+  double processedFps = 0.0;
+  double latencyMilliseconds = 0.0;
+  bool publish = false;
+  {
+    std::lock_guard lock(_codecMetricsMutex);
+    constexpr double smoothing = 0.12;
+    if (_smoothedCodecLatencyMilliseconds == 0.0)
+      _smoothedCodecLatencyMilliseconds = frame.latencyMilliseconds;
+    else
+      _smoothedCodecLatencyMilliseconds +=
+          smoothing *
+          (frame.latencyMilliseconds - _smoothedCodecLatencyMilliseconds);
+    ++_codecRateFrameCount;
+    const auto now = std::chrono::steady_clock::now();
+    const double elapsed =
+        std::chrono::duration<double>(now - _codecRateStart).count();
+    if (elapsed >= 0.5) {
+      processedFps = static_cast<double>(_codecRateFrameCount) / elapsed;
+      latencyMilliseconds = _smoothedCodecLatencyMilliseconds;
+      _codecRateFrameCount = 0;
+      _codecRateStart = now;
+      publish = true;
+    }
+  }
+  if (!publish)
+    return;
+
+  const uint64_t captureDrops = _droppedCaptureFrames.load();
+  const uint64_t submitDrops = _droppedCodecSubmissions.load();
+  const uint64_t recoveries = _codecRecoveryFrames.load();
+  const std::string effect = glic::codecGlitchEffectName(frame.effect);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (generation !=
+        self->_requestedGeneration.load(std::memory_order_acquire))
+      return;
+    const bool realtime = processedFps >= kMinimumFramesPerSecond &&
+                          latencyMilliseconds <= kRealtimeBudgetMilliseconds;
+    self->_statusLabel.stringValue =
+        [NSString stringWithFormat:@"%@ · %s", realtime ? @"LIVE" : @"SLOW",
+                                   effect.c_str()];
+    self->_statusLabel.textColor =
+        realtime ? NSColor.systemGreenColor : NSColor.systemOrangeColor;
+    self->_metricsLabel.stringValue = [NSString
+        stringWithFormat:@"960×540  %.1f fps  Codec %.2f ms  H.264 HW  drop "
+                         @"%llu/%llu  rec %llu",
+                         processedFps, latencyMilliseconds,
+                         static_cast<unsigned long long>(captureDrops),
+                         static_cast<unsigned long long>(submitDrops),
+                         static_cast<unsigned long long>(recoveries)];
   });
 }
 
 - (void)processLatestFrames {
   while (!_stopping.load(std::memory_order_acquire)) {
     FrameSlot *slot = nullptr;
+    CVPixelBufferRef inputPixelBuffer = nullptr;
+    CMTime presentationTimeStamp = kCMTimeInvalid;
+    uint64_t captureSequence = 0;
     {
       std::lock_guard lock(_frameSlotMutex);
       int newest = -1;
@@ -931,16 +1590,26 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
       for (std::size_t index = 0; index < _frameSlots.size(); ++index) {
         if (static_cast<int>(index) != newest &&
             _frameSlots[index].state == FrameSlotState::Ready) {
+          if (_frameSlots[index].pixelBuffer != nullptr) {
+            CFRelease(_frameSlots[index].pixelBuffer);
+            _frameSlots[index].pixelBuffer = nullptr;
+          }
           _frameSlots[index].state = FrameSlotState::Empty;
           _droppedCaptureFrames.fetch_add(1, std::memory_order_relaxed);
         }
       }
       slot = &_frameSlots[static_cast<std::size_t>(newest)];
       slot->state = FrameSlotState::Processing;
+      inputPixelBuffer = slot->pixelBuffer;
+      slot->pixelBuffer = nullptr;
+      presentationTimeStamp = slot->presentationTimeStamp;
+      captureSequence = slot->sequence;
     }
 
     std::string error;
-    if (![self activatePendingPreset:error]) {
+    if (![self activatePendingProcessingLane:error]) {
+      if (inputPixelBuffer != nullptr)
+        CFRelease(inputPixelBuffer);
       {
         std::lock_guard lock(_frameSlotMutex);
         slot->state = FrameSlotState::Empty;
@@ -954,11 +1623,44 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
       return;
     }
 
+    if (_activeLane == ProcessingLane::CodecGlitch) {
+      const bool submitted =
+          inputPixelBuffer != nullptr &&
+          _codecLane->submit(inputPixelBuffer, captureSequence,
+                             presentationTimeStamp, error);
+      if (inputPixelBuffer != nullptr)
+        CFRelease(inputPixelBuffer);
+      {
+        std::lock_guard lock(_frameSlotMutex);
+        slot->state = FrameSlotState::Empty;
+      }
+      if (!submitted)
+        _droppedCodecSubmissions.fetch_add(1, std::memory_order_relaxed);
+      continue;
+    }
+
+    bool copied = false;
+    if (inputPixelBuffer != nullptr) {
+      CVPixelBufferLockBaseAddress(inputPixelBuffer,
+                                   kCVPixelBufferLock_ReadOnly);
+      copied = [self copyOrScaleInputPixelBuffer:inputPixelBuffer
+                                     destination:slot->input];
+      CVPixelBufferUnlockBaseAddress(inputPixelBuffer,
+                                     kCVPixelBufferLock_ReadOnly);
+      CFRelease(inputPixelBuffer);
+    }
+    if (!copied) {
+      std::lock_guard lock(_frameSlotMutex);
+      slot->state = FrameSlotState::Empty;
+      _droppedCaptureFrames.fetch_add(1, std::memory_order_relaxed);
+      continue;
+    }
+
     glic::OriginalRealtimeMetalFrameStats stats;
-    const bool processed = _lane->process(slot->input, slot->output,
-                                          _frameIndex++, &stats, error);
+    const bool processed =
+        _lane->process(slot->input, slot->output, _frameIndex++, &stats, error);
     if (processed)
-      [self presentOutputFrame:slot->output];
+      [self presentOutputFrame:slot->output generation:_activeGeneration];
     {
       std::lock_guard lock(_frameSlotMutex);
       slot->state = FrameSlotState::Empty;
@@ -1000,7 +1702,8 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
     const double elapsed =
         std::chrono::duration<double>(now - _rateStart).count();
     if (elapsed >= 0.5) {
-      const double processedFps = static_cast<double>(_rateFrameCount) / elapsed;
+      const double processedFps =
+          static_cast<double>(_rateFrameCount) / elapsed;
       const uint64_t dropped = _droppedCaptureFrames.load();
       const std::string preset =
           _presets[static_cast<std::size_t>(_activePresetIndex)].name;
@@ -1010,15 +1713,17 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
       const double totalMilliseconds = _smoothedTotalMilliseconds;
       const double gpuMilliseconds = _smoothedGpuMilliseconds;
       const uint32_t reuseFrames = _governorReuseFrames;
+      const uint64_t generation = _activeGeneration;
       _rateFrameCount = 0;
       _rateStart = now;
       dispatch_async(dispatch_get_main_queue(), ^{
-        const bool realtime =
-            processedFps >= kMinimumFramesPerSecond &&
-            totalMilliseconds <= kRealtimeBudgetMilliseconds;
-        NSString *status = [NSString
-            stringWithFormat:@"%@ · %s", realtime ? @"LIVE" : @"SLOW",
-                             preset.c_str()];
+        if (generation != self->_requestedGeneration.load())
+          return;
+        const bool realtime = processedFps >= kMinimumFramesPerSecond &&
+                              totalMilliseconds <= kRealtimeBudgetMilliseconds;
+        NSString *status =
+            [NSString stringWithFormat:@"%@ · %s", realtime ? @"LIVE" : @"SLOW",
+                                       preset.c_str()];
         NSString *metrics = [NSString
             stringWithFormat:
                 @"960×540  %.1f fps  %.2f ms  GPU %.2f  %s x%u  drop %llu",
@@ -1026,8 +1731,8 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
                 quality.c_str(), reuseFrames,
                 static_cast<unsigned long long>(dropped)];
         self->_statusLabel.stringValue = status;
-        self->_statusLabel.textColor = realtime ? NSColor.systemGreenColor
-                                                : NSColor.systemOrangeColor;
+        self->_statusLabel.textColor =
+            realtime ? NSColor.systemGreenColor : NSColor.systemOrangeColor;
         self->_metricsLabel.stringValue = metrics;
       });
     }
@@ -1043,6 +1748,12 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   if (_stopping.load(std::memory_order_acquire))
     return;
   @autoreleasepool {
+    CVPixelBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    if (imageBuffer == nullptr)
+      return;
+    CFRetain(imageBuffer);
+    const CMTime presentationTimeStamp =
+        CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
     FrameSlot *slot = nullptr;
     {
       std::lock_guard lock(_frameSlotMutex);
@@ -1061,30 +1772,20 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
       }
       if (selected < 0) {
         _droppedCaptureFrames.fetch_add(1, std::memory_order_relaxed);
+        CFRelease(imageBuffer);
         return;
       }
       slot = &_frameSlots[static_cast<std::size_t>(selected)];
-      if (slot->state == FrameSlotState::Ready)
+      if (slot->state == FrameSlotState::Ready) {
         _droppedCaptureFrames.fetch_add(1, std::memory_order_relaxed);
-      slot->state = FrameSlotState::Capturing;
+        if (slot->pixelBuffer != nullptr)
+          CFRelease(slot->pixelBuffer);
+      }
+      slot->pixelBuffer = imageBuffer;
+      slot->presentationTimeStamp = presentationTimeStamp;
+      slot->state = FrameSlotState::Ready;
       slot->sequence = ++_captureSequence;
     }
-
-    CVPixelBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
-    bool copied = false;
-    if (imageBuffer != nullptr) {
-      CVPixelBufferLockBaseAddress(imageBuffer, kCVPixelBufferLock_ReadOnly);
-      copied = [self copyOrScaleInputPixelBuffer:imageBuffer
-                                     destination:slot->input];
-      CVPixelBufferUnlockBaseAddress(imageBuffer,
-                                     kCVPixelBufferLock_ReadOnly);
-    }
-    {
-      std::lock_guard lock(_frameSlotMutex);
-      slot->state = copied ? FrameSlotState::Ready : FrameSlotState::Empty;
-    }
-    if (!copied)
-      return;
 
     bool expected = false;
     if (_processingScheduled.compare_exchange_strong(
@@ -1100,7 +1801,7 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
 
 - (void)captureOutput:(AVCaptureOutput *)output
     didDropSampleBuffer:(CMSampleBufferRef)sampleBuffer
-          fromConnection:(AVCaptureConnection *)connection {
+         fromConnection:(AVCaptureConnection *)connection {
   (void)output;
   (void)sampleBuffer;
   (void)connection;
@@ -1122,12 +1823,12 @@ int main(int argc, const char *argv[]) {
     if (argc == 2 && std::string_view(argv[1]) == "--camera-status") {
       const AVAuthorizationStatus status =
           [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
-      std::printf("camera_authorization=%s camera_available=%s\n",
-                  authorizationStatusName(status).UTF8String,
-                  [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo]
-                          != nil
-                      ? "true"
-                      : "false");
+      std::printf(
+          "camera_authorization=%s camera_available=%s\n",
+          authorizationStatusName(status).UTF8String,
+          [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo] != nil
+              ? "true"
+              : "false");
       return 0;
     }
 

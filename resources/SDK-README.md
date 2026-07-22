@@ -7,13 +7,45 @@ Contents:
 - `SHA256SUMS` — checksums for the packaged files.
 
 Add the XCFramework and resource bundle to the Xcode application target. Link
-`libc++.tbd`, Foundation.framework, and Metal.framework. Swift can
+`libc++.tbd`, Foundation.framework, Metal.framework, CoreImage.framework,
+CoreGraphics.framework, CoreMedia.framework, CoreVideo.framework, and
+VideoToolbox.framework. Swift can
 `import GlicMetal`; Objective-C/C hosts can include
 `<glic_metal/glic_metal.h>` or `<glic_metal/glic_metal_metal.h>` from the host.
+The asynchronous hardware-codec lane is exposed separately through
+`<glic_metal/codec_glitch.h>` and accepts opaque `CVPixelBufferRef` values. Its
+twelve effects use codec-quality control, intentional encoded-frame holds, and
+safe codec-decoded history/post composites. All H.264 VCL bytes reach the
+decoder unchanged. `payload_xor` is a Metal-backed digital-damage composite,
+and `reference_timewarp` selects from a configurable history of four to twelve
+decoded pixel buffers;
+neither mutates or reuses a compressed payload.
+
+Preparation creates pools and validates the normal hardware encoder.
+Specialized QP/cascade/downscale encoders and the decoder are created on first
+use. VideoToolbox `RealTime` and low-latency rate control are enabled by
+default. The default average bitrate is 4,000,000 bps. Dynamic bitrate uses
+`min(averageBitRate, width * height * fps / 4)` as its no-drop floor.
+New stages use 500/300 ms encode/decode warm-up deadlines and set
+`codec_warmup_frame`; sustained work returns to 100/45 ms.
+
+Output repeats expose `repeated_previous_frame` and
+`intentional_repeat_frame`, allowing a host to distinguish designed
+`pframe_loss`/`idr_starvation` holds from failure fallback. The first failure
+before a successful decode can emit the retained full-size input and sets
+`non_intentional_fallback_frame`.
+
+The legacy `poll_queue_drops` statistic combines drops from the bounded
+callback and poll delivery paths. `codec_errors` includes encode, sample
+extraction, decode, and timeout errors. Certification through the raw-video
+filter requires at least 960x540, at least 120 frames, preserved frame count,
+hardware encode/decode, 20 fps with p95 at or below 50 ms, and zero fallback,
+codec errors, watchdog recovery, backpressure, or output-queue drops.
 
 Resolve the runtime files from `GlicMetalResources.bundle` and pass their paths
 through `glic_metal_config.preset_directory` and
 `glic_metal_config.metal_library_path` before calling `glic_metal_prepare()`.
 
-See the source repository's `docs/EMBEDDING.md` for lifecycle, threading,
-pixel-format, Swift, and zero-copy Metal examples.
+See the source repository's `docs/CODEC_GLITCH.md` for effect and safety
+semantics, and `docs/EMBEDDING.md` for lifecycle, threading, pixel-format,
+Swift, and zero-copy Metal examples.

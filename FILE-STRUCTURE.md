@@ -8,18 +8,18 @@ glic-metal/
 ├── apps/                     macOS webcam preview entry point
 ├── benchmarks/               realtime and original-style benchmarks
 ├── config/                   reviewed runtime allowlists
-├── docs/                     build, fidelity, catalog, and release documents
+├── docs/                     build, fidelity, codec-glitch, catalog, and release documents
 ├── examples/                 small preset/code examples
 ├── external/stb/             pinned image-I/O Git submodule
-├── include/glic_metal/       stable C and Objective-C embedding API
+├── include/glic_metal/       stable image, Metal, and codec-glitch C APIs
 ├── cmake/                    installed CMake package configuration
 ├── output/preset-gallery/    committed generated comparison gallery
 ├── presets/                  144 SHA-256-pinned upstream presets
 ├── resources/                macOS bundle metadata
-├── scripts/                  video, analysis, search, novelty selection, and QA tools
+├── scripts/                  video processing, visual analysis, search, and QA tools
 ├── src/                      C++20, Objective-C++, and Metal implementation
 ├── tests/                    API consumer, C++, Objective-C++, and Python tests
-├── tools/                    filtering, search, and certification CLIs
+├── tools/                    image/codec filtering, search, and certification CLIs
 ├── website/                  static public project introduction
 ├── CMakeLists.txt            build, test, install, and bundle rules
 ├── README.md                 bilingual project and operator guide
@@ -29,8 +29,9 @@ glic-metal/
 
 ## Tracked data profile
 
-- Source and tooling: `src/` (43 files), `scripts/` (16), `tests/` (13), and
-  `tools/` (5) before this release-document pass.
+- Source and tooling is separated across `src/`, `scripts/`, `tests/`, and
+  `tools/`; public layout checks validate the required embedding and codec
+  entry points without relying on a stale file count.
 - Compatibility data: 144 preset files plus `presets.upstream.sha256`.
 - Preset gallery: 436 files, approximately 275MB; 144 `.glic` files account for
   approximately 223MB and 145 PNG files for approximately 47MB.

@@ -38,6 +38,7 @@ set(CORE_SOURCES
     src/bitio.cpp
     src/effects.cpp
     src/glic_metal_c.cpp
+    src/codec_glitch_c_stub.cpp
     src/preset_loader.cpp
     src/realtime.cpp
     src/realtime_certification.cpp
@@ -67,6 +68,7 @@ set(HEADERS
     src/realtime_metal.hpp
     src/original_realtime.hpp
     src/original_realtime_metal.hpp
+    src/codec_glitch.hpp
     src/processing_math.hpp
     src/processing_random.hpp
 )
@@ -151,24 +153,34 @@ if(APPLE)
     add_custom_target(glic_metal_shaders DEPENDS "${GLIC_METALLIB}")
 
     target_sources(glic_core PRIVATE src/realtime_metal.mm
-                                     src/original_realtime_metal.mm)
+                                     src/original_realtime_metal.mm
+                                     src/codec_glitch.mm
+                                     src/codec_glitch_c.mm)
     set_source_files_properties(src/realtime_metal.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_source_files_properties(src/original_realtime_metal.mm
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc;-ffp-contract=off")
+    set_source_files_properties(src/codec_glitch.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_source_files_properties(src/codec_glitch_c.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     add_dependencies(glic_core glic_metal_shaders)
     target_compile_definitions(glic_core PRIVATE
         GLIC_HAS_METAL=1
-        "GLIC_METALLIB_PATH=\"${GLIC_METALLIB}\""
     )
-    target_link_libraries(glic_core PUBLIC "-framework Foundation" "-framework Metal")
+    target_link_libraries(glic_core PUBLIC
+        "-framework Foundation"
+        "-framework Metal"
+        "-framework CoreImage"
+        "-framework CoreGraphics"
+        "-framework CoreMedia"
+        "-framework CoreVideo"
+        "-framework VideoToolbox")
 
     if(GLIC_BUILD_STANDALONE)
       add_executable(glic_webcam_preview MACOSX_BUNDLE
                      apps/glic_webcam_preview.mm)
     set_source_files_properties(apps/glic_webcam_preview.mm
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc;-ffp-contract=off")
-    target_compile_definitions(glic_webcam_preview PRIVATE
-        "GLIC_SOURCE_PRESETS_DIR=\"${PROJECT_SOURCE_DIR}/presets\"")
     target_link_libraries(glic_webcam_preview PRIVATE
         glic_core
         "-framework Accelerate"
@@ -230,6 +242,13 @@ target_link_libraries(glic_realtime_filter PRIVATE glic_core)
 add_executable(glic_original_visual_filter tools/original_visual_filter.cpp)
 target_link_libraries(glic_original_visual_filter PRIVATE glic_core)
 
+if(APPLE)
+add_executable(glic_codec_glitch_filter tools/codec_glitch_filter.mm)
+set_source_files_properties(tools/codec_glitch_filter.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_link_libraries(glic_codec_glitch_filter PRIVATE glic_core)
+endif()
+
 add_executable(glic_realtime_search tools/realtime_search.cpp)
 target_link_libraries(glic_realtime_search PRIVATE glic_core)
 
@@ -284,6 +303,11 @@ if(BUILD_TESTING)
         add_test(NAME glic_process_video_helpers
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_process_video_helpers.py")
+        add_test(NAME glic_codec_glitch_video_evaluator
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${PROJECT_SOURCE_DIR}/tests/test_evaluate_codec_glitch_videos.py")
+        set_tests_properties(glic_codec_glitch_video_evaluator
+                             PROPERTIES TIMEOUT 60)
         add_test(NAME glic_original_metal_reference_analysis
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_compare_original_metal_reference.py")
@@ -360,6 +384,16 @@ if(BUILD_TESTING)
         add_test(NAME glic_webcam_preview_selftest
                  COMMAND glic_webcam_preview --self-test)
 
+        add_executable(glic_codec_glitch_tests
+                       tests/codec_glitch_tests.mm)
+        set_source_files_properties(tests/codec_glitch_tests.mm
+                                    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+        target_link_libraries(glic_codec_glitch_tests PRIVATE glic_core)
+        add_test(NAME glic_codec_glitch_all_effects
+                 COMMAND glic_codec_glitch_tests)
+        set_tests_properties(glic_codec_glitch_all_effects
+                             PROPERTIES TIMEOUT 60)
+
         add_executable(glic_original_realtime_metal_tests
                        tests/original_realtime_metal_tests.mm)
         set_source_files_properties(tests/original_realtime_metal_tests.mm
@@ -429,6 +463,7 @@ install(TARGETS glic glic_realtime_bench glic_realtime_filter
                 glic_realtime_certify
         RUNTIME DESTINATION bin)
 if(APPLE)
+    install(TARGETS glic_codec_glitch_filter RUNTIME DESTINATION bin)
     install(TARGETS glic_webcam_preview BUNDLE DESTINATION .)
 endif()
 install(PROGRAMS scripts/process_video.py
@@ -450,7 +485,7 @@ install(DIRECTORY presets/
 install(FILES presets.upstream.sha256
         DESTINATION ${CMAKE_INSTALL_DATADIR}/glic-metal)
 install(FILES README.md LICENSE THIRD_PARTY_NOTICES.md
-              docs/BUILDING.md docs/EMBEDDING.md
+              docs/BUILDING.md docs/EMBEDDING.md docs/CODEC_GLITCH.md
         DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/glic-metal)
 if(APPLE)
     install(FILES "${GLIC_METALLIB}" DESTINATION ${CMAKE_INSTALL_LIBDIR}/glic)

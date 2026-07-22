@@ -15,7 +15,23 @@ import tempfile
 import time
 
 
-def parse_args() -> argparse.Namespace:
+CODEC_GLITCH_EFFECTS = (
+    "qp_pump",
+    "bitrate_crush",
+    "slice_dropout",
+    "slice_transplant",
+    "pframe_loss",
+    "idr_starvation",
+    "payload_xor",
+    "reference_timewarp",
+    "codec_feedback",
+    "generation_cascade",
+    "resolution_hop",
+    "chroma_codec_echo",
+)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Process a video through an explicit GLIC realtime mode."
     )
@@ -30,9 +46,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--processing-mode",
-        choices=("compat_realtime", "original_visual"),
+        choices=("compat_realtime", "original_visual", "codec_glitch"),
         default="compat_realtime",
-        help="Select the Metal/CPU approximation or fail-closed original-style codec core.",
+        help=(
+            "Select the Metal/CPU approximation, fail-closed original-style "
+            "core, or stateful VideoToolbox codec glitch lane."
+        ),
     )
     recipe_mode = parser.add_mutually_exclusive_group()
     recipe_mode.add_argument(
@@ -88,6 +107,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--effect-scale", type=float, default=0.5)
     parser.add_argument("--effect-rate", type=float, default=0.5)
     parser.add_argument(
+        "--codec-effect",
+        choices=CODEC_GLITCH_EFFECTS,
+        default="bitrate_crush",
+        help="Stateful H.264 encode/decode glitch used by codec_glitch mode.",
+    )
+    parser.add_argument(
+        "--codec-amount",
+        type=float,
+        default=0.55,
+        help="Codec quality, temporal hold, or post-decode glitch amount from 0 to 1.",
+    )
+    parser.add_argument(
+        "--codec-rate",
+        type=float,
+        default=0.35,
+        help="Codec glitch temporal modulation rate from 0 to 1.",
+    )
+    parser.add_argument(
+        "--codec-feedback",
+        type=float,
+        default=0.60,
+        help="Decoded history contribution from 0 to 1.",
+    )
+    parser.add_argument(
         "--seed",
         type=lambda value: int(value, 0),
         default=0x474C4943,
@@ -96,7 +139,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--filter-bin", type=Path)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--overwrite", action="store_true")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def require_tool(name: str) -> str:
@@ -195,6 +238,26 @@ def passes_end_to_end_average_30fps(
     )
 
 
+def passes_end_to_end_average_20fps(
+    *,
+    width: int,
+    height: int,
+    frames: int,
+    elapsed_seconds: float,
+    target_fps: float,
+    output_fps: float,
+) -> bool:
+    observed_fps = frames / elapsed_seconds if elapsed_seconds > 0.0 else 0.0
+    return (
+        width >= 960
+        and height >= 540
+        and frames >= 120
+        and target_fps >= 20.0
+        and output_fps >= 20.0
+        and observed_fps >= 20.0
+    )
+
+
 def probe_video(ffprobe: str, path: Path) -> dict:
     return run_json(
         [
@@ -214,14 +277,47 @@ def probe_video(ffprobe: str, path: Path) -> dict:
     )
 
 
+def count_video_frames(ffprobe: str, path: Path) -> int | None:
+    """Count decoded video frames when container metadata is unavailable."""
+    payload = run_json(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-count_frames",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=nb_read_frames",
+            "-of",
+            "json",
+            str(path),
+        ]
+    )
+    streams = payload.get("streams", [])
+    if not streams:
+        return None
+    return parse_frame_count(streams[0].get("nb_read_frames"))
+
+
+def filter_binary_name(processing_mode: str) -> str:
+    names = {
+        "compat_realtime": "glic_realtime_filter",
+        "original_visual": "glic_original_visual_filter",
+        "codec_glitch": "glic_codec_glitch_filter",
+    }
+    try:
+        return names[processing_mode]
+    except KeyError as error:
+        raise RuntimeError(
+            f"Unsupported processing mode: {processing_mode}"
+        ) from error
+
+
 def select_filter_binary(
     root: Path, requested: Path | None, processing_mode: str
 ) -> Path:
-    binary_name = (
-        "glic_original_visual_filter"
-        if processing_mode == "original_visual"
-        else "glic_realtime_filter"
-    )
+    binary_name = filter_binary_name(processing_mode)
     candidates: list[Path] = []
     if requested is not None:
         candidates.append(requested)
@@ -281,11 +377,94 @@ def log_tail(path: Path, lines: int = 30) -> str:
 def resolve_backend(
     processing_mode: str, requested: str | None, platform: str = sys.platform
 ) -> str:
+    if processing_mode == "codec_glitch":
+        return "videotoolbox"
     if processing_mode == "original_visual":
         if requested == "auto":
             return "metal" if platform == "darwin" else "cpu"
         return requested or "metal"
     return requested or "metal"
+
+
+def codec_glitch_filter_options(
+    *,
+    codec_effect: str,
+    codec_amount: float,
+    codec_rate: float,
+    codec_feedback: float,
+    seed: int,
+    frame_rate: float,
+) -> list[str]:
+    """Build the stable CLI boundary to the VideoToolbox stream filter."""
+    if codec_effect not in CODEC_GLITCH_EFFECTS:
+        raise RuntimeError(f"Unsupported codec glitch effect: {codec_effect}")
+    codec_frames_per_second = max(1, int(round(frame_rate)))
+    return [
+        "--fps",
+        str(codec_frames_per_second),
+        "--effect",
+        codec_effect,
+        "--amount",
+        str(codec_amount),
+        "--rate",
+        str(codec_rate),
+        "--feedback",
+        str(codec_feedback),
+        "--seed",
+        str(seed),
+    ]
+
+
+def codec_glitch_report_fields(
+    args: argparse.Namespace, filter_report: dict
+) -> dict:
+    """Promote codec provenance and recovery metrics into the video report."""
+    if args.processing_mode != "codec_glitch":
+        return {}
+    statistics = filter_report.get("statistics", {})
+    if not isinstance(statistics, dict):
+        statistics = {}
+
+    def metric(name: str, default: object = None) -> object:
+        return filter_report.get(name, statistics.get(name, default))
+
+    return {
+        "codec_effect": filter_report.get(
+            "effect_family", filter_report.get("codec_effect", args.codec_effect)
+        ),
+        "codec_amount": filter_report.get(
+            "amount", filter_report.get("codec_amount", args.codec_amount)
+        ),
+        "codec_rate": filter_report.get(
+            "rate", filter_report.get("codec_rate", args.codec_rate)
+        ),
+        "codec_feedback": filter_report.get(
+            "feedback", filter_report.get("codec_feedback", args.codec_feedback)
+        ),
+        "codec_hardware_encoder": metric("hardware_encoder"),
+        "codec_hardware_decoder": metric("hardware_decoder"),
+        "codec_base_frame_qp_supported": metric("base_frame_qp_supported"),
+        "codec_encoded_frames": metric("encoded_frames"),
+        "codec_decoded_frames": metric("decoded_frames"),
+        "codec_intentional_packet_drops": metric(
+            "intentional_packet_drops", 0
+        ),
+        "codec_processing_errors": metric("codec_errors", 0),
+        "codec_watchdog_recoveries": metric("watchdog_recoveries", 0),
+        "codec_average_latency_milliseconds": metric(
+            "average_latency_milliseconds"
+        ),
+        "codec_latency_p50_milliseconds": metric("latency_p50_ms"),
+        "codec_latency_p95_milliseconds": metric("latency_p95_ms"),
+        "codec_fallback_frames": metric("fallback_frames", 0),
+        "codec_intentional_repeat_frames": metric(
+            "intentional_repeat_frames", 0
+        ),
+        "codec_reliability_passed": metric("reliability_passed"),
+        "codec_realtime_20fps_passed": metric("realtime_20fps_passed"),
+        "codec_realtime_30fps_passed": metric("realtime_30fps_passed"),
+        "codec_engine_fps": metric("processing_fps"),
+    }
 
 
 def main() -> int:
@@ -305,6 +484,20 @@ def main() -> int:
             raise RuntimeError("original_visual requires original preset semantics")
         preset_semantics = "original"
         backend_requested = resolve_backend(args.processing_mode, args.backend)
+    elif args.processing_mode == "codec_glitch":
+        if args.passthrough or args.canonical:
+            raise RuntimeError(
+                "codec_glitch accepts --codec-effect controls only; "
+                "canonical and passthrough are unavailable"
+            )
+        if args.preset_semantics is not None:
+            raise RuntimeError("codec_glitch does not use GLIC preset semantics")
+        if args.backend == "cpu":
+            raise RuntimeError(
+                "codec_glitch requires the VideoToolbox hardware codec lane"
+            )
+        preset_semantics = "not-applicable"
+        backend_requested = resolve_backend(args.processing_mode, args.backend)
     else:
         preset_semantics = args.preset_semantics or "legacy"
         backend_requested = resolve_backend(args.processing_mode, args.backend)
@@ -314,6 +507,13 @@ def main() -> int:
         ("--effect-amount", args.effect_amount),
         ("--effect-scale", args.effect_scale),
         ("--effect-rate", args.effect_rate),
+    ):
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            raise RuntimeError(f"{name} must be between 0 and 1")
+    for name, value in (
+        ("--codec-amount", args.codec_amount),
+        ("--codec-rate", args.codec_rate),
+        ("--codec-feedback", args.codec_feedback),
     ):
         if not math.isfinite(value) or not 0.0 <= value <= 1.0:
             raise RuntimeError(f"{name} must be between 0 and 1")
@@ -329,7 +529,9 @@ def main() -> int:
     )
     presets_dir = (
         None
-        if args.passthrough or args.canonical
+        if args.passthrough
+        or args.canonical
+        or args.processing_mode == "codec_glitch"
         else select_presets_directory(root, args.presets_dir)
     )
 
@@ -453,6 +655,17 @@ def main() -> int:
                     "--presets-dir",
                     str(presets_dir),
                 ]
+            )
+        elif args.processing_mode == "codec_glitch":
+            filter_command.extend(
+                codec_glitch_filter_options(
+                    codec_effect=args.codec_effect,
+                    codec_amount=args.codec_amount,
+                    codec_rate=args.codec_rate,
+                    codec_feedback=args.codec_feedback,
+                    seed=args.seed,
+                    frame_rate=target_fps,
+                )
             )
         elif args.passthrough:
             filter_command.append("--passthrough")
@@ -581,7 +794,6 @@ def main() -> int:
             "copy",
             "-c:a",
             "copy",
-            "-shortest",
             "-movflags",
             "+faststart",
             str(output_path),
@@ -598,13 +810,30 @@ def main() -> int:
     elapsed = time.monotonic() - started
     duration = source_duration or 0.0
     processed_frames = int(filter_report.get("frames", 0))
+    output_frame_count: int | None = None
+    if output_streams:
+        output_frame_count = parse_frame_count(output_streams[0].get("nb_frames"))
+    if output_frame_count is None:
+        output_frame_count = count_video_frames(ffprobe, output_path)
+    frame_count_preserved = (
+        output_frame_count == processed_frames
+        if output_frame_count is not None and processed_frames > 0
+        else None
+    )
+    if args.processing_mode == "codec_glitch" and frame_count_preserved is not True:
+        raise RuntimeError(
+            "codec_glitch output frame count is unavailable or changed during encode/mux: "
+            f"filter={processed_frames}, output={output_frame_count}"
+        )
     end_to_end_observed_fps = processed_frames / elapsed if elapsed else 0.0
     report = {
         "schema": "glic-video-process-v1",
         "input": str(input_path),
         "output": str(output_path),
         "preset": filter_report.get("preset", "passthrough"),
-        "preset_semantics": filter_report.get("preset_semantics", "legacy"),
+        "preset_semantics": filter_report.get(
+            "preset_semantics", preset_semantics
+        ),
         "processing_mode": filter_report.get(
             "processing_mode", "compat_realtime"
         ),
@@ -614,7 +843,12 @@ def main() -> int:
         "preset_mapping_reasons": filter_report.get(
             "preset_mapping_reasons", []
         ),
-        "recipe_source": filter_report.get("recipe_source", "passthrough"),
+        "recipe_source": filter_report.get(
+            "recipe_source",
+            "codec_glitch_controls"
+            if args.processing_mode == "codec_glitch"
+            else "passthrough",
+        ),
         "canonical": args.canonical,
         "canonical_version": filter_report.get("canonical_version"),
         "fidelity_claim": filter_report.get("fidelity_claim"),
@@ -623,9 +857,13 @@ def main() -> int:
         "known_deviations": filter_report.get("known_deviations", []),
         "strength": filter_report.get("strength"),
         "effect_family": filter_report.get("effect_family"),
-        "effect_amount": filter_report.get("effect_amount"),
+        "effect_amount": filter_report.get(
+            "effect_amount", filter_report.get("amount")
+        ),
         "effect_scale": filter_report.get("effect_scale"),
-        "effect_rate": filter_report.get("effect_rate"),
+        "effect_rate": filter_report.get(
+            "effect_rate", filter_report.get("rate")
+        ),
         "seed": filter_report.get("seed"),
         "backend_requested": "passthrough" if args.passthrough else backend_requested,
         "target_width": width,
@@ -633,6 +871,9 @@ def main() -> int:
         "target_frame_rate": frame_rate,
         "target_fps": round(target_fps, 6),
         "output_fps": round(output_fps, 6),
+        "processed_frames": processed_frames,
+        "output_frame_count": output_frame_count,
+        "frame_count_preserved": frame_count_preserved,
         "encoder": encoder_name,
         "elapsed_seconds": round(elapsed, 3),
         "source_duration_seconds": duration,
@@ -648,6 +889,20 @@ def main() -> int:
             target_fps=target_fps,
             output_fps=output_fps,
         ),
+        "end_to_end_average_20fps_passed": passes_end_to_end_average_20fps(
+            width=width,
+            height=height,
+            frames=processed_frames,
+            elapsed_seconds=elapsed,
+            target_fps=target_fps,
+            output_fps=output_fps,
+        ),
+        "filter_stream_realtime_20fps_passed": filter_report.get(
+            "realtime_20fps_passed"
+        ),
+        "filter_kernel_realtime_20fps_passed": filter_report.get(
+            "kernel_realtime_20fps_passed"
+        ),
         "filter_stream_realtime_30fps_passed": filter_report.get(
             "realtime_30fps_passed"
         ),
@@ -657,6 +912,7 @@ def main() -> int:
         "filter": filter_report,
         "input_probe": input_probe,
         "output_probe": output_probe,
+        **codec_glitch_report_fields(args, filter_report),
     }
     report_path.write_text(json.dumps(report, indent=2) + "\n")
     print(

@@ -1,4 +1,5 @@
 module GlicMetal {
   header "glic_metal/glic_metal.h"
+  header "glic_metal/codec_glitch.h"
   export *
 }

@@ -37,6 +37,127 @@ def main() -> int:
     assert MODULE.resolve_backend("original_visual", "auto", "linux") == "cpu"
     assert MODULE.resolve_backend("original_visual", "cpu", "darwin") == "cpu"
     assert MODULE.resolve_backend("compat_realtime", "auto", "linux") == "auto"
+    assert MODULE.resolve_backend("codec_glitch", None, "darwin") == "videotoolbox"
+    assert MODULE.filter_binary_name("compat_realtime") == "glic_realtime_filter"
+    assert (
+        MODULE.filter_binary_name("original_visual")
+        == "glic_original_visual_filter"
+    )
+    assert MODULE.filter_binary_name("codec_glitch") == "glic_codec_glitch_filter"
+
+    expected_codec_effects = (
+        "qp_pump",
+        "bitrate_crush",
+        "slice_dropout",
+        "slice_transplant",
+        "pframe_loss",
+        "idr_starvation",
+        "payload_xor",
+        "reference_timewarp",
+        "codec_feedback",
+        "generation_cascade",
+        "resolution_hop",
+        "chroma_codec_echo",
+    )
+    assert MODULE.CODEC_GLITCH_EFFECTS == expected_codec_effects
+    for effect in expected_codec_effects:
+        parsed = MODULE.parse_args(
+            [
+                "input.mov",
+                "output.mp4",
+                "--processing-mode",
+                "codec_glitch",
+                "--codec-effect",
+                effect,
+            ]
+        )
+        assert parsed.processing_mode == "codec_glitch"
+        assert parsed.codec_effect == effect
+
+    assert MODULE.codec_glitch_filter_options(
+        codec_effect="slice_transplant",
+        codec_amount=0.625,
+        codec_rate=0.25,
+        codec_feedback=0.75,
+        seed=123,
+        frame_rate=29.97002997,
+    ) == [
+        "--fps",
+        "30",
+        "--effect",
+        "slice_transplant",
+        "--amount",
+        "0.625",
+        "--rate",
+        "0.25",
+        "--feedback",
+        "0.75",
+        "--seed",
+        "123",
+    ]
+
+    codec_args = MODULE.parse_args(
+        [
+            "input.mov",
+            "output.mp4",
+            "--processing-mode",
+            "codec_glitch",
+            "--codec-effect",
+            "payload_xor",
+            "--codec-amount",
+            "0.7",
+            "--codec-rate",
+            "0.4",
+            "--codec-feedback",
+            "0.2",
+        ]
+    )
+    codec_fields = MODULE.codec_glitch_report_fields(
+        codec_args,
+        {
+            "effect_family": "payload_xor",
+            "amount": 0.7,
+            "rate": 0.4,
+            "feedback": 0.2,
+            "hardware_encoder": True,
+            "latency_p50_ms": 8.0,
+            "latency_p95_ms": 18.0,
+            "fallback_frames": 4,
+            "realtime_20fps_passed": True,
+            "realtime_30fps_passed": False,
+            "target_fps": 30,
+            "processing_fps": 87.5,
+            "statistics": {
+                "hardware_decoder": True,
+                "encoded_frames": 160,
+                "decoded_frames": 152,
+                "intentional_packet_drops": 8,
+                "codec_errors": 2,
+                "watchdog_recoveries": 1,
+                "average_latency_milliseconds": 12.5,
+            },
+        },
+    )
+    assert codec_fields["codec_effect"] == "payload_xor"
+    assert codec_fields["codec_amount"] == 0.7
+    assert codec_fields["codec_rate"] == 0.4
+    assert codec_fields["codec_feedback"] == 0.2
+    assert codec_fields["codec_hardware_encoder"] is True
+    assert codec_fields["codec_hardware_decoder"] is True
+    assert codec_fields["codec_encoded_frames"] == 160
+    assert codec_fields["codec_decoded_frames"] == 152
+    assert codec_fields["codec_intentional_packet_drops"] == 8
+    assert codec_fields["codec_processing_errors"] == 2
+    assert codec_fields["codec_watchdog_recoveries"] == 1
+    assert codec_fields["codec_average_latency_milliseconds"] == 12.5
+    assert codec_fields["codec_latency_p50_milliseconds"] == 8.0
+    assert codec_fields["codec_latency_p95_milliseconds"] == 18.0
+    assert codec_fields["codec_fallback_frames"] == 4
+    assert codec_fields["codec_realtime_20fps_passed"] is True
+    assert codec_fields["codec_realtime_30fps_passed"] is False
+    assert codec_fields["codec_engine_fps"] == 87.5
+    non_codec_args = MODULE.parse_args(["input.mov", "output.mp4"])
+    assert MODULE.codec_glitch_report_fields(non_codec_args, {}) == {}
 
     common = {
         "width": 960,
@@ -55,6 +176,16 @@ def main() -> int:
     )
     assert not MODULE.passes_end_to_end_average_30fps(
         **{**common, "elapsed_seconds": 6.0}, target_fps=30.0, output_fps=30.0
+    )
+    assert MODULE.passes_end_to_end_average_20fps(
+        **{**common, "elapsed_seconds": 8.0},
+        target_fps=20.0,
+        output_fps=20.0,
+    )
+    assert not MODULE.passes_end_to_end_average_20fps(
+        **{**common, "elapsed_seconds": 9.0},
+        target_fps=20.0,
+        output_fps=20.0,
     )
     print("PASS process_video frame-rate helpers")
     return 0

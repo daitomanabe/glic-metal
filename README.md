@@ -7,6 +7,7 @@ active development; no stable binary release has been tagged yet.
 
 [Build guide](docs/BUILDING.md) ·
 [Embedding guide](docs/EMBEDDING.md) ·
+[Codec Glitch](docs/CODEC_GLITCH.md) ·
 [Original-preset fidelity](docs/ORIGINAL_PRESET_REALTIME.md) ·
 [Preset catalog](docs/original-preset-catalog.md) ·
 [Repository structure](FILE-STRUCTURE.md) ·
@@ -32,6 +33,7 @@ C++20とMetal ComputeによるGLIC (GLitch Image Codec) のリアルタイム映
 ### 特徴
 
 - C++20によるファイルcodecと、CPU / Metalリアルタイム処理
+- VideoToolbox hardware H.264とMetal-backed post pathによる12種類のCodec Glitch
 - C / C++ / Objective-C / Swiftから利用できる安定C ABIとCMake package
 - モダンC++機能を活用（`std::ranges`, `std::span`, `std::bit_cast`, `[[likely]]`属性など）
 - CPU経路はmacOS / LinuxをCI対象とし、Windowsは設計対象・未認証
@@ -105,12 +107,12 @@ macOSでMetal shaderをビルドする際はFull Xcodeが必要です。CMakeは
 ### Webカメラ・リアルタイムプレビュー
 
 macOS版は`GLIC Webcam Preview.app`を生成します。内蔵または外付けカメラを
-960×540・30fpsで取得し、`original_visual` Metal laneで処理します。画面上部の
-ポップアップ、またはメニューバーの`Preset`から、対応済み37プリセットを実行中に
-切り替えられます。`Quality`では原作準拠の`Strict`、fp32 CDF97と2フレーム分割木
-再利用を使う`Fast Match`、画像解析allowlistから安全なpresetだけFastへ切り替える
-`Auto 20fps`を選べます。Autoが画質gateを通らなかったpresetはStrictへ戻ります。
-処理時間、GPU時間、処理fps、実効モード、drop数を画面上で確認できます。
+960×540・30fpsで取得し、画面上部または`Lane`メニューから`Original Visual`と
+`Codec Glitch`を切り替えます。Original Visualでは対応済み37 presetと、原作準拠の
+`Strict`、fp32 CDF97と2フレーム分割木再利用を使う`Fast Match`、画像解析allowlist
+から安全なpresetだけFastへ切り替える`Auto 20fps`を選べます。Codec Glitchでは
+12種類のH.264 effect、`Amount`、codec historyを消去する`Reset`を操作できます。
+処理時間、GPU/codec latency、処理fps、実効モード、drop数を画面上で確認できます。
 
 キャプチャとMetal処理は別キューで、事前確保した3スロットから常に最新フレームを
 選びます。古い待機フレームは破棄するため、重いpresetでも遅延が蓄積しません。
@@ -150,6 +152,58 @@ python3 scripts/process_video.py input.mov output-original.mp4 \
 探索結果の `ready_to_run_args` に含まれる `--canonical 'v2|...' --seed ...` を渡すと、preset名への変換を挟まず、評価した強度・機構・形状を動画上へ完全に再現できます。
 
 入力・出力動画をローカルに保持する場合は、Git対象外の `test-videos/` を使用できます。
+
+### Codec Glitch（H.264動画codec）
+
+`codec_glitch`は、VideoToolbox hardware encoder/decoderとMetal互換
+`CVPixelBuffer`/post pathを使うmacOS専用の非同期動画レーンです。`.glic`ファイル
+codec、37 presetの`original_visual`、全144 presetを視覚近似する
+`compat_realtime`とは別で、GLIC presetの意味や原作とのpixel一致を主張しません。
+
+```bash
+python3 scripts/process_video.py input.mov output-codec.mp4 \
+  --processing-mode codec_glitch \
+  --codec-effect slice_transplant \
+  --codec-amount 0.52 --codec-rate 0.34 --codec-feedback 0.58 \
+  --seed 0x474c4943 \
+  --width 960 --height 540 --fps 30 \
+  --report output-codec.json --overwrite
+```
+
+12 effectは`qp_pump`、`bitrate_crush`、`slice_dropout`、
+`slice_transplant`、`pframe_loss`、`idr_starvation`、`payload_xor`、
+`reference_timewarp`、`codec_feedback`、`generation_cascade`、
+`resolution_hop`、`chroma_codec_echo`です。全effectが圧縮H.264のVCL byteを変更せず、
+VideoToolboxでclean decodeします。`slice_dropout`と`slice_transplant`はdecode履歴の
+水平row／帯を合成し、`payload_xor`はposterize、RGB組み替え、位置をずらした
+macroblock状tileでdigital damageを作ります。`reference_timewarp`は4〜12 frameへ
+設定できるdecode済み`CVPixelBuffer`履歴から過去frameを選び、圧縮P packetを再利用しません。
+`resolution_hop`は1/2または1/4 codec段の復元時にpixel化を加えます。
+`pframe_loss`と`idr_starvation`だけはencode済みframeを意図的にholdし、直前の正常な
+decode結果をrepeatします。
+
+`prepare`は通常stageのhardware encoderでbackendを検証し、QP/cascade/縮小encoderと
+decoderは最初の利用時に遅延生成します。VideoToolboxの`RealTime`とlow-latency rate
+controlは既定で有効です。動的bitrateの安全floorは既定4,000,000 bpsの
+`averageBitRate`を超えない`min(averageBitRate, width * height * fps / 4)`で、強い
+rate変更によるhardware encoderのframe dropを防ぎます。`bitrate_crush`とcascadeはfloor
+到達後もMetal-backed圧縮模様を加えて視覚差を保ちます。新規stageだけencode/decode
+500/300ms、定常時は100/45msのdeadlineを使います。
+
+設計・計測目標は960×540・30fps（33.33ms）、実運用のhard floorは20fps・p95
+50msです。これは全Macでの保証ではありません。動画JSONは意図的holdを
+`intentional_repeat_frames`、障害fallbackを`fallback_frames`へ分離します。
+最初のdecode前に失敗したframeはretain済みfull-size入力を出し、
+`non_intentional_fallback_frame=true`にします。
+`reliability_passed`は非意図的fallback、全codec処理error、watchdog recovery、
+backpressure drop、output queue dropがすべて0の場合だけtrueです。legacy fieldの
+`poll_queue_drops`はcallback/poll両方のdropを合算します。20fps合格にはさらに
+960×540以上、120 frame以上、frame数維持、hardware codec、実測/stream 20fps以上、
+p95 50ms以下が必要です。
+複数effectの動画比較と非類似rankingには
+`scripts/evaluate_codec_glitch_videos.py`を使います。
+詳細とC APIは[Codec Glitch](docs/CODEC_GLITCH.md)と
+[Embedding guide](docs/EMBEDDING.md#codec-glitch-c-api-macos-only)を参照してください。
 
 ### グリッチ差分QA
 
@@ -449,6 +503,7 @@ The port keeps the file codec, original parameter semantics, realtime visual app
 ### Features
 
 - C++20 file codec plus CPU / Metal realtime processing
+- Twelve VideoToolbox hardware-H.264 codec effects with a Metal-backed post path
 - Stable C ABI and installable CMake package for C, C++, Objective-C, and Swift
 - Modern C++ features (`std::ranges`, `std::span`, `std::bit_cast`, `[[likely]]` attributes, etc.)
 - CPU paths are CI-tested on macOS and Linux; Windows is designed for but not
@@ -541,14 +596,13 @@ Full Xcode is required to compile the Metal shader on macOS. CMake uses `/Applic
 ### Realtime webcam preview
 
 The macOS build produces `GLIC Webcam Preview.app`. It captures a built-in or
-external camera at 960×540/30 fps and processes frames through the
-`original_visual` Metal lane. Switch among all 37 supported presets from the
-popup at the top of the window or the `Preset` application menu. The `Quality`
-control selects original-compatible `Strict`, fp32 CDF97 plus two-frame tree
-reuse in `Fast Match`, or fail-closed `Auto 20fps`. Auto uses Fast Match only
-for presets in the analyzed allowlist and falls back to Strict otherwise.
-Processed fps, total processing time, GPU time, effective mode, and dropped
-frames remain visible.
+external camera at 960×540/30 fps and switches between `Original Visual` and
+`Codec Glitch` from the popup or `Lane` application menu. Original Visual
+offers all 37 supported presets plus original-compatible `Strict`, fp32 CDF97
+with two-frame tree reuse in `Fast Match`, and fail-closed `Auto 20fps`.
+Codec Glitch offers twelve H.264 effects, an `Amount` control, and `Reset` for
+clearing codec history. Processed fps, total/GPU or codec latency, effective
+mode, recovery state, and dropped frames remain visible.
 
 Capture and Metal processing use separate queues. A preallocated three-slot
 ring always selects the newest ready frame and discards stale queued frames, so
@@ -612,6 +666,64 @@ Pass the exact `--canonical 'v2|...' --seed ...` values from a ranked row's
 converting the recipe back through a preset name.
 
 Use the Git-ignored `test-videos/` directory for local input and preview files.
+
+### Codec Glitch (H.264 video codec)
+
+`codec_glitch` is a macOS-only asynchronous video lane built from the
+VideoToolbox hardware encoder/decoder and Metal-compatible `CVPixelBuffer`/post
+path. It is distinct from the `.glic` file codec, 37-preset `original_visual`,
+and all-144 visual approximation in `compat_realtime`. It does not apply GLIC
+preset semantics or claim upstream pixel equivalence.
+
+```bash
+python3 scripts/process_video.py input.mov output-codec.mp4 \
+  --processing-mode codec_glitch \
+  --codec-effect slice_transplant \
+  --codec-amount 0.52 --codec-rate 0.34 --codec-feedback 0.58 \
+  --seed 0x474c4943 \
+  --width 960 --height 540 --fps 30 \
+  --report output-codec.json --overwrite
+```
+
+The twelve effects are `qp_pump`, `bitrate_crush`, `slice_dropout`,
+`slice_transplant`, `pframe_loss`, `idr_starvation`, `payload_xor`,
+`reference_timewarp`, `codec_feedback`, `generation_cascade`,
+`resolution_hop`, and `chroma_codec_echo`. Every effect sends unchanged H.264
+VCL bytes through a clean VideoToolbox decode. `slice_dropout` and
+`slice_transplant` composite horizontal rows/bands from decoded history;
+`payload_xor` creates digital damage with posterization, RGB rewiring, and
+displaced macroblock-like tiles. `reference_timewarp` selects an older frame
+from decoded `CVPixelBuffer` history configured from four to twelve frames
+instead of reusing a compressed P packet. `resolution_hop` adds pixelation while restoring its
+one-half or one-quarter-resolution codec result. Only `pframe_loss` and
+`idr_starvation` intentionally hold encoded frames and repeat the prior good
+decoded result.
+
+`prepare` validates the backend with the normal-stage hardware encoder;
+specialized QP/cascade/downscale encoders and the decoder are created on first
+use. VideoToolbox `RealTime` and low-latency rate control are enabled by
+default. The default average bitrate is 4,000,000 bps, and the dynamic floor is
+`min(averageBitRate, width * height * fps / 4)`, so it never raises the host
+setting. `bitrate_crush` and cascade add Metal-backed compression patterns after
+reaching that floor. New stages use 500/300 ms encode/decode deadlines; steady
+state returns to 100/45 ms.
+
+The design and measurement target is 960×540 at 30 fps (33.33 ms); the live
+hard floor is 20 fps with p95 at or below 50 ms. This is not a guarantee for
+every Mac. The video JSON separates intended holds in
+`intentional_repeat_frames` from failure `fallback_frames`.
+If a failure occurs before the first decode, the retained full-size input is
+emitted with `non_intentional_fallback_frame=true`.
+`reliability_passed` requires zero non-intentional fallback, codec-processing
+errors, watchdog recoveries, backpressure drops, and output-queue drops. The
+legacy `poll_queue_drops` field combines callback and polling delivery losses.
+The 20 fps pass also requires at least 960×540, at least 120 frames, preserved
+frame count, hardware encode/decode, processing and stream rates of at least
+20 fps, and p95 at or below 50 ms. See
+[Codec Glitch](docs/CODEC_GLITCH.md) and the
+[embedding guide](docs/EMBEDDING.md#codec-glitch-c-api-macos-only).
+Use `scripts/evaluate_codec_glitch_videos.py` for dry/wet analysis and
+diversity ranking across rendered effects.
 
 ### Glitch difference QA
 
