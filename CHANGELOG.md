@@ -71,6 +71,11 @@ semantic versioning for tagged releases.
 
 ### Changed
 
+- The bilingual README now explains how the realtime architecture accelerates
+  the original Java/Processing implementation, including direct in-memory
+  processing, Metal reconstruction, channel/frontier parallelism, persistent
+  allocation, segmentation caching, bounded live delivery, and fidelity
+  tradeoffs between Strict, Fast Match, compatibility, and codec lanes.
 - Public CI now supports both current and older Xcode Metal compilers, installs
   its native FFmpeg test dependency, and validates the documented non-macOS
   VideoToolbox-unavailable contract in external consumers.

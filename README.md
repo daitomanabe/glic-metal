@@ -47,6 +47,47 @@ C++20とMetal ComputeによるGLIC (GLitch Image Codec) のリアルタイム映
 - 6種類のポストプロセッシングエフェクト（新機能）
 - テスト用画像付属（`daito-testimage.png`）
 
+### Java/Processing版から、どのように高速化したか
+
+オリジナルGLICは静止画像を対話的にencode / decodeするJava/Processing作品です。
+[`GLIC.pde`](https://github.com/GlitchCodec/GLIC/blob/460e61bf9b01f7415cf973b3d655a0ae2c7962a7/GLIC.pde#L49-L124)
+の`frameRate(20)`は画面を再描画する頻度であり、codecが毎秒20フレームを処理する
+という意味ではありません。本実装はファイルcodecを残しつつ、ライブ映像用の処理経路を
+別に設計しました。単純なJavaからC++への置換ではなく、処理の配置、並列単位、
+メモリ寿命、フレーム配送を変更しています。
+
+| 項目 | オリジナルJava/Processing版 | GLIC Metalのリアルタイム経路 |
+|---|---|---|
+| データ経路 | 静止画像を同期的にencode / decodeする操作 | `.glic`への直列化、entropy encoding、ファイルI/O、直後の再decodeを省き、メモリ上のフレームへ直接処理します |
+| 演算場所 | codec処理をCPUで実行 | 予測、量子化、CDF 9/7 FWT/WPT、逆変換、空間グリッチをMetal computeへ移します |
+| 並列化 | 原作の乱数消費順と再帰的なquadtree処理を重視 | 独立した3チャンネル、色変換slice、quadtreeの依存frontier内のleafを並列処理します |
+| メモリ | 静止画処理に適した一時配列と変換行列 | plane、leaf記述子、変換scratch、Metal buffer、CPU workerを`prepare()`で確保し、通常のフレーム処理では再確保しません |
+| 分割木 | 入力ごとにadaptive segmentationを評価 | 固定blockの分割木をcacheし、adaptive分散判定は結果が確定した時点で画像readを止めます。Fast Matchでは分割木を複数フレーム再利用できます |
+| GPU投入 | 該当なし | 原作スタイル経路を1フレームあたり1 command buffer、1 completion waitにまとめ、Apple unified memoryではmapped buffer copyを行いません |
+| ライブ配送 | Processingの同期UI | captureと処理を別queueにし、事前確保した3 slotから最新フレームを選びます。古い待機フレームを捨てるため遅延が蓄積しません |
+| 動画codec glitch | 該当なし | VideoToolboxのhardware H.264 encode / decodeとMetal post pathを非同期・bounded queueで動かします |
+
+原作スタイルの`Strict`経路では、Processing互換48-bit RNGの消費順、チャンネル順、
+quadtreeのDFS順を変えると別の画像になるため、分割木の制御だけはCPUに残しています。
+その後の独立した再構成をGPUへ渡し、小さいleafはthreadgroup memory、大きいadaptive
+CDF97 leafは事前確保したglobal workspaceで処理します。固定分割は一度だけ構築し、
+省略した乱数呼び出しはskip-aheadして終端RNG stateを一致させます。これにより、
+原作の構造を保つ最適化と、見た目がほぼ同じであれば分割木も再利用する高速化を
+明示的に選べます。
+
+| 処理モード | 高速化と互換性の位置づけ |
+|---|---|
+| `original_visual` / Strict | 対応37 presetの原作スタイルを優先し、厳密な分割順とMetal再構成を使います |
+| `original_visual` / Fast Match | fp32 CDF97とadaptive分割木の再利用を許容し、ライブ処理の余裕を増やします |
+| `compat_realtime` | 全144 presetを1-pass Metal空間表現へ写像する、最も軽い視覚近似です |
+| `codec_glitch` | 原作preset互換とは別に、hardware動画codecの時間方向の状態を利用します |
+
+速度と忠実度は別々に検証しています。ベンチマークはwarm-up後の平均だけでなくp95、
+drop、backpressureも評価し、画像側はCPU参照、leaf順hash、終端RNG state、SSIM、色差、
+edge差を確認します。Metal CDF97の中間行列はfp32なので、CPU/JWave doubleとの
+pixel完全一致は主張しません。対応範囲、計測条件、既知の差異は
+[原作presetリアルタイム互換性](docs/ORIGINAL_PRESET_REALTIME.md)に記録しています。
+
 ### ビルド方法
 
 ```bash
@@ -518,6 +559,53 @@ The port keeps the file codec, original parameter semantics, realtime visual app
 - 6 encoding methods (+3 new)
 - 6 post-processing effects (new feature)
 - Test image included (`daito-testimage.png`)
+
+### How the Java/Processing version was accelerated
+
+The original GLIC is a Java/Processing work for interactively encoding and
+decoding still images. The `frameRate(20)` call in
+[`GLIC.pde`](https://github.com/GlitchCodec/GLIC/blob/460e61bf9b01f7415cf973b3d655a0ae2c7962a7/GLIC.pde#L49-L124)
+controls display refresh; it does not show that the codec processes 20 frames
+per second. This project keeps the file codec but adds a separately designed
+live-video path. The acceleration is therefore more than a Java-to-C++ rewrite:
+it changes where work runs, what can run in parallel, how long memory lives,
+and how frames move through the application.
+
+| Area | Original Java/Processing version | GLIC Metal realtime path |
+|---|---|---|
+| Data path | Synchronous still-image encode/decode operations | Applies the effect directly to in-memory frames, bypassing `.glic` serialization, entropy coding, file I/O, and immediate re-decoding |
+| Compute | Codec work runs on the CPU | Moves prediction, quantization, CDF 9/7 FWT/WPT, inverse reconstruction, and spatial glitches to Metal compute |
+| Parallelism | Preserves the original recursive quadtree and random-consumption order | Runs independent channels, color-conversion slices, and leaves within each dependency frontier concurrently |
+| Memory | Temporary arrays and transform matrices suit still-image processing | Allocates planes, leaf descriptors, transform scratch, Metal buffers, and CPU workers in `prepare()`; normal frame processing does not reallocate them |
+| Segmentation | Evaluates adaptive segmentation for each input | Caches fixed-block trees, stops adaptive image reads once the variance decision is final, and can reuse adaptive trees in Fast Match |
+| GPU submission | Not applicable | Encodes the original-style frame into one command buffer with one completion wait and no mapped-buffer copy on Apple unified memory |
+| Live delivery | Synchronous Processing UI | Separates capture and processing, selects the newest of three preallocated slots, and drops stale waiting frames instead of accumulating latency |
+| Video codec glitch | Not applicable | Runs VideoToolbox hardware H.264 encode/decode plus a Metal post path through asynchronous bounded queues |
+
+The `Strict` original-style lane deliberately keeps quadtree control on the
+CPU. Changing the Processing-compatible 48-bit RNG consumption, channel order,
+or DFS order would produce a different image. Once the exact leaves are known,
+independent reconstruction moves to the GPU: small leaves use threadgroup
+memory, while large adaptive CDF97 leaves use a preallocated global workspace.
+Fixed geometry is built once, and skipped random calls use RNG skip-ahead so
+the terminal state remains identical. This separates fidelity-preserving
+optimization from Fast Match, which may reuse a visually equivalent tree for
+more live-processing headroom.
+
+| Processing mode | Performance and compatibility position |
+|---|---|
+| `original_visual` / Strict | Prioritizes the original style for the 37 supported presets, with exact segmentation order and Metal reconstruction |
+| `original_visual` / Fast Match | Allows fp32 CDF97 and adaptive-tree reuse for additional realtime headroom |
+| `compat_realtime` | The lightest path, mapping all 144 presets to one-pass Metal spatial approximations |
+| `codec_glitch` | Uses temporal state in the hardware video codec and makes no upstream-preset compatibility claim |
+
+Performance and fidelity are tested separately. Benchmarks gate p95 as well as
+the post-warm-up mean, drops, and backpressure. Image validation checks a CPU
+reference, leaf-order hashes, terminal RNG state, SSIM, color difference, and
+edge difference. Because the Metal CDF97 intermediate matrix remains fp32, the
+project does not claim pixel identity with CPU/JWave double. The supported
+boundary, measurements, and known differences are recorded in
+[Original-preset realtime compatibility](docs/ORIGINAL_PRESET_REALTIME.md).
 
 ### Build
 
