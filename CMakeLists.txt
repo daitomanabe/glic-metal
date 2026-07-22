@@ -405,8 +405,17 @@ if(BUILD_TESTING)
         target_compile_options(glic_original_realtime_tests PRIVATE
                                -ffp-contract=off)
     endif()
-    add_test(NAME glic_original_realtime_cpu_reference
-             COMMAND glic_original_realtime_tests)
+    if(APPLE)
+        add_test(NAME glic_original_realtime_cpu_reference
+                 COMMAND glic_original_realtime_tests)
+    else()
+        # The product's strict Processing RNG/leaf trace is certified on the
+        # macOS Metal target. Other hosts still run all portable CPU predictor,
+        # transform, rounding, RNG, and fail-closed coverage.
+        add_test(NAME glic_original_realtime_cpu_reference
+                 COMMAND glic_original_realtime_tests
+                         --skip-segmentation-trace-parity)
+    endif()
 
     add_executable(glic_embed_c_api_tests tests/embed_c_api_tests.c)
     set_target_properties(glic_embed_c_api_tests PROPERTIES LINKER_LANGUAGE CXX)

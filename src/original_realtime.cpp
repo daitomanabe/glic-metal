@@ -137,7 +137,7 @@ void OriginalRealtimeCpuLane::startWorkers() {
   }
   for (int channel = 0; channel < 2; ++channel) {
     workers_[static_cast<std::size_t>(channel)] =
-        std::jthread([this, channel] { workerLoop(channel); });
+        std::thread([this, channel] { workerLoop(channel); });
   }
 }
 

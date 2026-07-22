@@ -102,7 +102,7 @@ private:
   ProcessingRandom segmentationRng_{42};
   std::size_t earlyTerminatedNodes_ = 0;
   std::size_t earlySkippedSamples_ = 0;
-  std::array<std::jthread, 2> workers_{};
+  std::array<std::thread, 2> workers_{};
   std::mutex workerMutex_;
   std::condition_variable workerCondition_;
   std::condition_variable workerCompletion_;

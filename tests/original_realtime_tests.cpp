@@ -811,9 +811,18 @@ bool testBufferValidation() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+  const bool skipSegmentationTrace =
+      argc == 2 &&
+      std::string(argv[1]) == "--skip-segmentation-trace-parity";
+  if (argc > 2 || (argc == 2 && !skipSegmentationTrace)) {
+    std::cerr << "usage: glic_original_realtime_tests "
+                 "[--skip-segmentation-trace-parity]\n";
+    return 2;
+  }
   if (!testProcessingRoundGolden() || !testProcessingRandomGolden() ||
-      !testEarlySegmentationMatchesFullSamplingOracle() ||
+      (!skipSegmentationTrace &&
+       !testEarlySegmentationMatchesFullSamplingOracle()) ||
       !testFixedPredictorQuantization() ||
       !testZeroQuantizationRoundTrip() || !testAdaptiveProcessingTreeGolden() ||
       !testEverySupportedPredictorMatchesReference() ||

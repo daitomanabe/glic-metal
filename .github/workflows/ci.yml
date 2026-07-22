@@ -34,7 +34,11 @@ jobs:
 
       - name: Install FFmpeg on macOS
         if: runner.os == 'macOS'
-        run: brew install ffmpeg
+        run: |
+          if brew tap | grep -qx aws/tap; then
+            brew untap aws/tap
+          fi
+          brew install ffmpeg
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
