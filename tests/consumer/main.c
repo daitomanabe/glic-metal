@@ -28,8 +28,10 @@ int main(void) {
       codec_config.decoded_history_frames != 12 ||
       codec_controls.effect != GLIC_CODEC_GLITCH_BITRATE_CRUSH ||
       strcmp(glic_codec_glitch_effect_name(GLIC_CODEC_GLITCH_PAYLOAD_XOR),
-             "payload_xor") != 0 ||
-      glic_codec_glitch_context_create(&codec_context) !=
+             "payload_xor") != 0)
+    return 1;
+#if defined(__APPLE__)
+  if (glic_codec_glitch_context_create(&codec_context) !=
           GLIC_CODEC_GLITCH_OK ||
       codec_context == NULL)
     return 1;
@@ -39,6 +41,12 @@ int main(void) {
       GLIC_CODEC_GLITCH_NOT_PREPARED)
     return 1;
   glic_codec_glitch_context_destroy(codec_context);
+#else
+  if (glic_codec_glitch_context_create(&codec_context) !=
+          GLIC_CODEC_GLITCH_BACKEND_UNAVAILABLE ||
+      codec_context != NULL)
+    return 1;
+#endif
 
   enum { width = 32, height = 24 };
   uint8_t input[width * height * 4];

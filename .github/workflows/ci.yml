@@ -17,20 +17,24 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install Python QA dependencies
         run: python -m pip install -r requirements-qa.txt
 
-      - name: Install Ninja on Linux
+      - name: Install native QA tools on Linux
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install --yes ninja-build
+        run: sudo apt-get update && sudo apt-get install --yes ffmpeg ninja-build
+
+      - name: Install FFmpeg on macOS
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON

@@ -71,6 +71,11 @@ semantic versioning for tagged releases.
 
 ### Changed
 
+- Public CI now supports both current and older Xcode Metal compilers, installs
+  its native FFmpeg test dependency, and validates the documented non-macOS
+  VideoToolbox-unavailable contract in external consumers.
+- GitHub Actions use the current Node 24-based official action releases.
+
 - The human embedding guide now provides a production 19-preset quick start,
   complete category-routing rules, bundle resource resolution, corrected
   framework requirements, and explicit separation from the 144-preset browser.

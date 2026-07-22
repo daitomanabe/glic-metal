@@ -394,7 +394,11 @@ bool testEarlySegmentationMatchesFullSamplingOracle() {
           stats.segmentationRngState != full.terminalStates[frame]) {
         std::cerr << "production segmentation/full oracle mismatch at "
                   << threshold << " frame " << frame << ": " << error
-                  << '\n';
+                  << " expected hash " << full.frameHashes[frame]
+                  << " actual hash " << stats.segmentOrderFnv1a64
+                  << " expected RNG " << full.terminalStates[frame]
+                  << " actual RNG " << stats.segmentationRngState
+                  << " output match " << (output == input) << '\n';
         return false;
       }
       observedProductionSavings =

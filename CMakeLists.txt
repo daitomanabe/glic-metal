@@ -125,6 +125,32 @@ if(APPLE)
     set(GLIC_METALLIB "${PROJECT_BINARY_DIR}/glic_realtime.metallib")
     set(GLIC_METAL_METALLIB "${GLIC_METALLIB}" CACHE FILEPATH
         "Compiled GLIC Metal shader library")
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} -E env
+            "DEVELOPER_DIR=${GLIC_XCODE_DEVELOPER_DIR}"
+            /usr/bin/xcrun -sdk macosx metal -help
+        RESULT_VARIABLE GLIC_METAL_HELP_STATUS
+        OUTPUT_VARIABLE GLIC_METAL_HELP_OUTPUT
+        ERROR_VARIABLE GLIC_METAL_HELP_ERROR)
+    set(GLIC_ORIGINAL_METAL_MATH_FLAGS)
+    if(GLIC_METAL_HELP_STATUS EQUAL 0)
+        set(GLIC_METAL_HELP_TEXT
+            "${GLIC_METAL_HELP_OUTPUT}${GLIC_METAL_HELP_ERROR}")
+        string(FIND "${GLIC_METAL_HELP_TEXT}" "-fmetal-math-mode"
+               GLIC_METAL_MATH_MODE_INDEX)
+        string(FIND "${GLIC_METAL_HELP_TEXT}"
+               "-fmetal-math-fp32-functions"
+               GLIC_METAL_FP32_FUNCTIONS_INDEX)
+        if(NOT GLIC_METAL_MATH_MODE_INDEX EQUAL -1 AND
+           NOT GLIC_METAL_FP32_FUNCTIONS_INDEX EQUAL -1)
+            list(APPEND GLIC_ORIGINAL_METAL_MATH_FLAGS
+                 -fmetal-math-mode=safe
+                 -fmetal-math-fp32-functions=precise)
+        else()
+            message(STATUS
+                "Metal compiler does not expose strict math mode flags; using portable defaults")
+        endif()
+    endif()
     add_custom_command(
         OUTPUT "${GLIC_METAL_AIR}"
         COMMAND ${CMAKE_COMMAND} -E env
@@ -140,8 +166,7 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E env
             "DEVELOPER_DIR=${GLIC_XCODE_DEVELOPER_DIR}"
             /usr/bin/xcrun -sdk macosx metal -std=metal3.1
-            -fmetal-math-mode=safe
-            -fmetal-math-fp32-functions=precise
+            ${GLIC_ORIGINAL_METAL_MATH_FLAGS}
             -c "${PROJECT_SOURCE_DIR}/src/original_realtime_metal_kernel.metal"
             -o "${GLIC_ORIGINAL_METAL_AIR}"
         DEPENDS "${PROJECT_SOURCE_DIR}/src/original_realtime_metal_kernel.metal"
