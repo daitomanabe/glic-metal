@@ -5,6 +5,8 @@
 **Status: pre-release.** The source, tests, and macOS application are under
 active development; no stable binary release has been tagged yet.
 
+Canonical repository: <https://github.com/daitomanabe/glic-metal>
+
 [Build guide](docs/BUILDING.md) ·
 [Embedding guide](docs/EMBEDDING.md) ·
 [AI integration contract](docs/AI_INTEGRATION.md) ·

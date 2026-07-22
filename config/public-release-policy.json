@@ -1,0 +1,11 @@
+{
+  "schema": "glic-metal-public-release-policy-v1",
+  "preset_gallery": {
+    "distribution": "keep-in-git",
+    "maximum_total_mib": 300,
+    "maximum_single_file_mib": 10,
+    "rationale": "The gallery is the public visual audit trail for the preset corpus and is required by the static review site. Generated assets are marked with linguist-generated and binary attributes."
+  },
+  "canonical_repository": "https://github.com/daitomanabe/glic-metal",
+  "default_branch": "main"
+}

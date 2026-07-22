@@ -8,6 +8,10 @@ semantic versioning for tagged releases.
 
 ### Added
 
+- A machine-readable public release policy that explicitly retains the visual
+  preset audit gallery while enforcing total and per-file size limits in the
+  strict publication gate.
+
 - A bilingual AI integration contract and machine-readable integration
   manifest defining category routing, public APIs, runtime resources,
   frameworks, threading, realtime gates, fail-closed rules, and completion

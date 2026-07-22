@@ -21,6 +21,7 @@ REQUIRED_PATHS = (
     "CHANGELOG.md",
     "CMakeLists.txt",
     "CONTRIBUTING.md",
+    "config/public-release-policy.json",
     "FILE-STRUCTURE.md",
     "LICENSE",
     "README.md",
@@ -178,6 +179,46 @@ def gallery_size(source: Path) -> tuple[int, int]:
     return len(files), sum(path.stat().st_size for path in files)
 
 
+def verify_gallery_policy(
+    source: Path, gallery_bytes: int, errors: list[str], warnings: list[str]
+) -> None:
+    policy_path = source / "config" / "public-release-policy.json"
+    try:
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        if policy.get("schema") != "glic-metal-public-release-policy-v1":
+            errors.append("public release policy has an unsupported schema")
+            return
+        gallery_policy = policy["preset_gallery"]
+        if gallery_policy.get("distribution") != "keep-in-git":
+            warnings.append(
+                "committed preset gallery has no keep-in-git release decision"
+            )
+            return
+        maximum_total = int(gallery_policy["maximum_total_mib"]) * 1024 * 1024
+        maximum_single = (
+            int(gallery_policy["maximum_single_file_mib"]) * 1024 * 1024
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError) as exc:
+        errors.append(f"invalid public release policy: {exc}")
+        return
+
+    if gallery_bytes > maximum_total:
+        warnings.append(
+            "committed preset gallery exceeds its documented total-size policy"
+        )
+    gallery = source / "output" / "preset-gallery"
+    oversized = [
+        path.relative_to(source).as_posix()
+        for path in gallery.rglob("*")
+        if path.is_file() and path.stat().st_size > maximum_single
+    ]
+    if oversized:
+        warnings.append(
+            "committed preset gallery exceeds its single-file policy: "
+            + ", ".join(oversized[:5])
+        )
+
+
 def verify_html_links(source: Path, errors: list[str]) -> int:
     document = source / "website" / "index.html"
     parser = LocalLinkParser()
@@ -250,10 +291,7 @@ def main() -> int:
     link_count = verify_markdown_links(source, errors)
     html_link_count = verify_html_links(source, errors)
     gallery_files, gallery_bytes = gallery_size(source)
-    if gallery_bytes > 100 * 1024 * 1024:
-        warnings.append(
-            "committed preset gallery is larger than 100MiB; choose Git history or release/site artifact"
-        )
+    verify_gallery_policy(source, gallery_bytes, errors, warnings)
 
     result = {
         "ok": not errors and (not args.strict or not warnings),

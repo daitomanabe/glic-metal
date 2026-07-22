@@ -14,11 +14,12 @@ or upload a binary.
 - [x] A reproducible public-layout check is available.
 - [x] The CI workflow defines CPU validation on Linux and CPU/Metal validation
       on macOS.
-- [ ] Choose whether the 275MB generated preset gallery stays in Git history or
-      is distributed as a release/site artifact.
-- [ ] Configure the final public Git remote and replace placeholder repository
-      URLs in release metadata.
-- [ ] Enable private vulnerability reporting in the public host settings.
+- [x] Keep the generated preset gallery in Git as the static visual audit trail.
+      `config/public-release-policy.json` caps it at 300MiB total and 10MiB per
+      file; `.gitattributes` marks the generated binary content explicitly.
+- [x] Use `https://github.com/daitomanabe/glic-metal` as the canonical public
+      repository on branch `main`; no placeholder repository URLs remain.
+- [x] Enable private vulnerability reporting in the public host settings.
 
 ## Release candidate verification
 

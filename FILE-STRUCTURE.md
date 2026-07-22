@@ -36,7 +36,8 @@ glic-metal/
 - Preset gallery: 436 files, approximately 275MB; 144 `.glic` files account for
   approximately 223MB and 145 PNG files for approximately 47MB.
 - The gallery is marked generated in `.gitattributes`; its retention in Git is
-  an explicit release decision recorded in `docs/PUBLIC_RELEASE.md`.
+  an explicit release decision recorded in `docs/PUBLIC_RELEASE.md` and bounded
+  by `config/public-release-policy.json`.
 
 ## Local-only directories
 
