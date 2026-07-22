@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import html
 import json
 import math
@@ -26,6 +27,7 @@ from rank_search_results import perceptual_distance
 
 
 SCHEMA = "glic-novel-moderate-preset-selection-v1"
+ADOPTED_SCHEMA = "glic-adopted-preset-selection-v1"
 POLICY = "middle-complexity-reference-novelty-maxmin-v1"
 COMPLEXITY_FIELDS = (
     "edge_density",
@@ -392,10 +394,29 @@ def write_contact_sheet(path: Path, items: list[dict[str, Any]], output_dir: Pat
     canvas.save(path, optimize=True)
 
 
+def selection_set_id(items: list[dict[str, Any]]) -> str:
+    identity = "\n".join(str(item.get("recipe_hash") or "") for item in items)
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+
+
+def json_for_script(value: Any) -> str:
+    """Encode JSON without allowing data to terminate the script element."""
+    return (
+        json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
 def build_html(items: list[dict[str, Any]], summary: dict[str, Any]) -> str:
     cards = []
     for item in items:
         canonical = html.escape(str(item.get("canonical") or ""))
+        name = html.escape(str(item["name"]))
+        recipe_hash = html.escape(str(item["recipe_hash"]), quote=True)
         media = f'<img src="{html.escape(item["preview"])}" alt="{html.escape(item["name"])}">'
         if item.get("video"):
             media = (
@@ -404,9 +425,222 @@ def build_html(items: list[dict[str, Any]], summary: dict[str, Any]) -> str:
                 f'<source src="{html.escape(item["video"])}" type="video/mp4"></video>'
             )
         cards.append(
-            f'''<article>{media}<div><small>#{item["selection_rank"]} · {html.escape(item["mechanism_family"])}</small><h2>{html.escape(item["name"])}</h2><p>complexity <b>{item["complexity_score"]:.3f}</b> · prior distance <b>{item["nearest_prior_distance"]:.3f}</b> · selected distance <b>{item["nearest_selected_distance"]:.3f}</b></p><details><summary>canonical recipe</summary><code>{canonical}</code></details></div></article>'''
+            f'''<article class="preset-card" data-preset-key="{recipe_hash}"><div class="media-wrap">{media}<label class="decision"><input class="preset-checkbox" type="checkbox" value="{recipe_hash}" aria-label="{name}を採用"><span><span class="checkmark">✓</span>採用する</span></label></div><div class="card-copy"><small>#{item["selection_rank"]} · {html.escape(item["mechanism_family"])}</small><h2>{name}</h2><p>complexity <b>{item["complexity_score"]:.3f}</b> · prior distance <b>{item["nearest_prior_distance"]:.3f}</b> · selected distance <b>{item["nearest_selected_distance"]:.3f}</b></p><details><summary>canonical recipe</summary><code>{canonical}</code></details></div></article>'''
         )
-    return f'''<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GLIC novel moderate presets</title><style>:root{{color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}body{{margin:0;background:#050505;color:#eee}}header{{padding:24px;border-bottom:1px solid #292929}}header p,p{{color:#aaa}}main{{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px;padding:18px}}article{{background:#111;border:1px solid #333;border-radius:10px;overflow:hidden}}img,video{{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#000}}article div{{padding:14px}}small{{color:#7ee29a;font:12px ui-monospace,monospace}}h2{{font:600 14px ui-monospace,monospace;overflow-wrap:anywhere}}code{{display:block;margin-top:10px;color:#bbb;overflow-wrap:anywhere}}</style></head><body><header><h1>適度に複雑で、既存画像と異なる新規preset</h1><p>{summary["selected"]} selected / {summary["moderate_pool"]} moderate / {summary["eligible"]} realtime-certified candidates · policy {POLICY}</p></header><main>{''.join(cards)}</main></body></html>'''
+    set_id = selection_set_id(items)
+    browser_data = {
+        "schema": SCHEMA,
+        "adopted_schema": ADOPTED_SCHEMA,
+        "policy": POLICY,
+        "selection_set_id": set_id,
+        "presets": items,
+    }
+    document = '''<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GLIC preset review</title>
+<style>
+:root{color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--accent:#7ee29a;--panel:#111;--line:#333}
+*{box-sizing:border-box}
+body{margin:0;background:#050505;color:#eee}
+.hero{padding:24px;border-bottom:1px solid #292929}
+.hero h1{margin:0 0 8px;font-size:clamp(22px,4vw,36px)}
+.hero p,p{color:#aaa}
+.review-bar{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px 16px;padding:14px 18px;background:rgba(8,8,8,.94);border-bottom:1px solid #292929;backdrop-filter:blur(12px)}
+.review-count{min-width:150px;font-size:15px}
+.review-count strong{color:var(--accent);font-size:24px}
+.review-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+button{appearance:none;border:1px solid #444;border-radius:7px;padding:9px 12px;background:#1b1b1b;color:#eee;font:inherit;cursor:pointer}
+button:hover:not(:disabled){border-color:#777;background:#242424}
+button.primary{border-color:#4e9d67;background:#183823}
+button.primary:hover:not(:disabled){background:#214b30}
+button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
+button:disabled{cursor:not-allowed;opacity:.38}
+#selection-status{flex-basis:100%;margin:0;color:#888;font-size:12px;text-align:right}
+main{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px;padding:18px}
+article{background:var(--panel);border:2px solid var(--line);border-radius:10px;overflow:hidden;transition:border-color .16s,box-shadow .16s,opacity .16s}
+article.adopted{border-color:var(--accent);box-shadow:0 0 0 1px rgba(126,226,154,.22),0 10px 32px rgba(0,0,0,.35)}
+article.filtered-out{display:none}
+.media-wrap{position:relative;padding:0}
+img,video{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#000}
+.decision{position:absolute;top:12px;right:12px;display:block;cursor:pointer;user-select:none}
+.decision input{position:absolute;opacity:0;pointer-events:none}
+.decision span{display:flex;align-items:center;gap:7px;padding:9px 12px;border:1px solid #666;border-radius:999px;background:rgba(10,10,10,.86);color:#eee;font-weight:700;box-shadow:0 2px 12px rgba(0,0,0,.35)}
+.decision input:focus-visible+span{outline:2px solid white;outline-offset:2px}
+.decision input:checked+span{border-color:var(--accent);background:#1b4a2a;color:#fff}
+.checkmark{display:grid!important;width:19px;height:19px;padding:0!important;place-items:center;border:1px solid #777!important;border-radius:5px!important;background:#111!important;color:transparent!important;font-size:13px}
+.decision input:checked+span .checkmark{border-color:var(--accent)!important;background:var(--accent)!important;color:#07150b!important}
+.card-copy{padding:14px}
+small{color:var(--accent);font:12px ui-monospace,monospace}
+h2{font:600 14px ui-monospace,monospace;overflow-wrap:anywhere}
+code{display:block;margin-top:10px;color:#bbb;overflow-wrap:anywhere}
+@media(max-width:680px){.review-bar{align-items:flex-start;flex-direction:column}.review-actions{justify-content:flex-start}#selection-status{text-align:left}main{grid-template-columns:1fr;padding:12px}}
+</style>
+</head>
+<body>
+<header class="hero">
+  <h1>新規preset 採用レビュー</h1>
+  <p>映像を確認し、使いたい候補の「採用する」をチェックしてください。初回は全て未選択です。</p>
+  <p>__AVAILABLE__ candidates / __MODERATE__ moderate / __ELIGIBLE__ realtime-certified · policy __POLICY__</p>
+</header>
+<section class="review-bar" aria-label="採用操作">
+  <div class="review-count"><strong id="adopted-count">0</strong> / __AVAILABLE__ 採用</div>
+  <div class="review-actions">
+    <button id="show-adopted" type="button" aria-pressed="false" disabled>採用だけ表示</button>
+    <button id="clear-selection" type="button" disabled>選択解除</button>
+    <button id="export-csv" type="button" disabled>CSVを保存</button>
+    <button id="export-json" class="primary" type="button" disabled>採用JSONを保存</button>
+  </div>
+  <p id="selection-status" role="status">チェックした候補だけが採用ファイルに入ります。選択状態はこのブラウザに保存されます。</p>
+</section>
+<main>__CARDS__</main>
+<script id="preset-data" type="application/json">__BROWSER_DATA__</script>
+<script>
+(() => {
+  "use strict";
+  const data = JSON.parse(document.getElementById("preset-data").textContent);
+  const presets = data.presets;
+  const knownHashes = new Set(presets.map((preset) => String(preset.recipe_hash)));
+  const storageKey = `glic:adopted-presets:${data.selection_set_id}`;
+  const selected = new Set();
+  const boxes = [...document.querySelectorAll(".preset-checkbox")];
+  const cards = [...document.querySelectorAll(".preset-card")];
+  const count = document.getElementById("adopted-count");
+  const showAdopted = document.getElementById("show-adopted");
+  const clearSelection = document.getElementById("clear-selection");
+  const exportJson = document.getElementById("export-json");
+  const exportCsv = document.getElementById("export-csv");
+  const status = document.getElementById("selection-status");
+  let filterAdopted = false;
+
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || "[]");
+    if (Array.isArray(saved)) {
+      saved.filter((hash) => knownHashes.has(String(hash))).forEach((hash) => selected.add(String(hash)));
+    }
+  } catch (_) {
+    status.textContent = "ブラウザ保存は利用できませんが、この画面内での選択と書き出しは利用できます。";
+  }
+
+  function saveState() {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify([...selected]));
+    } catch (_) {
+      // Selection and downloads remain functional without local storage.
+    }
+  }
+
+  function sync() {
+    boxes.forEach((box) => {
+      box.checked = selected.has(box.value);
+    });
+    cards.forEach((card) => {
+      const adopted = selected.has(card.dataset.presetKey);
+      card.classList.toggle("adopted", adopted);
+      card.classList.toggle("filtered-out", filterAdopted && !adopted);
+    });
+    const adoptedCount = selected.size;
+    count.textContent = String(adoptedCount);
+    [clearSelection, exportJson, exportCsv, showAdopted].forEach((button) => {
+      button.disabled = adoptedCount === 0;
+    });
+    showAdopted.setAttribute("aria-pressed", String(filterAdopted));
+    showAdopted.textContent = filterAdopted ? "全候補を表示" : "採用だけ表示";
+    saveState();
+  }
+
+  boxes.forEach((box) => {
+    box.addEventListener("change", () => {
+      if (box.checked) selected.add(box.value);
+      else selected.delete(box.value);
+      if (selected.size === 0) filterAdopted = false;
+      status.textContent = `${selected.size}件を採用候補に設定しました。`;
+      sync();
+    });
+  });
+
+  showAdopted.addEventListener("click", () => {
+    filterAdopted = !filterAdopted;
+    sync();
+  });
+
+  clearSelection.addEventListener("click", () => {
+    selected.clear();
+    filterAdopted = false;
+    status.textContent = "選択を解除しました。";
+    sync();
+  });
+
+  function adoptedPresets() {
+    return presets.filter((preset) => selected.has(String(preset.recipe_hash)));
+  }
+
+  function adoptedPayload() {
+    const adopted = adoptedPresets();
+    return {
+      schema: data.adopted_schema,
+      generated_at: new Date().toISOString(),
+      source: {
+        schema: data.schema,
+        policy: data.policy,
+        selection_set_id: data.selection_set_id,
+        selection_origin: "checked_only"
+      },
+      summary: {
+        available: presets.length,
+        adopted: adopted.length,
+        mechanism_families: [...new Set(adopted.map((preset) => preset.mechanism_family))].sort()
+      },
+      presets: adopted
+    };
+  }
+
+  function download(name, type, body) {
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(new Blob([body], {type}));
+    link.href = url;
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function csvCell(value) {
+    const text = value === null || value === undefined
+      ? ""
+      : (typeof value === "object" ? JSON.stringify(value) : String(value));
+    return `"${text.replaceAll('"', '""')}"`;
+  }
+
+  exportJson.addEventListener("click", () => {
+    download("adopted-presets.json", "application/json;charset=utf-8", JSON.stringify(adoptedPayload(), null, 2) + "\\n");
+    status.textContent = `${selected.size}件だけを adopted-presets.json に保存しました。`;
+  });
+
+  exportCsv.addEventListener("click", () => {
+    const fields = ["selection_rank", "name", "recipe_hash", "mechanism_family", "canonical", "ready_to_run_args"];
+    const rows = adoptedPresets().map((preset) => fields.map((field) => csvCell(preset[field])).join(","));
+    download("adopted-presets.csv", "text/csv;charset=utf-8", "\ufeff" + fields.join(",") + "\\n" + rows.join("\\n") + "\\n");
+    status.textContent = `${selected.size}件だけを adopted-presets.csv に保存しました。`;
+  });
+
+  sync();
+})();
+</script>
+</body>
+</html>
+'''
+    return (
+        document.replace("__AVAILABLE__", str(summary["selected"]))
+        .replace("__MODERATE__", str(summary["moderate_pool"]))
+        .replace("__ELIGIBLE__", str(summary["eligible"]))
+        .replace("__POLICY__", html.escape(POLICY))
+        .replace("__CARDS__", "".join(cards))
+        .replace("__BROWSER_DATA__", json_for_script(browser_data))
+    )
 
 
 def numeric_features(item: dict[str, Any], include_residual: bool) -> list[float]:

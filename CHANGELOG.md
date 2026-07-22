@@ -10,6 +10,8 @@ semantic versioning for tagged releases.
 
 - Deterministic selection of moderately complex generated patterns that stay
   visually distant from a prior ranked image corpus.
+- Checkbox-based preset review with persistent browser state and checked-only
+  JSON/CSV adoption exports.
 - Native macOS webcam preview with runtime preset and quality-mode selection.
 - Strict, Fast Match, and fail-closed Auto 20fps original-style Metal lanes.
 - 144-preset compatibility corpus and 37-preset higher-fidelity original lane.

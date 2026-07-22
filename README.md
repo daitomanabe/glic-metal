@@ -198,7 +198,10 @@ python3 scripts/select_novel_moderate_presets.py search-runs/pilot \
 ```
 
 出力には再利用可能な`presets.json`、CSV、HTML、contact sheetと、分布確認用の
-`embedding-features.csv`が含まれます。複雑さの上下20%と、過去画像への距離の
+`embedding-features.csv`が含まれます。HTMLでは各動画を見ながら「採用する」を
+チェックできます。選択はブラウザに保存され、「採用JSONを保存」または
+「CSVを保存」から、チェックしたpresetだけを`adopted-presets.json` / CSVへ
+書き出せます。初回表示では全候補が未選択です。複雑さの上下20%と、過去画像への距離の
 下位20%を除外してから、描画機構を横断するmax-min選択を行います。
 
 5時間の無人実行は、API credentialを子プロセスへ渡さず、`caffeinate`、空き容量監視、二重起動防止、signal checkpointを行うsupervisorから起動できます。ランキングは既定で5分ごとに更新され、終了後に安定したarchiveから最終生成されます。`status.json`、`supervisor-status.json`、`archive.json`、`candidates.ndjson` が進捗と復旧元です。同一入力・seed・backendだけが `--resume` でき、内容不一致は拒否されます。
@@ -640,7 +643,10 @@ python3 scripts/select_novel_moderate_presets.py search-runs/pilot \
 ```
 
 It writes a runnable `presets.json` bank, CSV, HTML, contact sheet, and
-`embedding-features.csv`. The outer 20% complexity tails and the lowest 20%
+`embedding-features.csv`. In the HTML review page, each video has an
+**Adopt** checkbox. The browser remembers the review state, and the JSON/CSV
+buttons export only checked presets as `adopted-presets.json` or CSV. Every
+candidate is unchecked on the first visit. The outer 20% complexity tails and the lowest 20%
 prior-novelty tail are removed before mechanism-aware max-min selection.
 
 For a five-hour unattended run, `run_search_supervisor.sh` adds `caffeinate`, disk-space checks, an atomic lock, credential-free child environment, logs, graceful checkpoints, five-minute ranking snapshots, and a final stable ranking. Resume is refused when the input content, seed, scale, or resolved backend differs from `run-config.json`.

@@ -54,6 +54,46 @@ def main() -> int:
     assert MODULE.select_maxmin([candidate(5, "line", 1.0, 1.0)], 1)[0][
         "_nearest_selected_distance"
     ] == 1.0
+
+    public_items = [
+        {
+            "selection_rank": 1,
+            "name": "first</script>",
+            "recipe_hash": "abc123",
+            "mechanism_family": "line",
+            "preview": "previews/first.png",
+            "canonical": "v2|first</script>",
+            "complexity_score": 0.5,
+            "nearest_prior_distance": 0.4,
+            "nearest_selected_distance": 1.0,
+        },
+        {
+            "selection_rank": 2,
+            "name": "second",
+            "recipe_hash": "def456",
+            "mechanism_family": "sync",
+            "preview": "previews/second.png",
+            "video": "videos/second.mp4",
+            "canonical": "v2|second",
+            "complexity_score": 0.6,
+            "nearest_prior_distance": 0.3,
+            "nearest_selected_distance": 0.2,
+        },
+    ]
+    summary = {"selected": 2, "moderate_pool": 4, "eligible": 8}
+    review_html = MODULE.build_html(public_items, summary)
+    assert review_html.count('class="preset-checkbox"') == 2
+    assert 'id="export-json"' in review_html
+    assert 'id="export-csv"' in review_html
+    assert 'selection_origin: "checked_only"' in review_html
+    assert 'download("adopted-presets.json"' in review_html
+    assert "URL.revokeObjectURL(url), 1000" in review_html
+    assert 'JSON.stringify(adoptedPayload(), null, 2) + "\\n"' in review_html
+    assert 'fields.join(",") + "\\n" + rows.join("\\n") + "\\n"' in review_html
+    assert "first</script>" not in review_html
+    assert "first\\u003c/script\\u003e" in review_html
+    assert MODULE.selection_set_id(public_items) == MODULE.selection_set_id(public_items)
+    assert MODULE.selection_set_id(public_items) != MODULE.selection_set_id(public_items[:1])
     print("novel moderate preset selector tests: PASS")
     return 0
 
