@@ -70,6 +70,44 @@ def main() -> int:
         assert output.shape == base.shape, effect
         assert output.dtype == np.uint8, effect
 
+    decoder_vectors = [
+        {
+            "w": 16,
+            "h": 16,
+            "dst_x": 16,
+            "dst_y": 16,
+            "motion_x": 24,
+            "motion_y": -8,
+            "motion_scale": 4,
+        },
+        {
+            "w": 16,
+            "h": 16,
+            "dst_x": 48,
+            "dst_y": 32,
+            "motion_x": -16,
+            "motion_y": 12,
+            "motion_scale": 4,
+        },
+    ]
+    field = lab.decoder_motion_field(base.shape, decoder_vectors)
+    assert field.shape == (height, width, 2)
+    assert np.max(np.abs(field)) > 0
+    mirrored, _ = lab.rewrite_decoder_motion_field(
+        "motion_vector_mirror", field, 0.72, 0.56, 11, None
+    )
+    assert np.allclose(mirrored[..., 0], -field[..., 0])
+    quantized, _ = lab.rewrite_decoder_motion_field(
+        "motion_vector_quantizer", field, 0.72, 0.56, 11, None
+    )
+    quantum = 2.0 + 0.72 * 14.0
+    assert np.allclose(quantized / quantum, np.round(quantized / quantum))
+    assert all(
+        lab.IMPLEMENTATION_LEVEL[effect]
+        == "decoder_exported_motion_vector_field_rewrite"
+        for effect in lab.SYNTAX_EFFECTS[:4]
+    )
+
     generated = [search.candidate(index, 1234) for index in range(34)]
     assert len({entry["name"] for entry in generated}) == 34
     assert set(lab.EFFECTS).issubset({entry["effect"] for entry in generated})

@@ -53,6 +53,10 @@ CODECS = ("h264", "hevc", "av1", "vp9", "prores", "av2")
 
 IMPLEMENTATION_LEVEL = {
     **{effect: "decoded_reconstruction_proxy" for effect in SYNTAX_EFFECTS},
+    "motion_vector_vortex": "decoder_exported_motion_vector_field_rewrite",
+    "motion_vector_mirror": "decoder_exported_motion_vector_field_rewrite",
+    "motion_vector_quantizer": "decoder_exported_motion_vector_field_rewrite",
+    "motion_vector_freeze": "decoder_exported_motion_vector_field_rewrite",
     "av1_film_grain_instrument": "av1_codec_cycle_plus_grain_reconstruction",
     "av2_optical_flow_wound": "official_avm_cycle_plus_flow_reconstruction",
     "semantic_reference_retarget": "opencv_motion_semantic_fallback",
@@ -107,6 +111,79 @@ def warp_with_flow(frame: np.ndarray, flow: np.ndarray) -> np.ndarray:
     )
 
 
+def decoder_motion_field(
+    shape: tuple[int, ...], vectors: list[dict[str, object]]
+) -> np.ndarray:
+    height, width = shape[:2]
+    field = np.zeros((height, width, 2), dtype=np.float32)
+    weight = np.zeros((height, width), dtype=np.float32)
+    for vector in vectors:
+        try:
+            scale = max(1.0, float(vector["motion_scale"]))
+            dx = float(vector["motion_x"]) / scale
+            dy = float(vector["motion_y"]) / scale
+            block_width = max(1, int(vector["w"]))
+            block_height = max(1, int(vector["h"]))
+            center_x = int(vector["dst_x"])
+            center_y = int(vector["dst_y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        left = max(0, center_x - block_width // 2)
+        top = max(0, center_y - block_height // 2)
+        right = min(width, left + block_width)
+        bottom = min(height, top + block_height)
+        if left >= right or top >= bottom:
+            continue
+        field[top:bottom, left:right, 0] += dx
+        field[top:bottom, left:right, 1] += dy
+        weight[top:bottom, left:right] += 1.0
+    populated = weight > 0
+    field[populated] /= weight[populated, None]
+    if np.any(populated):
+        mask = (populated.astype(np.uint8) * 255)
+        field[..., 0] = cv2.inpaint(field[..., 0], 255 - mask, 3, cv2.INPAINT_NS)
+        field[..., 1] = cv2.inpaint(field[..., 1], 255 - mask, 3, cv2.INPAINT_NS)
+    return field
+
+
+def rewrite_decoder_motion_field(
+    effect: str,
+    field: np.ndarray,
+    amount: float,
+    rate: float,
+    index: int,
+    frozen_flow: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    result = field.copy()
+    strength = float(np.clip(amount, 0.0, 1.0))
+    if effect == "motion_vector_vortex":
+        height, width = field.shape[:2]
+        x, y = np.meshgrid(
+            np.linspace(-1.0, 1.0, width, dtype=np.float32),
+            np.linspace(-1.0, 1.0, height, dtype=np.float32),
+        )
+        angle = strength * math.pi * np.sqrt(x * x + y * y)
+        cosine, sine = np.cos(angle), np.sin(angle)
+        source_x, source_y = result[..., 0].copy(), result[..., 1].copy()
+        result[..., 0] = source_x * cosine - source_y * sine
+        result[..., 1] = source_x * sine + source_y * cosine
+        result[..., 0] -= y * 18.0 * strength
+        result[..., 1] += x * 18.0 * strength
+    elif effect == "motion_vector_mirror":
+        result[..., 0] *= -1.0
+        if index % max(2, round(8 - rate * 6)) == 0:
+            result[..., 1] *= -1.0
+    elif effect == "motion_vector_quantizer":
+        quantum = max(1.0, 2.0 + strength * 14.0)
+        result = np.round(result / quantum) * quantum
+    elif effect == "motion_vector_freeze":
+        period = max(2, round(12 - rate * 10))
+        if frozen_flow is None or index % period == 0:
+            frozen_flow = result.copy()
+        result = frozen_flow
+    return result, frozen_flow
+
+
 def mix(first: np.ndarray, second: np.ndarray, amount: float) -> np.ndarray:
     return cv2.addWeighted(first, 1.0 - amount, second, amount, 0.0)
 
@@ -158,6 +235,7 @@ def transform_frame(
     feedback: float,
     seed: int,
     audio_level: float,
+    decoder_vectors: list[dict[str, object]] | None = None,
 ) -> tuple[np.ndarray, np.ndarray | None]:
     if not history:
         return frame, frozen_flow
@@ -166,6 +244,18 @@ def transform_frame(
     strength = float(np.clip(amount * (0.65 + audio_level * 0.7), 0.0, 1.0))
 
     if effect.startswith("motion_vector_") or effect == "av2_optical_flow_wound":
+        if decoder_vectors is not None:
+            flow = decoder_motion_field(frame.shape, decoder_vectors)
+            flow, frozen_flow = rewrite_decoder_motion_field(
+                effect, flow, strength, rate, index, frozen_flow
+            )
+            warped = warp_with_flow(previous, flow)
+            if effect == "motion_vector_freeze":
+                mask = moving_mask(frame, previous, strength)
+                selected = np.where(mask[..., None] > 0, warped, frame)
+                return mix(frame, selected, 0.45 + strength * 0.5), frozen_flow
+            return mix(frame, warped, 0.35 + strength * 0.6), frozen_flow
+
         flow = optical_flow(previous, frame)
         if effect == "motion_vector_vortex":
             height, width = frame.shape[:2]
@@ -326,6 +416,98 @@ def transform_frame(
         return clamp_frame(result.astype(np.float32) + noise), frozen_flow
 
     return frame, frozen_flow
+
+
+def ensure_motion_extractor(root: Path) -> Path:
+    extractor = root / "build" / "codec-lab-tools" / "glic_extract_mvs"
+    if extractor.is_file():
+        return extractor
+    result = subprocess.run(
+        [str(root / "scripts" / "build_codec_lab_native.sh")],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    built = Path(result.stdout.strip().splitlines()[-1])
+    if not built.is_file():
+        raise RuntimeError("native motion-vector extractor build produced no binary")
+    return built
+
+
+def prepare_decoder_motion_source(
+    ffmpeg: str,
+    source: Path,
+    codec: str,
+    width: int,
+    height: int,
+    fps: int,
+    max_frames: int,
+    threads: int,
+    work: Path,
+    timeout: int,
+    maximum_file_bytes: int,
+) -> tuple[Path, list[dict], dict, dict]:
+    if codec not in {"h264", "hevc"}:
+        raise RuntimeError(
+            "decoder-exported motion-vector effects require --codec h264 or hevc"
+        )
+    encoded = work / f"motion-source-{codec}.mkv"
+    encode = run_isolated(
+        [
+            ffmpeg,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source),
+            "-map",
+            "0:v:0",
+            "-an",
+            "-vf",
+            f"scale={width}:{height}:flags=lanczos,"
+            f"fps={fps},format=yuv420p",
+            "-frames:v",
+            str(max_frames),
+            *encoder_options(codec, fps, threads),
+            str(encoded),
+        ],
+        log=work / f"motion-{codec}-encode.log",
+        timeout_seconds=timeout,
+        maximum_file_bytes=maximum_file_bytes,
+    )
+    if encode.return_code != 0 or not encoded.is_file():
+        raise RuntimeError(f"{codec} motion source encode failed; see {encode.log}")
+
+    root = Path(__file__).resolve().parents[1]
+    extractor = ensure_motion_extractor(root)
+    started = time.monotonic()
+    extraction = subprocess.run(
+        [str(extractor), str(encoded)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    frames = [
+        json.loads(line)
+        for line in extraction.stdout.splitlines()
+        if line.strip()
+    ]
+    vector_count = sum(len(frame.get("vectors", [])) for frame in frames)
+    evidence = {
+        "backend": "libavcodec_AV_FRAME_DATA_MOTION_VECTORS",
+        "extractor": str(extractor),
+        "frame_records": len(frames),
+        "vector_records": vector_count,
+        "frames_with_vectors": sum(bool(frame.get("vectors")) for frame in frames),
+        "elapsed_seconds": round(time.monotonic() - started, 6),
+    }
+    if len(frames) < 2 or vector_count == 0:
+        raise RuntimeError(f"{codec} decoder exported no usable motion vectors")
+    return encoded, frames, result_json(encode), evidence
 
 
 def audio_envelope(ffmpeg: str, source: Path, frame_count_value: int, fps: int) -> list[float]:
@@ -574,9 +756,33 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     maximum_file_bytes = args.maximum_file_mib * 1024 * 1024
 
-    capture = cv2.VideoCapture(str(args.input))
+    processes: list[dict] = []
+    bitstreams: list[Path] = []
+    motion_frames: list[dict] | None = None
+    motion_evidence: dict | None = None
+    capture_source = args.input
+    if args.effect.startswith("motion_vector_"):
+        capture_source, motion_frames, encode_process, motion_evidence = (
+            prepare_decoder_motion_source(
+                ffmpeg,
+                args.input,
+                args.codec,
+                args.width,
+                args.height,
+                args.fps,
+                args.max_frames,
+                args.threads,
+                work,
+                args.timeout,
+                maximum_file_bytes,
+            )
+        )
+        processes.append(encode_process)
+        bitstreams.append(capture_source)
+
+    capture = cv2.VideoCapture(str(capture_source))
     if not capture.isOpened():
-        raise RuntimeError(f"could not decode input: {args.input}")
+        raise RuntimeError(f"could not decode input: {capture_source}")
     donor_capture = cv2.VideoCapture(str(args.donor)) if args.donor else None
     if donor_capture is not None and not donor_capture.isOpened():
         raise RuntimeError(f"could not decode donor: {args.donor}")
@@ -627,6 +833,12 @@ def main() -> int:
                 args.feedback,
                 args.seed,
                 envelope[processed_frames],
+                (
+                    motion_frames[processed_frames].get("vectors", [])
+                    if motion_frames is not None
+                    and processed_frames < len(motion_frames)
+                    else None
+                ),
             )
             writer.write(output)
             history.append(frame.copy())
@@ -640,10 +852,8 @@ def main() -> int:
     if processed_frames < 2 or not transformed.is_file():
         raise RuntimeError("fewer than two frames were reconstructed")
 
-    processes: list[dict] = []
-    bitstreams: list[Path] = []
     if args.effect == "cross_codec_chain":
-        decoded, processes, bitstreams = cross_codec_chain(
+        decoded, effect_processes, effect_bitstreams = cross_codec_chain(
             ffmpeg,
             transformed,
             args.fps,
@@ -652,8 +862,10 @@ def main() -> int:
             args.timeout,
             maximum_file_bytes,
         )
+        processes.extend(effect_processes)
+        bitstreams.extend(effect_bitstreams)
     elif args.effect == "decoder_fingerprint_ensemble":
-        decoded, processes, bitstreams = decoder_ensemble(
+        decoded, effect_processes, effect_bitstreams = decoder_ensemble(
             ffmpeg,
             transformed,
             args.fps,
@@ -662,6 +874,8 @@ def main() -> int:
             args.timeout,
             maximum_file_bytes,
         )
+        processes.extend(effect_processes)
+        bitstreams.extend(effect_bitstreams)
     elif args.codec == "av2":
         av2_preview = work / "av2-preview.mp4"
         command = [
@@ -790,6 +1004,7 @@ def main() -> int:
             for path in bitstreams
             if path.is_file()
         ],
+        "motion_vector_evidence": motion_evidence,
         "processes": processes,
         "output_probe": output_probe,
     }
