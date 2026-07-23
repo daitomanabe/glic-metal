@@ -8,15 +8,15 @@ glic-metal/
 ├── apps/                     macOS webcam preview entry point
 ├── benchmarks/               realtime and original-style benchmarks
 ├── config/                   reviewed runtime allowlists
-├── docs/                     build, integration, fidelity, codec, catalog, and release documents
+├── docs/                     quickstart, integration, fidelity, codec, catalog, and release documents
 ├── examples/                 small preset/code examples
 ├── external/stb/             pinned image-I/O Git submodule
 ├── include/glic_metal/       stable image, Metal, and codec-glitch C APIs
 ├── cmake/                    installed CMake package configuration
 ├── output/preset-gallery/    committed generated comparison gallery
 ├── presets/                  144 SHA-256-pinned upstream presets
-├── resources/                macOS metadata and machine-readable integration contract
-├── scripts/                  video processing, visual analysis, search, and QA tools
+├── resources/                SDK guide, macOS metadata, integration contract, and codec catalogs
+├── scripts/                  realtime/offline video processing, packet damage, search, and QA tools
 ├── src/                      C++20, Objective-C++, and Metal implementation
 ├── tests/                    API consumer, C++, Objective-C++, and Python tests
 ├── tools/                    image/codec filtering, search, and certification CLIs
@@ -48,6 +48,25 @@ The following are ignored and must not be included in a public source archive:
 - `search-runs/`
 - non-gallery `output/`
 - Python caches, editor metadata, logs, and environment files
+
+## Generated downstream SDK
+
+`scripts/build_macos_sdk.sh` produces an ignored, self-contained distribution:
+
+```text
+GlicMetalSDK/
+├── GlicMetal.xcframework
+├── GlicMetalResources.bundle
+├── AI_INTEGRATION.md
+├── Documentation/
+├── Tools/
+│   └── requirements.txt
+└── SHA256SUMS
+```
+
+`Documentation/` and `Tools/` are copied from the same source revision as the
+library and catalogs. Generated SDKs, local test videos, search runs, `.DS_Store`
+files, and Python caches remain outside Git.
 
 Run `python3 scripts/check_public_release.py --source .` after reorganizing the
 tree. It verifies required release files, tracked-path hygiene, absolute path

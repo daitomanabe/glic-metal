@@ -7,6 +7,9 @@
 GLIC Metalには、実際のcodec encode/decodeを通す2種類の経路があります。両者を
 「すべてGPU realtime」とは扱いません。
 
+圧縮packet自体を破損する3つ目のfile経路は
+[Offline Packet Glitch Lab](OFFLINE_PACKET_GLITCH.md)に分離しています。
+
 | Codec | Encode / decode | 経路 | realtime判定 |
 |---|---|---|---|
 | H.264 / AVC | VideoToolbox | C/C++非同期API、`process_video.py` | 実測JSONで20/30 fps判定 |
@@ -96,7 +99,8 @@ python3 scripts/probe_multicodec_capabilities.py \
 ```
 
 このprobeはFFmpegの実encoder/decoder一覧、AVM executable、VideoToolboxの
-1-frame encode/decodeを検査します。利用可否をcodec名から推測しません。
+1-frame encode/decodeに加え、Offline Packet Labが必要とするbitstream filterと
+codec/effect組み合わせを検査します。利用可否をcodec名から推測しません。
 
 ## English
 
@@ -118,3 +122,7 @@ The review MP4 is deliberately separate from the compressed evidence. For
 AV1, AV2, and VP9, inspect the persistent `.codec-stages/` directory and JSON
 stage records for codec identity, bitstream SHA-256, size, encode/decode
 duration, and generation count.
+
+For packet, NAL/OBU, and timestamp damage, use the separate
+[Offline Packet Glitch Lab](OFFLINE_PACKET_GLITCH.md). It runs damaged decode
+under process and resource limits and never claims realtime eligibility.

@@ -263,6 +263,26 @@ const char *codecGlitchEffectName(CodecGlitchEffect effect) noexcept {
     return "recursive_codec_skin";
   case CodecGlitchEffect::ConcealmentChoreography:
     return "concealment_choreography";
+  case CodecGlitchEffect::DualCodecCrossbreed:
+    return "dual_codec_crossbreed";
+  case CodecGlitchEffect::CodecPingpong:
+    return "codec_pingpong";
+  case CodecGlitchEffect::GopAccordion:
+    return "gop_accordion";
+  case CodecGlitchEffect::BframeBraid:
+    return "bframe_braid";
+  case CodecGlitchEffect::PlaneSplitCodec:
+    return "plane_split_codec";
+  case CodecGlitchEffect::RoiQualityIslands:
+    return "roi_quality_islands";
+  case CodecGlitchEffect::CodecPhaseMosaic:
+    return "codec_phase_mosaic";
+  case CodecGlitchEffect::EncoderHotSwap:
+    return "encoder_hot_swap";
+  case CodecGlitchEffect::PtsRubberband:
+    return "pts_rubberband";
+  case CodecGlitchEffect::BitrateRaster:
+    return "bitrate_raster";
   case CodecGlitchEffect::Count:
     break;
   }
@@ -563,6 +583,9 @@ private:
                                 CVPixelBufferRef nearHistory,
                                 CVPixelBufferRef farHistory,
                                 const FrameContext &context);
+  CVPixelBufferRef renderRealtimeCrossbreed(
+      CVPixelBufferRef input, CVPixelBufferRef nearHistory,
+      CVPixelBufferRef farHistory, const FrameContext &context);
   void finishDecodedFrame(CodecStage &stage, FrameContext &context,
                           CVPixelBufferRef imageBuffer);
   void emit(FrameContext &context, CVPixelBufferRef imageBuffer,
@@ -2747,6 +2770,104 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderConcealmentChoreography(
   return output;
 }
 
+CVPixelBufferRef CodecGlitchEngineImpl::renderRealtimeCrossbreed(
+    CVPixelBufferRef input, CVPixelBufferRef nearHistory,
+    CVPixelBufferRef farHistory, const FrameContext &context) {
+  if (input == nullptr || nearHistory == nullptr || farHistory == nullptr)
+    return nullptr;
+
+  CVPixelBufferRef first = nullptr;
+  CVPixelBufferRef second = nullptr;
+  CVPixelBufferRef result = nullptr;
+  switch (context.controls.effect) {
+  case CodecGlitchEffect::DualCodecCrossbreed:
+    first = renderCompressionArtifacts(input, context, false);
+    second = renderChromaEcho(input, farHistory,
+                              0.45f + context.controls.amount * 0.45f);
+    if (first != nullptr && second != nullptr)
+      result = renderFeedback(
+          first, second,
+          0.32f + context.controls.feedback * context.controls.amount * 0.55f);
+    break;
+  case CodecGlitchEffect::CodecPingpong: {
+    const uint64_t period =
+        1 + static_cast<uint64_t>((1.0f - context.controls.rate) * 5.0f);
+    CVPixelBufferRef selected =
+        ((context.frameIndex / period) & 1ULL) == 0 ? nearHistory : farHistory;
+    result = renderFeedback(input, selected,
+                            0.35f + context.controls.amount * 0.60f);
+    break;
+  }
+  case CodecGlitchEffect::GopAccordion:
+    if (temporalWave(context.frameIndex, context.controls.rate) <
+        context.controls.amount) {
+      CFRetain(farHistory);
+      result = farHistory;
+    } else {
+      result = renderCompressionArtifacts(input, context, true);
+    }
+    break;
+  case CodecGlitchEffect::BframeBraid:
+    result =
+        renderTemporalPolyphony(input, farHistory, nearHistory, context);
+    break;
+  case CodecGlitchEffect::PlaneSplitCodec:
+    result = renderChromaEcho(
+        input, farHistory,
+        clampValue(0.55f + context.controls.amount * 0.40f, 0.0f, 0.98f));
+    break;
+  case CodecGlitchEffect::RoiQualityIslands:
+    result =
+        renderConcealmentChoreography(input, nearHistory, farHistory, context);
+    break;
+  case CodecGlitchEffect::CodecPhaseMosaic:
+    first = renderIntraCannibalism(input, context);
+    if (first != nullptr)
+      result = renderRecursiveCodecSkin(first, farHistory, context);
+    break;
+  case CodecGlitchEffect::EncoderHotSwap:
+    switch ((context.frameIndex /
+             (1 + static_cast<uint64_t>((1.0f - context.controls.rate) * 4.0f))) %
+            3) {
+    case 0:
+      result = renderCompressionArtifacts(input, context, false);
+      break;
+    case 1:
+      result = renderChromaEcho(input, nearHistory,
+                                0.45f + context.controls.amount * 0.45f);
+      break;
+    default:
+      result = renderCodecGrainSynth(input, context);
+      break;
+    }
+    break;
+  case CodecGlitchEffect::PtsRubberband: {
+    const double gate = temporalWave(context.frameIndex, context.controls.rate);
+    CVPixelBufferRef selected =
+        gate < 0.30 + context.controls.amount * 0.55 ? farHistory : nearHistory;
+    result = renderFeedback(
+        input, selected,
+        gate < 0.30 + context.controls.amount * 0.55
+            ? 0.82f + context.controls.feedback * 0.16f
+            : 0.18f + context.controls.amount * 0.30f);
+    break;
+  }
+  case CodecGlitchEffect::BitrateRaster:
+    first = renderSliceTransplant(input, farHistory, context);
+    if (first != nullptr)
+      result = renderCompressionArtifacts(first, context, false);
+    break;
+  default:
+    break;
+  }
+
+  if (first != nullptr)
+    CFRelease(first);
+  if (second != nullptr)
+    CFRelease(second);
+  return result;
+}
+
 void CodecGlitchEngineImpl::handleDecoded(CodecStage &stage,
                                           uint64_t decodeToken, OSStatus status,
                                           VTDecodeInfoFlags infoFlags,
@@ -2902,6 +3023,25 @@ void CodecGlitchEngineImpl::finishDecodedFrame(CodecStage &stage,
     if (nearHistory != nullptr && farHistory != nullptr) {
       processed = renderConcealmentChoreography(
           imageBuffer, nearHistory, farHistory, context);
+      requiredPostProcessing = true;
+    }
+    if (nearHistory != nullptr)
+      CFRelease(nearHistory);
+    if (farHistory != nullptr)
+      CFRelease(farHistory);
+  } else if (context.controls.effect >=
+                 CodecGlitchEffect::DualCodecCrossbreed &&
+             context.controls.effect <= CodecGlitchEffect::BitrateRaster) {
+    CVPixelBufferRef nearHistory = copyLastOutput();
+    CVPixelBufferRef farHistory = copyHistoricalOutput(
+        2 + static_cast<size_t>(context.controls.feedback * 6.0f));
+    if (nearHistory != nullptr && farHistory == nullptr) {
+      farHistory = nearHistory;
+      CFRetain(farHistory);
+    }
+    if (nearHistory != nullptr && farHistory != nullptr) {
+      processed =
+          renderRealtimeCrossbreed(imageBuffer, nearHistory, farHistory, context);
       requiredPostProcessing = true;
     }
     if (nearHistory != nullptr)

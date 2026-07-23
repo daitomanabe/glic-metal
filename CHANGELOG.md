@@ -8,6 +8,27 @@ semantic versioning for tagged releases.
 
 ### Added
 
+- An isolated Offline Packet Glitch Lab with eight compressed-stream operations:
+  packet bit rot, GOP amputation, deterministic packet dropout, timestamp
+  fracture, NAL/OBU surgery, header hallucination, packet transplant, and VP9
+  superframe shuffle. It retains original and damaged bitstreams, salvage
+  intermediates, logs, hashes, probes, and a machine-readable report without
+  making a realtime claim.
+- Ten Realtime Crossbreed effects using clean VideoToolbox decode history and
+  GPU-backed reconstruction while retaining the 960×540/20fps certification
+  contract.
+- A twelve-effect Syntax Lab and six analysis/search workflows covering motion
+  fields, residuals, reference graphs, AV1/AV2 cycles, semantic/depth/audio
+  control, real multi-decoder blending, cross-codec chains, and resumable
+  token-free evolution.
+- A normalized-timeline evaluator for unequal-length salvage outputs. It ranks
+  spatial/temporal difference together with decode survival and prevents
+  nearly empty streams from winning solely on visual distance.
+- A machine-readable offline codec/effect support catalog distributed through
+  CMake resources, the webcam bundle, and the macOS SDK resource bundle.
+- A self-contained downstream SDK layout with `Documentation/`, installable
+  offline `Tools/`, Python requirements, CMake tool-path variables, and
+  checksum coverage for every packaged integration artifact.
 - Multi-codec encode/decode glitching for AV1, AV2, HEVC/H.265, VP9, and
   ProRes. HEVC and ProRes extend the native VideoToolbox lane; AV1/VP9 use
   explicit FFmpeg encoders/decoders; AV2 uses pinned official AVM v1.0.0
@@ -22,7 +43,7 @@ semantic versioning for tagged releases.
   rifting, synthesized codec grain, recursive restoration skin, and regional
   concealment choreography. They use clean decoded history and the
   Metal-backed post path without modifying H.264 VCL payloads.
-- Machine-readable enumeration of all 18 Codec Glitch effects for downstream
+- Machine-readable enumeration of all 28 Codec Glitch effects for downstream
   integration agents, plus candidate-bank coverage and mixed-review entries
   for the six new effect families.
 - A machine-readable public release policy that explicitly retains the visual
@@ -60,7 +81,7 @@ semantic versioning for tagged releases.
 - Headless codec-video evaluation with dry/wet, luminance, chroma, edge, and
   temporal metrics plus reliability-gated max-min diversity ranking.
 - A reproducible 50-entry Codec Glitch candidate bank generator covering all
-  twelve effects, with parameter/seed variation, strict ranking, and a
+  28 effects, with parameter/seed variation, strict ranking, and a
   checkbox-based HTML review page.
 - A balanced mixed 50-pattern selection and review generator: fourteen
   non-codec spatial Metal families, eighteen original-style presets, and
@@ -138,7 +159,7 @@ semantic versioning for tagged releases.
   recoveries, backpressure drops, or output-queue drops. Designed temporal
   holds remain eligible and are reported separately.
 - The webcam preview can switch between the 37-preset Original Visual lane and
-  all twelve Codec Glitch effects, with live amount and codec-history reset
+  all 28 Codec Glitch effects, with live amount and codec-history reset
   controls.
 - Preset search now balances fourteen mechanisms across upstream-base,
   light/strong upstream mutation, archive mutation, and random lanes.

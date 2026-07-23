@@ -34,6 +34,16 @@ CODEC_GLITCH_EFFECTS = (
     "codec_grain_synth",
     "recursive_codec_skin",
     "concealment_choreography",
+    "dual_codec_crossbreed",
+    "codec_pingpong",
+    "gop_accordion",
+    "bframe_braid",
+    "plane_split_codec",
+    "roi_quality_islands",
+    "codec_phase_mosaic",
+    "encoder_hot_swap",
+    "pts_rubberband",
+    "bitrate_raster",
 )
 
 

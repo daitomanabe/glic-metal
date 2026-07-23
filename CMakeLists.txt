@@ -23,6 +23,12 @@ set(GLIC_METAL_SELECTED_PRESETS_JSON
 set(GLIC_METAL_INTEGRATION_MANIFEST
     "${PROJECT_SOURCE_DIR}/resources/integration-manifest.json" CACHE FILEPATH
     "Machine-readable GLIC Metal integration contract")
+set(GLIC_METAL_OFFLINE_CODEC_EFFECTS_JSON
+    "${PROJECT_SOURCE_DIR}/resources/offline-codec-effects.json" CACHE FILEPATH
+    "Offline packet-glitch effect catalog")
+set(GLIC_METAL_CODEC_LAB_EFFECTS_JSON
+    "${PROJECT_SOURCE_DIR}/resources/codec-lab-effects.json" CACHE FILEPATH
+    "Realtime and offline codec-lab effect catalog")
 include(cmake/GlicMetalResources.cmake)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -233,6 +239,8 @@ if(APPLE)
         "${PROJECT_SOURCE_DIR}/config/fast-match-allowlist.json"
         "${PROJECT_SOURCE_DIR}/resources/selected-presets.json"
         "${PROJECT_SOURCE_DIR}/resources/integration-manifest.json"
+        "${PROJECT_SOURCE_DIR}/resources/offline-codec-effects.json"
+        "${PROJECT_SOURCE_DIR}/resources/codec-lab-effects.json"
         "${PROJECT_SOURCE_DIR}/LICENSE"
         "${PROJECT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md")
     add_custom_command(TARGET glic_webcam_preview POST_BUILD
@@ -253,6 +261,12 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${PROJECT_SOURCE_DIR}/resources/integration-manifest.json"
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/integration-manifest.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/resources/offline-codec-effects.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/offline-codec-effects.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/resources/codec-lab-effects.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/codec-lab-effects.json"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${PROJECT_SOURCE_DIR}/LICENSE"
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/LICENSE"
@@ -346,6 +360,12 @@ if(BUILD_TESTING)
         add_test(NAME glic_multicodec_glitch_helpers
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_process_multicodec_glitch.py")
+        add_test(NAME glic_offline_packet_glitch_helpers
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${PROJECT_SOURCE_DIR}/tests/test_offline_packet_glitch.py")
+        add_test(NAME glic_codec_lab_helpers
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${PROJECT_SOURCE_DIR}/tests/test_codec_lab.py")
         add_test(NAME glic_codec_glitch_video_evaluator
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_evaluate_codec_glitch_videos.py")
@@ -523,7 +543,7 @@ configure_package_config_file(
         "${PROJECT_BINARY_DIR}/GlicMetalConfig.cmake"
         INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/GlicMetal
         PATH_VARS CMAKE_INSTALL_INCLUDEDIR CMAKE_INSTALL_DATADIR
-                  CMAKE_INSTALL_LIBDIR)
+                  CMAKE_INSTALL_LIBDIR CMAKE_INSTALL_BINDIR)
 write_basic_package_version_file(
         "${PROJECT_BINARY_DIR}/GlicMetalConfigVersion.cmake"
         VERSION ${PROJECT_VERSION}
@@ -558,16 +578,30 @@ install(PROGRAMS scripts/run_search_supervisor.sh scripts/build_search_catalog.p
         scripts/build_fast_match_allowlist.py
         DESTINATION bin)
 endif()
+install(PROGRAMS scripts/process_multicodec_glitch.py
+                 scripts/process_offline_packet_glitch.py
+                 scripts/evaluate_offline_packet_glitches.py
+                 scripts/process_codec_lab.py
+                 scripts/evolutionary_codec_search.py
+                 scripts/probe_multicodec_capabilities.py
+                 scripts/build_av2_reference.py
+                 tools/evaluate_effect_difference.py
+        DESTINATION bin)
 install(DIRECTORY presets/
         DESTINATION ${CMAKE_INSTALL_DATADIR}/glic-metal/presets)
 install(FILES presets.upstream.sha256
         DESTINATION ${CMAKE_INSTALL_DATADIR}/glic-metal)
 install(FILES resources/selected-presets.json
               resources/integration-manifest.json
+              resources/offline-codec-effects.json
+              resources/codec-lab-effects.json
+              requirements-qa.txt
         DESTINATION ${CMAKE_INSTALL_DATADIR}/glic-metal)
 install(FILES README.md LICENSE THIRD_PARTY_NOTICES.md
               docs/BUILDING.md docs/EMBEDDING.md docs/AI_INTEGRATION.md
-              docs/CODEC_GLITCH.md
+              docs/CODEC_GLITCH.md docs/MULTICODEC_GLITCH.md
+              docs/OFFLINE_PACKET_GLITCH.md docs/CODEC_LAB.md
+              docs/DOWNSTREAM_QUICKSTART.md
         DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/glic-metal)
 if(APPLE)
     install(FILES "${GLIC_METALLIB}" DESTINATION ${CMAKE_INSTALL_LIBDIR}/glic)

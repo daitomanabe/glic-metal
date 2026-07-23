@@ -25,6 +25,14 @@ function(glic_metal_copy_resources)
     message(FATAL_ERROR
             "GLIC Metal integration manifest is missing: ${GLIC_METAL_INTEGRATION_MANIFEST}")
   endif()
+  if(NOT EXISTS "${GLIC_METAL_OFFLINE_CODEC_EFFECTS_JSON}")
+    message(FATAL_ERROR
+            "GLIC Metal offline codec catalog is missing: ${GLIC_METAL_OFFLINE_CODEC_EFFECTS_JSON}")
+  endif()
+  if(NOT EXISTS "${GLIC_METAL_CODEC_LAB_EFFECTS_JSON}")
+    message(FATAL_ERROR
+            "GLIC Metal codec lab catalog is missing: ${GLIC_METAL_CODEC_LAB_EFFECTS_JSON}")
+  endif()
 
   add_custom_command(TARGET "${GLIC_RESOURCE_TARGET}" POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E make_directory
@@ -38,6 +46,12 @@ function(glic_metal_copy_resources)
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${GLIC_METAL_INTEGRATION_MANIFEST}"
             "${GLIC_RESOURCE_DESTINATION}/integration-manifest.json"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${GLIC_METAL_OFFLINE_CODEC_EFFECTS_JSON}"
+            "${GLIC_RESOURCE_DESTINATION}/offline-codec-effects.json"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${GLIC_METAL_CODEC_LAB_EFFECTS_JSON}"
+            "${GLIC_RESOURCE_DESTINATION}/codec-lab-effects.json"
     VERBATIM)
 
   if(APPLE)

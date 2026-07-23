@@ -64,6 +64,16 @@ def main() -> int:
         "codec_grain_synth",
         "recursive_codec_skin",
         "concealment_choreography",
+        "dual_codec_crossbreed",
+        "codec_pingpong",
+        "gop_accordion",
+        "bframe_braid",
+        "plane_split_codec",
+        "roi_quality_islands",
+        "codec_phase_mosaic",
+        "encoder_hot_swap",
+        "pts_rubberband",
+        "bitrate_raster",
     )
     assert MODULE.CODEC_GLITCH_EFFECTS == expected_codec_effects
     for effect in expected_codec_effects:

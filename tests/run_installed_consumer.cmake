@@ -52,9 +52,51 @@ if(NOT EXISTS "${consumer_build_dir}/Resources/Presets/default")
   message(FATAL_ERROR "installed consumer did not copy preset resources")
 endif()
 if(NOT EXISTS "${consumer_build_dir}/Resources/selected-presets.json" OR
-   NOT EXISTS "${consumer_build_dir}/Resources/integration-manifest.json")
+   NOT EXISTS "${consumer_build_dir}/Resources/integration-manifest.json" OR
+   NOT EXISTS "${consumer_build_dir}/Resources/offline-codec-effects.json" OR
+   NOT EXISTS "${consumer_build_dir}/Resources/codec-lab-effects.json")
   message(FATAL_ERROR
           "installed consumer did not copy integration metadata")
+endif()
+foreach(tool IN ITEMS
+    process_multicodec_glitch.py
+    process_offline_packet_glitch.py
+    evaluate_offline_packet_glitches.py
+    process_codec_lab.py
+    evolutionary_codec_search.py
+    evaluate_effect_difference.py)
+  if(NOT EXISTS "${install_dir}/bin/${tool}")
+    message(FATAL_ERROR "installed codec tool is missing: ${tool}")
+  endif()
+endforeach()
+if(NOT EXISTS "${install_dir}/share/glic-metal/requirements-qa.txt" OR
+   NOT EXISTS
+     "${install_dir}/share/doc/glic-metal/DOWNSTREAM_QUICKSTART.md")
+  message(FATAL_ERROR
+          "installed downstream requirements or quickstart is missing")
+endif()
+find_program(consumer_python NAMES python3 python REQUIRED)
+execute_process(
+  COMMAND "${consumer_python}"
+          "${install_dir}/bin/evolutionary_codec_search.py" --selftest
+  RESULT_VARIABLE search_selftest_status
+  OUTPUT_VARIABLE search_selftest_output
+  ERROR_VARIABLE search_selftest_error)
+if(NOT search_selftest_status EQUAL 0)
+  message(FATAL_ERROR
+          "installed search selftest failed:\n"
+          "${search_selftest_output}\n${search_selftest_error}")
+endif()
+execute_process(
+  COMMAND "${consumer_python}"
+          "${install_dir}/bin/evaluate_offline_packet_glitches.py" --help
+  RESULT_VARIABLE evaluator_help_status
+  OUTPUT_VARIABLE evaluator_help_output
+  ERROR_VARIABLE evaluator_help_error)
+if(NOT evaluator_help_status EQUAL 0)
+  message(FATAL_ERROR
+          "installed packet evaluator import failed:\n"
+          "${evaluator_help_output}\n${evaluator_help_error}")
 endif()
 if(APPLE AND NOT EXISTS
    "${consumer_build_dir}/Resources/glic_realtime.metallib")

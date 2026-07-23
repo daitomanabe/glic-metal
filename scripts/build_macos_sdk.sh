@@ -39,6 +39,8 @@ trap cleanup EXIT INT TERM
 install_dir="${temporary_root}/install"
 sdk_dir="${temporary_root}/GlicMetalSDK"
 resource_bundle="${sdk_dir}/GlicMetalResources.bundle"
+tools_dir="${sdk_dir}/Tools"
+documentation_dir="${sdk_dir}/Documentation"
 
 run cmake -S "$repo_root" -B "$build_dir" \
   -DCMAKE_BUILD_TYPE=Release \
@@ -66,6 +68,12 @@ run cmake -E copy_if_different \
   "${install_dir}/share/glic-metal/integration-manifest.json" \
   "${resource_bundle}/Contents/Resources/integration-manifest.json"
 run cmake -E copy_if_different \
+  "${install_dir}/share/glic-metal/offline-codec-effects.json" \
+  "${resource_bundle}/Contents/Resources/offline-codec-effects.json"
+run cmake -E copy_if_different \
+  "${install_dir}/share/glic-metal/codec-lab-effects.json" \
+  "${resource_bundle}/Contents/Resources/codec-lab-effects.json"
+run cmake -E copy_if_different \
   "${install_dir}/lib/glic/glic_realtime.metallib" \
   "${resource_bundle}/Contents/Resources/glic_realtime.metallib"
 run cmake -E copy_if_different "$repo_root/LICENSE" \
@@ -77,6 +85,35 @@ run cmake -E copy_if_different "$repo_root/resources/SDK-README.md" \
 run cmake -E copy_if_different \
   "${install_dir}/share/doc/glic-metal/AI_INTEGRATION.md" \
   "${sdk_dir}/AI_INTEGRATION.md"
+run /bin/mkdir -p "$tools_dir" "$documentation_dir"
+for tool in \
+  process_multicodec_glitch.py \
+  process_offline_packet_glitch.py \
+  evaluate_offline_packet_glitches.py \
+  process_codec_lab.py \
+  evolutionary_codec_search.py \
+  probe_multicodec_capabilities.py \
+  build_av2_reference.py \
+  evaluate_effect_difference.py; do
+  run cmake -E copy_if_different \
+    "${install_dir}/bin/${tool}" \
+    "${tools_dir}/${tool}"
+done
+run cmake -E copy_if_different \
+  "${install_dir}/share/glic-metal/requirements-qa.txt" \
+  "${tools_dir}/requirements.txt"
+for document in \
+  DOWNSTREAM_QUICKSTART.md \
+  EMBEDDING.md \
+  AI_INTEGRATION.md \
+  CODEC_GLITCH.md \
+  MULTICODEC_GLITCH.md \
+  OFFLINE_PACKET_GLITCH.md \
+  CODEC_LAB.md; do
+  run cmake -E copy_if_different \
+    "${install_dir}/share/doc/glic-metal/${document}" \
+    "${documentation_dir}/${document}"
+done
 
 info_plist="${resource_bundle}/Contents/Info.plist"
 run /usr/bin/plutil -create xml1 "$info_plist"
@@ -92,7 +129,7 @@ run /usr/bin/plutil -insert CFBundleVersion -string 1 "$info_plist"
 (
   cd "$sdk_dir" || exit 1
   find GlicMetal.xcframework GlicMetalResources.bundle README.md \
-    AI_INTEGRATION.md -type f -print0 |
+    AI_INTEGRATION.md Documentation Tools -type f -print0 |
     sort -z | xargs -0 /usr/bin/shasum -a 256 > SHA256SUMS
 ) || fail "could not create SDK checksums"
 

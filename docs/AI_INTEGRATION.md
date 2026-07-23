@@ -19,11 +19,13 @@ VideoToolbox処理へ振り分ける。
 
 1. `docs/AI_INTEGRATION.md` — AI実装契約（このファイル）
 2. `resources/integration-manifest.json` — 機械可読な依存関係と制約
-3. `include/glic_metal/glitch_presets.h` — 採用プリセットAPI
-4. `include/glic_metal/glic_metal.h` — Original / Spatial画像API
-5. `include/glic_metal/codec_glitch.h` — Codec非同期API
-6. `docs/EMBEDDING.md` — 人間向けの詳細な組み込み手順
-7. `docs/MULTICODEC_GLITCH.md` — codec別backend、速度claim、offline契約
+3. `docs/DOWNSTREAM_QUICKSTART.md` — 最短の配布・組み込み手順
+4. `include/glic_metal/glitch_presets.h` — 採用プリセットAPI
+5. `include/glic_metal/glic_metal.h` — Original / Spatial画像API
+6. `include/glic_metal/codec_glitch.h` — Codec非同期API
+7. `docs/EMBEDDING.md` — 人間向けの詳細な組み込み手順
+8. `docs/MULTICODEC_GLITCH.md` — codec別backend、速度claim、offline契約
+9. `docs/OFFLINE_PACKET_GLITCH.md` — 破損bitstreamの隔離実行・評価契約
 
 `src/` 内のヘッダーは公開APIではない。他アプリからincludeしない。
 
@@ -43,6 +45,8 @@ VideoToolbox処理へ振り分ける。
 - H.264 / HEVC / ProResは`glic_codec_glitch_config.codec`でprepare前に選ぶ。
 - AV1 / VP9 / AV2はC ABIへ偽装せず、multi-codec runnerのJSON契約を使う。
 - AV2 toolsが無い場合はAV1へ置換せずfail-closedする。
+- packet glitchはリアルタイムC ABIへ追加せず、隔離subprocessのfile workflowとして実行する。
+- 破損bitstreamをhost processまたはcapture/render callback内でdecodeしない。
 
 ### 採用バンク
 
@@ -144,7 +148,7 @@ if (status == GLIC_CODEC_GLITCH_OK) {
 
 採用済み19 presetのメニューとは別に、実験用Codec Glitchを全て表示する場合は
 `resources/integration-manifest.json`の`lanes.codec.effect_names`を参照する。
-現在は18 effectで、public enumと`glic_codec_glitch_effect_name()`が実行時の
+現在は28 effectで、public enumと`glic_codec_glitch_effect_name()`が実行時の
 正規名です。将来追加されるeffectを取り込むAI実装は、名前を独自に推測せず、
 同梱manifestとpublic headerを同じSDK版から読む。
 
@@ -157,6 +161,11 @@ if (status == GLIC_CODEC_GLITCH_OK) {
 2. CMakeアプリ: `add_subdirectory()` または `find_package(GlicMetal)` を使い、
    `GlicMetal::GlicMetal` をlinkする。
 3. 手動static library linkは、上記2方式が使用できない場合だけにする。
+
+生成SDKは`Documentation/`に全組み込み資料、`Tools/`にoffline entrypointと
+`requirements.txt`を同梱します。CMake installは`GLIC_METAL_TOOLS_DIR`と
+`GLIC_METAL_PYTHON_REQUIREMENTS`を公開します。これにより別アプリはsource treeへ
+依存せず、同じSDK版のlibrary、catalog、資料、offline Toolsを使用できます。
 
 macOSでは次をlinkする:
 
@@ -175,6 +184,23 @@ macOSでは次をlinkする:
 - `glic_realtime.metallib` — Original / Spatial Metalに必須
 - `selected-presets.json` — 確認・交換用
 - `integration-manifest.json` — AI向け機械可読仕様
+- `offline-codec-effects.json` — offline packet effectとcodec対応表
+- `codec-lab-effects.json` — realtime Crossbreed、Syntax、解析・探索の分類
+
+### Offline Packet Lab
+
+圧縮packet自体を変化させる8 effectは採用済み19 presetおよびリアルタイムCodec
+Glitch 28 effectとは別です。`scripts/process_offline_packet_glitch.py`を
+subprocessとして起動し、`resources/offline-codec-effects.json`で対応codecを検証します。
+出力JSONの`execution_class`は`offline`、`realtime_certified`は常にfalseです。
+異なるframe数のpreview比較には`scripts/evaluate_offline_packet_glitches.py`を使います。
+詳細は`docs/OFFLINE_PACKET_GLITCH.md`を参照してください。
+
+Syntax/解析系18 workflowもリアルタイムC ABIへ混在させません。
+`scripts/process_codec_lab.py`と`scripts/evolutionary_codec_search.py`をfile単位で
+実行し、`implementation_level`を必ず確認します。decoded reconstruction proxyを
+native codec syntax hookとして表示してはいけません。正規一覧は
+`resources/codec-lab-effects.json`、詳細は`docs/CODEC_LAB.md`です。
 
 ### リソースパス
 
@@ -246,6 +272,12 @@ and `glic_realtime.metallib` from the resource bundle. Original and Spatial
 require both because Spatial loads `default` as its base configuration; Codec
 requires neither runtime file.
 
+The generated SDK is self-contained: `Documentation/` carries the integration
+contracts and `Tools/` carries offline entrypoints plus `requirements.txt`.
+Installed CMake packages expose `GLIC_METAL_TOOLS_DIR` and
+`GLIC_METAL_PYTHON_REQUIREMENTS`. This keeps the library, catalogs,
+documentation, and file-processing tools on the same release version.
+
 Initialize every public struct with its matching `_init()` function. Treat
 unknown presets and category mismatches as fail-closed. A codec submit may
 return `BACKPRESSURE`; drop that input rather than blocking. A codec poll may
@@ -253,7 +285,7 @@ return `NO_FRAME_AVAILABLE`; this is normal. Release every successfully polled
 pixel buffer exactly once with `glic_codec_glitch_pixel_buffer_release()`.
 
 The adopted 19-preset menu is separate from the complete experimental Codec
-Glitch effect list. If the host exposes every effect, read the 18 canonical
+Glitch effect list. If the host exposes every effect, read the 28 canonical
 names from `lanes.codec.effect_names` in the bundled integration manifest;
 the public enum and `glic_codec_glitch_effect_name()` are authoritative at
 runtime. An agent adopting future effects must read the manifest and public
@@ -264,3 +296,16 @@ payloads, or claim pixel-exact equivalence with the Processing implementation.
 Validate the integrated host at 960×540 or greater, 20fps or greater, and p95
 frame latency at or below 50ms. Codec acceptance additionally requires hardware
 encode/decode and zero unintended reliability failures.
+
+Compressed-packet mutation is a separate offline file workflow. Do not expose
+it through the realtime C ABI or decode damaged streams in the host process.
+Validate codec/effect support through `offline-codec-effects.json`, launch
+`process_offline_packet_glitch.py` as an isolated subprocess, and use
+`evaluate_offline_packet_glitches.py` when salvaged outputs have unequal frame
+counts. See `docs/OFFLINE_PACKET_GLITCH.md`.
+
+Syntax reconstruction and analysis/search are separate offline workflows too.
+Read `codec-lab-effects.json`, launch `process_codec_lab.py` or
+`evolutionary_codec_search.py` out of process, and retain the declared
+`implementation_level`. Never present a decoded reconstruction proxy as a
+native bitstream syntax hook. See `docs/CODEC_LAB.md`.

@@ -29,34 +29,34 @@ def candidate(
 CANDIDATES = [
     candidate("qp_mid_pulse", "qp_pump", 0.62, 0.48, 0.25),
     candidate("qp_hard_wave", "qp_pump", 0.86, 0.72, 0.35),
-    candidate("qp_erratic", "qp_pump", 0.98, 0.93, 0.45),
+    candidate("crossbreed_regions", "dual_codec_crossbreed", 0.82, 0.58, 0.76),
     candidate("bitrate_pulse", "bitrate_crush", 0.58, 0.45, 0.35),
     candidate("bitrate_blocks", "bitrate_crush", 0.82, 0.25, 0.45),
-    candidate("bitrate_meltdown", "bitrate_crush", 0.96, 0.78, 0.55),
+    candidate("codec_pingpong_fast", "codec_pingpong", 0.78, 0.88, 0.72),
     candidate("dropout_traveling", "slice_dropout", 0.55, 0.65, 0.42),
     candidate("dropout_dense", "slice_dropout", 0.78, 0.38, 0.55),
-    candidate("dropout_storm", "slice_dropout", 0.93, 0.88, 0.70),
+    candidate("gop_accordion_burst", "gop_accordion", 0.84, 0.64, 0.88),
     candidate("transplant_offset", "slice_transplant", 0.50, 0.65, 0.62),
     candidate("transplant_weave", "slice_transplant", 0.70, 0.40, 0.82),
-    candidate("transplant_mosaic", "slice_transplant", 0.90, 0.86, 0.95),
+    candidate("bframe_braid_deep", "bframe_braid", 0.82, 0.70, 0.92),
     candidate("pframe_stagger", "pframe_loss", 0.48, 0.45, 0.45),
     candidate("pframe_stutter", "pframe_loss", 0.70, 0.68, 0.60),
-    candidate("pframe_freeze_bursts", "pframe_loss", 0.90, 0.90, 0.80),
+    candidate("plane_split_luma_chroma", "plane_split_codec", 0.86, 0.52, 0.90),
     candidate("idr_drift", "idr_starvation", 0.50, 0.40, 0.55),
     candidate("idr_drought", "idr_starvation", 0.72, 0.65, 0.70),
-    candidate("idr_collapse", "idr_starvation", 0.92, 0.90, 0.85),
+    candidate("roi_quality_orbit", "roi_quality_islands", 0.80, 0.76, 0.88),
     candidate("payload_tiles", "payload_xor", 0.55, 0.52, 0.40),
     candidate("payload_mosaic", "payload_xor", 0.75, 0.30, 0.55),
-    candidate("payload_rupture", "payload_xor", 0.94, 0.83, 0.70),
+    candidate("phase_mosaic_tiles", "codec_phase_mosaic", 0.88, 0.74, 0.94),
     candidate("timewarp_jump", "reference_timewarp", 0.52, 0.40, 0.65),
     candidate("timewarp_deep", "reference_timewarp", 0.72, 0.64, 0.85),
-    candidate("timewarp_nonlinear", "reference_timewarp", 0.92, 0.90, 0.98),
+    candidate("encoder_hot_swap_cycle", "encoder_hot_swap", 0.76, 0.86, 0.72),
     candidate("feedback_trails", "codec_feedback", 0.50, 0.40, 0.68),
     candidate("feedback_recursion", "codec_feedback", 0.72, 0.62, 0.86),
-    candidate("feedback_overload", "codec_feedback", 0.92, 0.84, 0.98),
+    candidate("pts_rubberband_stall", "pts_rubberband", 0.86, 0.58, 0.96),
     candidate("cascade_aged", "generation_cascade", 0.55, 0.40, 0.45),
     candidate("cascade_deep", "generation_cascade", 0.76, 0.62, 0.62),
-    candidate("cascade_collapse", "generation_cascade", 0.94, 0.86, 0.80),
+    candidate("bitrate_raster_scan", "bitrate_raster", 0.84, 0.82, 0.74),
     candidate("resolution_pulse", "resolution_hop", 0.52, 0.55, 0.40),
     candidate("resolution_quarter", "resolution_hop", 0.78, 0.35, 0.55),
     candidate("resolution_staircase", "resolution_hop", 0.95, 0.82, 0.70),
@@ -87,8 +87,8 @@ def validate_candidates() -> None:
     if len(names) != len(set(names)):
         raise ValueError("candidate names must be unique")
     effects = {entry["effect"] for entry in CANDIDATES}
-    if len(effects) != 18:
-        raise ValueError("candidate bank must cover all 18 codec effects")
+    if len(effects) != 28:
+        raise ValueError("candidate bank must cover all 28 codec effects")
     for entry in CANDIDATES:
         for key in ("amount", "rate", "feedback"):
             value = entry[key]
@@ -138,7 +138,10 @@ def main() -> int:
     args = parse_args()
     validate_candidates()
     if args.selftest:
-        print(f"PASS codec candidate bank candidates={len(CANDIDATES)} effects=18")
+        print(
+            f"PASS codec candidate bank candidates={len(CANDIDATES)} "
+            f"effects={len({entry['effect'] for entry in CANDIDATES})}"
+        )
         return 0
     if args.input is None or not args.input.is_file():
         raise SystemExit("input video is required and must exist")

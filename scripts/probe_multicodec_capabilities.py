@@ -68,9 +68,58 @@ def main() -> int:
     ffmpeg = executable(args.ffmpeg)
     encoders = output([ffmpeg, "-hide_banner", "-encoders"]) if ffmpeg else ""
     decoders = output([ffmpeg, "-hide_banner", "-decoders"]) if ffmpeg else ""
+    bitstream_filters = output([ffmpeg, "-hide_banner", "-bsfs"]) if ffmpeg else ""
     native = executable(args.native_filter)
     avmenc = executable(args.avmenc)
     avmdec = executable(args.avmdec)
+    catalog_path = root / "resources" / "offline-codec-effects.json"
+    offline_catalog = json.loads(catalog_path.read_text())
+    offline_codec_available = {
+        "h264": "libx264" in encoders and " h264 " in decoders,
+        "hevc": "libx265" in encoders and " hevc " in decoders,
+        "av1": "libaom-av1" in encoders
+        and ("libdav1d" in decoders or " av1 " in decoders),
+        "vp9": "libvpx-vp9" in encoders and "libvpx-vp9" in decoders,
+        "prores": "prores_ks" in encoders and " prores " in decoders,
+    }
+    required_filters = {
+        "packet_bit_rot": {"noise"},
+        "gop_amputation": {"noise"},
+        "packet_dropout_score": {"noise"},
+        "timestamp_fracture": {"setts"},
+        "nal_obu_surgery": {"filter_units"},
+        "header_hallucination": {
+            "h264_metadata",
+            "hevc_metadata",
+            "av1_metadata",
+            "vp9_metadata",
+        },
+        "packet_transplant": set(),
+        "vp9_superframe_shuffle": {"vp9_superframe_split", "setts"},
+    }
+    available_filters = {
+        name
+        for names in required_filters.values()
+        for name in names
+        if name in bitstream_filters
+    }
+    offline_effects = {}
+    for effect in offline_catalog["offline_effects"]:
+        name = effect["name"]
+        supported_codecs = effect["codecs"]
+        ready_codecs = [
+            codec
+            for codec in supported_codecs
+            if offline_codec_available.get(codec, False)
+        ]
+        missing_filters = sorted(required_filters[name] - available_filters)
+        offline_effects[name] = {
+            "available": bool(ready_codecs) and not missing_filters,
+            "supported_codecs": supported_codecs,
+            "available_codecs": ready_codecs if not missing_filters else [],
+            "required_bitstream_filters": sorted(required_filters[name]),
+            "missing_bitstream_filters": missing_filters,
+        }
     result = {
         "schema": "glic-multicodec-capabilities-v1",
         "codecs": {
@@ -103,6 +152,17 @@ def main() -> int:
                 "backend": "VideoToolbox",
                 "realtime_claim": "measured_per_report",
             },
+        },
+        "offline_packet_lab": {
+            "available": any(
+                effect["available"] for effect in offline_effects.values()
+            ),
+            "realtime_claim": False,
+            "catalog": str(catalog_path),
+            "ffmpeg": ffmpeg,
+            "codec_backends": offline_codec_available,
+            "bitstream_filters": sorted(available_filters),
+            "effects": offline_effects,
         },
     }
     serialized = json.dumps(result, indent=2) + "\n"

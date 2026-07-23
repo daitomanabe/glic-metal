@@ -1,0 +1,73 @@
+{
+  "schema": "glic-codec-lab-effect-catalog-v1",
+  "realtime_crossbreed": {
+    "entrypoint": "glic_codec_glitch_context",
+    "engine": "videotoolbox_clean_decode_plus_gpu_reconstruction",
+    "minimum_width": 960,
+    "minimum_height": 540,
+    "minimum_fps": 20,
+    "may_produce_invalid_bitstream": false,
+    "effect_names": [
+      "dual_codec_crossbreed",
+      "codec_pingpong",
+      "gop_accordion",
+      "bframe_braid",
+      "plane_split_codec",
+      "roi_quality_islands",
+      "codec_phase_mosaic",
+      "encoder_hot_swap",
+      "pts_rubberband",
+      "bitrate_raster"
+    ],
+    "implementation_note": "Single hardware-codec realtime adaptations; true multi-codec chains remain offline."
+  },
+  "syntax_lab": {
+    "entrypoint": "scripts/process_codec_lab.py",
+    "execution_class": "offline",
+    "realtime_certified": false,
+    "may_produce_invalid_bitstream": false,
+    "effect_names": [
+      "motion_vector_vortex",
+      "motion_vector_mirror",
+      "motion_vector_quantizer",
+      "motion_vector_freeze",
+      "residual_sign_flip",
+      "residual_band_gate",
+      "transform_block_transplant",
+      "reference_graph_swap",
+      "entropy_state_puncture",
+      "loop_filter_oscillator",
+      "av1_film_grain_instrument",
+      "av2_optical_flow_wound"
+    ],
+    "implementation_levels": {
+      "motion_vector_vortex": "decoded_reconstruction_proxy",
+      "motion_vector_mirror": "decoded_reconstruction_proxy",
+      "motion_vector_quantizer": "decoded_reconstruction_proxy",
+      "motion_vector_freeze": "decoded_reconstruction_proxy",
+      "residual_sign_flip": "decoded_reconstruction_proxy",
+      "residual_band_gate": "decoded_reconstruction_proxy",
+      "transform_block_transplant": "decoded_reconstruction_proxy",
+      "reference_graph_swap": "decoded_reconstruction_proxy",
+      "entropy_state_puncture": "decoded_reconstruction_proxy",
+      "loop_filter_oscillator": "decoded_reconstruction_proxy",
+      "av1_film_grain_instrument": "av1_codec_cycle_plus_grain_reconstruction",
+      "av2_optical_flow_wound": "official_avm_cycle_plus_flow_reconstruction"
+    }
+  },
+  "analysis_and_search": {
+    "entrypoint": "scripts/process_codec_lab.py",
+    "search_entrypoint": "scripts/evolutionary_codec_search.py",
+    "execution_class": "offline",
+    "realtime_certified": false,
+    "token_free_search": true,
+    "effect_names": [
+      "semantic_reference_retarget",
+      "depth_motion_rift",
+      "decoder_fingerprint_ensemble",
+      "cross_codec_chain",
+      "evolutionary_codec_search",
+      "audio_codec_orchestra"
+    ]
+  }
+}

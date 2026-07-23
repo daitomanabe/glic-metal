@@ -1,0 +1,87 @@
+{
+  "schema": "glic-codec-effect-catalog-v1",
+  "execution_classes": {
+    "realtime": {
+      "entrypoint": "glic_codec_glitch_context",
+      "minimum_width": 960,
+      "minimum_height": 540,
+      "minimum_fps": 20,
+      "requires_clean_decode": true,
+      "allows_invalid_bitstream": false
+    },
+    "offline": {
+      "entrypoint": "scripts/process_offline_packet_glitch.py",
+      "requires_clean_decode": false,
+      "allows_invalid_bitstream": true,
+      "isolation_required": true,
+      "realtime_certified": false
+    }
+  },
+  "offline_effects": [
+    {
+      "name": "packet_bit_rot",
+      "codecs": ["h264", "hevc", "av1", "vp9", "prores"],
+      "execution_class": "offline",
+      "realtime_certified": false,
+      "may_produce_invalid_bitstream": true,
+      "lookahead_frames": 0
+    },
+    {
+      "name": "gop_amputation",
+      "codecs": ["h264", "hevc", "av1", "vp9"],
+      "execution_class": "offline",
+      "realtime_certified": false,
+      "may_produce_invalid_bitstream": true,
+      "lookahead_frames": 0
+    },
+    {
+      "name": "packet_dropout_score",
+      "codecs": ["h264", "hevc", "av1", "vp9", "prores"],
+      "execution_class": "offline",
+      "realtime_certified": false,
+      "may_produce_invalid_bitstream": false,
+      "lookahead_frames": 0
+    },
+    {
+      "name": "timestamp_fracture",
+      "codecs": ["h264", "hevc", "av1", "vp9", "prores"],
+      "execution_class": "offline",
+      "realtime_certified": false,
+      "may_produce_invalid_bitstream": false,
+      "lookahead_frames": 4
+    },
+    {
+      "name": "nal_obu_surgery",
+      "codecs": ["h264", "hevc", "av1", "vp9"],
+      "execution_class": "offline",
+      "realtime_certified": false,
+      "may_produce_invalid_bitstream": true,
+      "lookahead_frames": 0
+    },
+    {
+      "name": "header_hallucination",
+      "codecs": ["h264", "hevc", "av1", "vp9"],
+      "execution_class": "offline",
+      "realtime_certified": false,
+      "may_produce_invalid_bitstream": false,
+      "lookahead_frames": 0
+    },
+    {
+      "name": "packet_transplant",
+      "codecs": ["h264", "hevc", "av1", "vp9", "prores"],
+      "execution_class": "offline",
+      "realtime_certified": false,
+      "may_produce_invalid_bitstream": true,
+      "requires_donor": true,
+      "lookahead_frames": 0
+    },
+    {
+      "name": "vp9_superframe_shuffle",
+      "codecs": ["vp9"],
+      "execution_class": "offline",
+      "realtime_certified": false,
+      "may_produce_invalid_bitstream": false,
+      "lookahead_frames": 4
+    }
+  ]
+}

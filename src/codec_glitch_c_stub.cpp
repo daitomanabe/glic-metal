@@ -18,6 +18,11 @@ constexpr const char *kEffectNames[] = {
     "temporal_polyphony", "intra_cannibalism",
     "residual_rift", "codec_grain_synth",
     "recursive_codec_skin", "concealment_choreography",
+    "dual_codec_crossbreed", "codec_pingpong",
+    "gop_accordion", "bframe_braid",
+    "plane_split_codec", "roi_quality_islands",
+    "codec_phase_mosaic", "encoder_hot_swap",
+    "pts_rubberband", "bitrate_raster",
 };
 
 } // namespace
@@ -53,7 +58,7 @@ const char *glic_codec_glitch_status_string(glic_codec_glitch_status status) {
 
 const char *glic_codec_glitch_effect_name(glic_codec_glitch_effect effect) {
   if (effect < GLIC_CODEC_GLITCH_QP_PUMP ||
-      effect > GLIC_CODEC_GLITCH_CONCEALMENT_CHOREOGRAPHY)
+      effect > GLIC_CODEC_GLITCH_BITRATE_RASTER)
     return "unknown";
   return kEffectNames[effect];
 }

@@ -51,6 +51,16 @@ enum class CodecGlitchEffect : uint32_t {
   CodecGrainSynth,
   RecursiveCodecSkin,
   ConcealmentChoreography,
+  DualCodecCrossbreed,
+  CodecPingpong,
+  GopAccordion,
+  BframeBraid,
+  PlaneSplitCodec,
+  RoiQualityIslands,
+  CodecPhaseMosaic,
+  EncoderHotSwap,
+  PtsRubberband,
+  BitrateRaster,
   Count,
 };
 

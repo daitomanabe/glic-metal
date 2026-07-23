@@ -8,6 +8,7 @@ active development; no stable binary release has been tagged yet.
 Canonical repository: <https://github.com/daitomanabe/glic-metal>
 
 [Build guide](docs/BUILDING.md) ·
+[Downstream quick start](docs/DOWNSTREAM_QUICKSTART.md) ·
 [Embedding guide](docs/EMBEDDING.md) ·
 [AI integration contract](docs/AI_INTEGRATION.md) ·
 [Codec Glitch](docs/CODEC_GLITCH.md) ·
@@ -36,7 +37,7 @@ C++20とMetal ComputeによるGLIC (GLitch Image Codec) のリアルタイム映
 ### 特徴
 
 - C++20によるファイルcodecと、CPU / Metalリアルタイム処理
-- VideoToolbox hardware H.264 / HEVC / ProResとMetal-backed post pathによる18種類のCodec Glitch
+- VideoToolbox hardware H.264 / HEVC / ProResとMetal-backed post pathによる28種類のCodec Glitch
 - C / C++ / Objective-C / Swiftから利用できる安定C ABIとCMake package
 - モダンC++機能を活用（`std::ranges`, `std::span`, `std::bit_cast`, `[[likely]]`属性など）
 - CPU経路はmacOS / LinuxをCI対象とし、Windowsは設計対象・未認証
@@ -216,12 +217,15 @@ python3 scripts/process_video.py input.mov output-codec.mp4 \
   --report output-codec.json --overwrite
 ```
 
-18 effectは`qp_pump`、`bitrate_crush`、`slice_dropout`、
+28 effectは`qp_pump`、`bitrate_crush`、`slice_dropout`、
 `slice_transplant`、`pframe_loss`、`idr_starvation`、`payload_xor`、
 `reference_timewarp`、`codec_feedback`、`generation_cascade`、
 `resolution_hop`、`chroma_codec_echo`、`temporal_polyphony`、
 `intra_cannibalism`、`residual_rift`、`codec_grain_synth`、
-`recursive_codec_skin`、`concealment_choreography`です。全effectが圧縮H.264の
+`recursive_codec_skin`、`concealment_choreography`と、Realtime Crossbreedの
+`dual_codec_crossbreed`、`codec_pingpong`、`gop_accordion`、`bframe_braid`、
+`plane_split_codec`、`roi_quality_islands`、`codec_phase_mosaic`、
+`encoder_hot_swap`、`pts_rubberband`、`bitrate_raster`です。全effectが圧縮H.264の
 VCL byteを変更せず、
 VideoToolboxでclean decodeします。`slice_dropout`と`slice_transplant`はdecode履歴の
 水平row／帯を合成し、`payload_xor`はposterize、RGB組み替え、位置をずらした
@@ -268,6 +272,24 @@ python3 scripts/process_multicodec_glitch.py input.mov output-av2.mp4 \
   --codec av2 --effect generation_cascade --generations 2 \
   --width 480 --height 270 --fps 15
 ```
+
+圧縮packet、NAL/OBU、timestampを直接変化させる処理は、リアルタイム経路から
+分離したOffline Packet Labで行います。8 effectはH.264 / HEVC / AV1 / VP9 /
+ProResの対応範囲をfail-closedで検証し、破損decodeをtimeout・CPU・出力容量制限付き
+subprocessへ隔離します。
+
+```bash
+python3 scripts/process_offline_packet_glitch.py input.mov packet-glitch.mp4 \
+  --codec h264 --effect packet_bit_rot --amount 0.68
+```
+
+frame欠落後のpreviewは長さが異なるため、
+`scripts/evaluate_offline_packet_glitches.py`が正規化時間位置の視覚差、時間差、
+decode生存率をまとめてrankingします。詳細は
+[Offline Packet Glitch Lab](docs/OFFLINE_PACKET_GLITCH.md)を参照してください。
+
+motion/residual/reference、semantic/depth/audio、実multi-decoder合成、異種codec直列処理、
+token-free自動探索は[Codec Lab](docs/CODEC_LAB.md)へ分離しています。
 
 ### グリッチ差分QA
 
@@ -798,12 +820,14 @@ python3 scripts/process_video.py input.mov output-codec.mp4 \
   --report output-codec.json --overwrite
 ```
 
-The eighteen effects are `qp_pump`, `bitrate_crush`, `slice_dropout`,
+The 28 effects include `qp_pump`, `bitrate_crush`, `slice_dropout`,
 `slice_transplant`, `pframe_loss`, `idr_starvation`, `payload_xor`,
 `reference_timewarp`, `codec_feedback`, `generation_cascade`,
 `resolution_hop`, `chroma_codec_echo`, `temporal_polyphony`,
 `intra_cannibalism`, `residual_rift`, `codec_grain_synth`,
-`recursive_codec_skin`, and `concealment_choreography`. Every effect sends
+`recursive_codec_skin`, `concealment_choreography`, and ten Realtime
+Crossbreed effects from `dual_codec_crossbreed` through `bitrate_raster`.
+Every effect sends
 unchanged H.264 VCL bytes through a clean VideoToolbox decode. `slice_dropout` and
 `slice_transplant` composite horizontal rows/bands from decoded history;
 `payload_xor` creates digital damage with posterization, RGB rewiring, and
@@ -853,6 +877,25 @@ realtime claim:
 python3 scripts/process_multicodec_glitch.py input.mov output-av1.mp4 \
   --codec av1 --effect temporal_echo --generations 2
 ```
+
+Compressed packet, NAL/OBU, and timestamp mutation lives in a separate Offline
+Packet Lab. Its eight effects cover fail-closed subsets of H.264, HEVC, AV1, VP9,
+and ProRes. Damaged decode runs in a subprocess with timeout, CPU, output-size,
+and descriptor limits; it is never presented as realtime.
+
+```bash
+python3 scripts/process_offline_packet_glitch.py input.mov packet-glitch.mp4 \
+  --codec vp9 --effect vp9_superframe_shuffle --amount 0.68
+```
+
+Use `scripts/evaluate_offline_packet_glitches.py` for normalized-timeline
+visual/temporal analysis and decode-survival ranking when outputs have unequal
+frame counts. See
+[Offline Packet Glitch Lab](docs/OFFLINE_PACKET_GLITCH.md).
+
+Motion/residual/reference reconstruction, semantic/depth/audio processing,
+true multi-decoder blending, cross-codec chains, and token-free evolutionary
+search are documented in [Codec Lab](docs/CODEC_LAB.md).
 
 ### Glitch difference QA
 

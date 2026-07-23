@@ -7,6 +7,21 @@
     "language_abi": "C",
     "abi_versions": {"image": 1, "codec": 1, "selected_presets": 1}
   },
+  "distribution": {
+    "macos_sdk": {
+      "library": "GlicMetal.xcframework",
+      "resources": "GlicMetalResources.bundle",
+      "documentation_directory": "Documentation",
+      "offline_tools_directory": "Tools",
+      "python_requirements": "Tools/requirements.txt"
+    },
+    "cmake_package": {
+      "target": "GlicMetal::GlicMetal",
+      "resource_copy_function": "glic_metal_copy_resources",
+      "offline_tools_variable": "GLIC_METAL_TOOLS_DIR",
+      "python_requirements_variable": "GLIC_METAL_PYTHON_REQUIREMENTS"
+    }
+  },
   "public_headers": [
     "glic_metal/glic_metal.h",
     "glic_metal/glic_metal_metal.h",
@@ -52,14 +67,18 @@
       "output": "glic_codec_glitch_copy_latest_pixel_buffer",
       "native_codecs": ["h264", "hevc", "prores_422"],
       "codec_selector": "glic_codec_glitch_config.codec",
-      "effect_count": 18,
+      "effect_count": 28,
       "effect_names": [
         "qp_pump", "bitrate_crush", "slice_dropout", "slice_transplant",
         "pframe_loss", "idr_starvation", "payload_xor",
         "reference_timewarp", "codec_feedback", "generation_cascade",
         "resolution_hop", "chroma_codec_echo", "temporal_polyphony",
         "intra_cannibalism", "residual_rift", "codec_grain_synth",
-        "recursive_codec_skin", "concealment_choreography"
+        "recursive_codec_skin", "concealment_choreography",
+        "dual_codec_crossbreed", "codec_pingpong", "gop_accordion",
+        "bframe_braid", "plane_split_codec", "roi_quality_islands",
+        "codec_phase_mosaic", "encoder_hot_swap", "pts_rubberband",
+        "bitrate_raster"
       ],
       "required_resources": []
     }
@@ -68,6 +87,7 @@
     "codec_generations": {
       "execution": "offline_process",
       "entrypoint": "scripts/process_multicodec_glitch.py",
+      "sdk_entrypoint": "Tools/process_multicodec_glitch.py",
       "codecs": ["av1", "av2", "hevc", "vp9", "prores"],
       "software_codecs": {
         "av1": "FFmpeg_libaom-av1_plus_libdav1d",
@@ -83,6 +103,64 @@
         "json_report"
       ],
       "realtime_claim": false
+    },
+    "packet_glitch_lab": {
+      "execution": "offline_isolated_process",
+      "entrypoint": "scripts/process_offline_packet_glitch.py",
+      "sdk_entrypoint": "Tools/process_offline_packet_glitch.py",
+      "catalog": "resources/offline-codec-effects.json",
+      "evaluator": "scripts/evaluate_offline_packet_glitches.py",
+      "sdk_evaluator": "Tools/evaluate_offline_packet_glitches.py",
+      "codecs": ["h264", "hevc", "av1", "vp9", "prores"],
+      "effects": [
+        "packet_bit_rot",
+        "gop_amputation",
+        "packet_dropout_score",
+        "timestamp_fracture",
+        "nal_obu_surgery",
+        "header_hallucination",
+        "packet_transplant",
+        "vp9_superframe_shuffle"
+      ],
+      "isolation": {
+        "subprocess": true,
+        "timeout": true,
+        "cpu_limit": true,
+        "file_size_limit": true,
+        "decoder_threads": 1
+      },
+      "persistent_evidence": [
+        "source_bitstream",
+        "damaged_bitstream",
+        "salvaged_intermediate",
+        "decoder_log",
+        "sha256",
+        "codec_probe",
+        "json_report"
+      ],
+      "may_produce_invalid_bitstream": true,
+      "realtime_claim": false
+    },
+    "codec_syntax_lab": {
+      "execution": "offline_process",
+      "entrypoint": "scripts/process_codec_lab.py",
+      "sdk_entrypoint": "Tools/process_codec_lab.py",
+      "catalog": "resources/codec-lab-effects.json",
+      "effect_count": 12,
+      "implementation_contract": "decoded reconstruction proxies are labeled; codec cycles are real",
+      "codecs": ["h264", "hevc", "av1", "vp9", "prores", "av2"],
+      "realtime_claim": false
+    },
+    "analysis_and_evolutionary_lab": {
+      "execution": "offline_process",
+      "entrypoint": "scripts/process_codec_lab.py",
+      "sdk_entrypoint": "Tools/process_codec_lab.py",
+      "search_entrypoint": "scripts/evolutionary_codec_search.py",
+      "sdk_search_entrypoint": "Tools/evolutionary_codec_search.py",
+      "effect_count": 6,
+      "token_free_search": true,
+      "resume_state": true,
+      "realtime_claim": false
     }
   },
   "macos_link_frameworks": [
@@ -93,7 +171,9 @@
     "Presets": "required_by_original_and_spatial_image_lanes",
     "glic_realtime.metallib": "required_by_metal_image_lanes",
     "selected-presets.json": "optional_data_copy_for_inspection_and_exchange",
-    "integration-manifest.json": "optional_machine_readable_integration_contract"
+    "integration-manifest.json": "optional_machine_readable_integration_contract",
+    "offline-codec-effects.json": "optional_offline_packet_glitch_catalog",
+    "codec-lab-effects.json": "optional_realtime_and_offline_codec_lab_catalog"
   },
   "threading": {
     "image_context": "one_serial_processing_queue_per_context",
@@ -116,6 +196,9 @@
     "do_not_call_prepare_from_a_render_or_capture_callback",
     "do_not_share_one_context_across_concurrent_streams",
     "do_not_modify_compressed_videotoolbox_payload_bytes",
+    "do_not_run_offline_packet_glitches_inside_realtime_callbacks",
+    "do_not_decode_damaged_bitstreams_in_the_host_process",
+    "do_not_claim_decoded_reconstruction_proxies_are_native_codec_syntax_hooks",
     "do_not_substitute_av1_for_av2_when_avm_is_unavailable",
     "do_not_claim_pixel_exact_equivalence_with_processing_glic"
   ],
@@ -125,9 +208,12 @@
     "ctest --test-dir build --output-on-failure"
   ],
   "documentation": {
+    "quickstart": "docs/DOWNSTREAM_QUICKSTART.md",
     "human": "docs/EMBEDDING.md",
     "agent": "docs/AI_INTEGRATION.md",
     "codec": "docs/CODEC_GLITCH.md",
-    "multicodec": "docs/MULTICODEC_GLITCH.md"
+    "multicodec": "docs/MULTICODEC_GLITCH.md",
+    "offline_packet_glitch": "docs/OFFLINE_PACKET_GLITCH.md",
+    "codec_lab": "docs/CODEC_LAB.md"
   }
 }

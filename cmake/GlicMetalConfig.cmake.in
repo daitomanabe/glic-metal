@@ -12,6 +12,13 @@ set_and_check(GLIC_METAL_SELECTED_PRESETS_JSON
               "@PACKAGE_CMAKE_INSTALL_DATADIR@/glic-metal/selected-presets.json")
 set_and_check(GLIC_METAL_INTEGRATION_MANIFEST
               "@PACKAGE_CMAKE_INSTALL_DATADIR@/glic-metal/integration-manifest.json")
+set_and_check(GLIC_METAL_OFFLINE_CODEC_EFFECTS_JSON
+              "@PACKAGE_CMAKE_INSTALL_DATADIR@/glic-metal/offline-codec-effects.json")
+set_and_check(GLIC_METAL_CODEC_LAB_EFFECTS_JSON
+              "@PACKAGE_CMAKE_INSTALL_DATADIR@/glic-metal/codec-lab-effects.json")
+set_and_check(GLIC_METAL_TOOLS_DIR "@PACKAGE_CMAKE_INSTALL_BINDIR@")
+set_and_check(GLIC_METAL_PYTHON_REQUIREMENTS
+              "@PACKAGE_CMAKE_INSTALL_DATADIR@/glic-metal/requirements-qa.txt")
 if(APPLE)
   set_and_check(GLIC_METAL_METALLIB
                 "@PACKAGE_CMAKE_INSTALL_LIBDIR@/glic/glic_realtime.metallib")
