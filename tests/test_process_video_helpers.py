@@ -58,6 +58,12 @@ def main() -> int:
         "generation_cascade",
         "resolution_hop",
         "chroma_codec_echo",
+        "temporal_polyphony",
+        "intra_cannibalism",
+        "residual_rift",
+        "codec_grain_synth",
+        "recursive_codec_skin",
+        "concealment_choreography",
     )
     assert MODULE.CODEC_GLITCH_EFFECTS == expected_codec_effects
     for effect in expected_codec_effects:

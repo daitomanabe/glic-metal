@@ -8,6 +8,14 @@ semantic versioning for tagged releases.
 
 ### Added
 
+- Six safe realtime adaptations of codec-prediction research concepts:
+  temporal polyphony, recursive intra-frame self-copy, prediction/residual
+  rifting, synthesized codec grain, recursive restoration skin, and regional
+  concealment choreography. They use clean decoded history and the
+  Metal-backed post path without modifying H.264 VCL payloads.
+- Machine-readable enumeration of all 18 Codec Glitch effects for downstream
+  integration agents, plus candidate-bank coverage and mixed-review entries
+  for the six new effect families.
 - A machine-readable public release policy that explicitly retains the visual
   preset audit gallery while enforcing total and per-file size limits in the
   strict publication gate.

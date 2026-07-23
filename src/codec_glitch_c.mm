@@ -28,7 +28,7 @@ bool validHeader(uint32_t structSize, uint32_t abiVersion,
 
 bool validEffect(glic_codec_glitch_effect effect) {
   return effect >= GLIC_CODEC_GLITCH_QP_PUMP &&
-         effect <= GLIC_CODEC_GLITCH_CHROMA_CODEC_ECHO;
+         effect <= GLIC_CODEC_GLITCH_CONCEALMENT_CHOREOGRAPHY;
 }
 
 glic_codec_glitch_status fail(glic_codec_glitch_context *context,

@@ -36,7 +36,7 @@ C++20とMetal ComputeによるGLIC (GLitch Image Codec) のリアルタイム映
 ### 特徴
 
 - C++20によるファイルcodecと、CPU / Metalリアルタイム処理
-- VideoToolbox hardware H.264とMetal-backed post pathによる12種類のCodec Glitch
+- VideoToolbox hardware H.264とMetal-backed post pathによる18種類のCodec Glitch
 - C / C++ / Objective-C / Swiftから利用できる安定C ABIとCMake package
 - モダンC++機能を活用（`std::ranges`, `std::span`, `std::bit_cast`, `[[likely]]`属性など）
 - CPU経路はmacOS / LinuxをCI対象とし、Windowsは設計対象・未認証
@@ -215,15 +215,21 @@ python3 scripts/process_video.py input.mov output-codec.mp4 \
   --report output-codec.json --overwrite
 ```
 
-12 effectは`qp_pump`、`bitrate_crush`、`slice_dropout`、
+18 effectは`qp_pump`、`bitrate_crush`、`slice_dropout`、
 `slice_transplant`、`pframe_loss`、`idr_starvation`、`payload_xor`、
 `reference_timewarp`、`codec_feedback`、`generation_cascade`、
-`resolution_hop`、`chroma_codec_echo`です。全effectが圧縮H.264のVCL byteを変更せず、
+`resolution_hop`、`chroma_codec_echo`、`temporal_polyphony`、
+`intra_cannibalism`、`residual_rift`、`codec_grain_synth`、
+`recursive_codec_skin`、`concealment_choreography`です。全effectが圧縮H.264の
+VCL byteを変更せず、
 VideoToolboxでclean decodeします。`slice_dropout`と`slice_transplant`はdecode履歴の
 水平row／帯を合成し、`payload_xor`はposterize、RGB組み替え、位置をずらした
 macroblock状tileでdigital damageを作ります。`reference_timewarp`は4〜12 frameへ
 設定できるdecode済み`CVPixelBuffer`履歴から過去frameを選び、圧縮P packetを再利用しません。
 `resolution_hop`は1/2または1/4 codec段の復元時にpixel化を加えます。
+新しい6 effectは、複数時点の領域合成、再帰的な自己block copy、予測と残差の
+再合成、GPU grain、復元filter feedback、領域別concealmentをMetal-backed pathで
+実装します。
 `pframe_loss`と`idr_starvation`だけはencode済みframeを意図的にholdし、直前の正常な
 decode結果をrepeatします。
 
@@ -548,7 +554,7 @@ The port keeps the file codec, original parameter semantics, realtime visual app
 ### Features
 
 - C++20 file codec plus CPU / Metal realtime processing
-- Twelve VideoToolbox hardware-H.264 codec effects with a Metal-backed post path
+- Eighteen VideoToolbox hardware-H.264 codec effects with a Metal-backed post path
 - Stable C ABI and installable CMake package for C, C++, Objective-C, and Swift
 - Modern C++ features (`std::ranges`, `std::span`, `std::bit_cast`, `[[likely]]` attributes, etc.)
 - CPU paths are CI-tested on macOS and Linux; Windows is designed for but not
@@ -778,17 +784,22 @@ python3 scripts/process_video.py input.mov output-codec.mp4 \
   --report output-codec.json --overwrite
 ```
 
-The twelve effects are `qp_pump`, `bitrate_crush`, `slice_dropout`,
+The eighteen effects are `qp_pump`, `bitrate_crush`, `slice_dropout`,
 `slice_transplant`, `pframe_loss`, `idr_starvation`, `payload_xor`,
 `reference_timewarp`, `codec_feedback`, `generation_cascade`,
-`resolution_hop`, and `chroma_codec_echo`. Every effect sends unchanged H.264
-VCL bytes through a clean VideoToolbox decode. `slice_dropout` and
+`resolution_hop`, `chroma_codec_echo`, `temporal_polyphony`,
+`intra_cannibalism`, `residual_rift`, `codec_grain_synth`,
+`recursive_codec_skin`, and `concealment_choreography`. Every effect sends
+unchanged H.264 VCL bytes through a clean VideoToolbox decode. `slice_dropout` and
 `slice_transplant` composite horizontal rows/bands from decoded history;
 `payload_xor` creates digital damage with posterization, RGB rewiring, and
 displaced macroblock-like tiles. `reference_timewarp` selects an older frame
 from decoded `CVPixelBuffer` history configured from four to twelve frames
-instead of reusing a compressed P packet. `resolution_hop` adds pixelation while restoring its
-one-half or one-quarter-resolution codec result. Only `pframe_loss` and
+instead of reusing a compressed P packet. `resolution_hop` adds pixelation
+while restoring its one-half or one-quarter-resolution codec result.
+The six additional effects use Metal-backed multi-age regional composition,
+recursive self-copy, prediction/residual recomposition, synthesized grain,
+restoration feedback, and regional concealment. Only `pframe_loss` and
 `idr_starvation` intentionally hold encoded frames and repeat the prior good
 decoded result.
 

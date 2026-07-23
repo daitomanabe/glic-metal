@@ -33,6 +33,12 @@ enum class CodecGlitchEffect : uint32_t {
   GenerationCascade,
   ResolutionHop,
   ChromaCodecEcho,
+  TemporalPolyphony,
+  IntraCannibalism,
+  ResidualRift,
+  CodecGrainSynth,
+  RecursiveCodecSkin,
+  ConcealmentChoreography,
   Count,
 };
 

@@ -224,6 +224,18 @@ const char *codecGlitchEffectName(CodecGlitchEffect effect) noexcept {
     return "resolution_hop";
   case CodecGlitchEffect::ChromaCodecEcho:
     return "chroma_codec_echo";
+  case CodecGlitchEffect::TemporalPolyphony:
+    return "temporal_polyphony";
+  case CodecGlitchEffect::IntraCannibalism:
+    return "intra_cannibalism";
+  case CodecGlitchEffect::ResidualRift:
+    return "residual_rift";
+  case CodecGlitchEffect::CodecGrainSynth:
+    return "codec_grain_synth";
+  case CodecGlitchEffect::RecursiveCodecSkin:
+    return "recursive_codec_skin";
+  case CodecGlitchEffect::ConcealmentChoreography:
+    return "concealment_choreography";
   case CodecGlitchEffect::Count:
     break;
   }
@@ -505,6 +517,25 @@ private:
                                               bool generationCascade);
   CVPixelBufferRef renderChromaEcho(CVPixelBufferRef input,
                                     CVPixelBufferRef history, float mix);
+  CVPixelBufferRef renderTemporalPolyphony(CVPixelBufferRef input,
+                                           CVPixelBufferRef nearHistory,
+                                           CVPixelBufferRef farHistory,
+                                           const FrameContext &context);
+  CVPixelBufferRef renderIntraCannibalism(CVPixelBufferRef input,
+                                          const FrameContext &context);
+  CVPixelBufferRef renderResidualRift(CVPixelBufferRef input,
+                                      CVPixelBufferRef history,
+                                      const FrameContext &context);
+  CVPixelBufferRef renderCodecGrainSynth(CVPixelBufferRef input,
+                                         const FrameContext &context);
+  CVPixelBufferRef renderRecursiveCodecSkin(CVPixelBufferRef input,
+                                            CVPixelBufferRef history,
+                                            const FrameContext &context);
+  CVPixelBufferRef
+  renderConcealmentChoreography(CVPixelBufferRef input,
+                                CVPixelBufferRef nearHistory,
+                                CVPixelBufferRef farHistory,
+                                const FrameContext &context);
   void finishDecodedFrame(CodecStage &stage, FrameContext &context,
                           CVPixelBufferRef imageBuffer);
   void emit(FrameContext &context, CVPixelBufferRef imageBuffer,
@@ -2271,6 +2302,383 @@ CodecGlitchEngineImpl::renderChromaEcho(CVPixelBufferRef input,
   return output;
 }
 
+CVPixelBufferRef CodecGlitchEngineImpl::renderTemporalPolyphony(
+    CVPixelBufferRef input, CVPixelBufferRef nearHistory,
+    CVPixelBufferRef farHistory, const FrameContext &context) {
+  if (input == nullptr || nearHistory == nullptr || farHistory == nullptr ||
+      fullSizePool_ == nullptr || ciContext_ == nil)
+    return nullptr;
+  CVPixelBufferRef output = nullptr;
+  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
+                                         &output) != kCVReturnSuccess ||
+      output == nullptr)
+    return nullptr;
+
+  @autoreleasepool {
+    CIImage *current = [CIImage imageWithCVPixelBuffer:input];
+    CIImage *nearFrame = [CIImage imageWithCVPixelBuffer:nearHistory];
+    CIImage *farFrame = [CIImage imageWithCVPixelBuffer:farHistory];
+    CIImage *mask = [current imageByApplyingFilter:@"CIPhotoEffectMono"];
+    const double phase = temporalWave(context.frameIndex, context.controls.rate);
+    mask = [mask imageByApplyingFilter:@"CIColorControls"
+                   withInputParameters:@{
+                     kCIInputSaturationKey : @0.0,
+                     kCIInputContrastKey : @(3.0 + context.controls.amount * 7.0),
+                     kCIInputBrightnessKey : @(-0.22 + phase * 0.18)
+                   }];
+    CIImage *temporal = [nearFrame
+        imageByApplyingFilter:@"CIBlendWithMask"
+          withInputParameters:@{
+            kCIInputBackgroundImageKey : farFrame,
+            kCIInputMaskImageKey : mask
+          }];
+    CIFilter *mix = [CIFilter filterWithName:@"CIDissolveTransition"];
+    [mix setValue:current forKey:kCIInputImageKey];
+    [mix setValue:temporal forKey:kCIInputTargetImageKey];
+    [mix setValue:@(clampValue(
+                      context.controls.amount *
+                          (0.55f + context.controls.feedback * 0.40f),
+                      0.0f, 0.94f))
+             forKey:kCIInputTimeKey];
+    CIImage *result = mix.outputImage ?: temporal;
+    result = [result
+        imageByCroppingToRect:CGRectMake(0, 0, configuration_.width,
+                                         configuration_.height)];
+    [ciContext_ render:result
+        toCVPixelBuffer:output
+                 bounds:CGRectMake(0, 0, configuration_.width,
+                                   configuration_.height)
+             colorSpace:nil];
+  }
+  return output;
+}
+
+CVPixelBufferRef CodecGlitchEngineImpl::renderIntraCannibalism(
+    CVPixelBufferRef input, const FrameContext &context) {
+  if (input == nullptr || fullSizePool_ == nullptr || ciContext_ == nil)
+    return nullptr;
+  CVPixelBufferRef output = nullptr;
+  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
+                                         &output) != kCVReturnSuccess ||
+      output == nullptr)
+    return nullptr;
+
+  @autoreleasepool {
+    CIImage *result = [CIImage imageWithCVPixelBuffer:input];
+    const int copies = 3 + static_cast<int>(context.controls.amount * 6.0f);
+    const CGFloat minimumBlock = 16.0;
+    for (int copy = 0; copy < copies; ++copy) {
+      const uint64_t hash = mixHash(
+          context.controls.seed ^ (context.frameIndex * kHashMultiplier) ^
+          (static_cast<uint64_t>(copy + 1) * 0xd6e8feb86659fd93ULL));
+      const CGFloat blockWidth = std::min<CGFloat>(
+          configuration_.width,
+          minimumBlock + (0.06 + context.controls.amount * 0.20) *
+                             configuration_.width *
+                             (0.35 + 0.65 * hashUnit(hash)));
+      const CGFloat blockHeight = std::min<CGFloat>(
+          configuration_.height,
+          minimumBlock + (0.05 + context.controls.amount * 0.16) *
+                             configuration_.height *
+                             (0.35 + 0.65 *
+                                         hashUnit(hash ^ 0xa0761d6478bd642fULL)));
+      const CGFloat sourceX = hashUnit(hash ^ 0xe7037ed1a0b428dbULL) *
+                              std::max<CGFloat>(
+                                  0.0, configuration_.width - blockWidth);
+      const CGFloat sourceY = hashUnit(hash ^ 0x8ebc6af09c88c6e3ULL) *
+                              std::max<CGFloat>(
+                                  0.0, configuration_.height - blockHeight);
+      const CGFloat travel =
+          (0.08 + context.controls.feedback * 0.34) * configuration_.width;
+      const CGFloat shiftX =
+          (hashUnit(hash ^ 0x589965cc75374cc3ULL) - 0.5) * 2.0 * travel;
+      const CGFloat shiftY =
+          (hashUnit(hash ^ 0x1d8e4e27c47d124fULL) - 0.5) *
+          configuration_.height * (0.04 + context.controls.rate * 0.20);
+      // Read from the result assembled so far, not only from the original
+      // input. Later blocks can therefore copy earlier copies recursively.
+      CIImage *block = [result
+          imageByCroppingToRect:CGRectMake(sourceX, sourceY, blockWidth,
+                                           blockHeight)];
+      block = [block imageByApplyingTransform:CGAffineTransformMakeTranslation(
+                                                  shiftX, shiftY)];
+      result = [block
+          imageByApplyingFilter:@"CISourceOverCompositing"
+            withInputParameters:@{kCIInputBackgroundImageKey : result}];
+    }
+    result = [result
+        imageByCroppingToRect:CGRectMake(0, 0, configuration_.width,
+                                         configuration_.height)];
+    [ciContext_ render:result
+        toCVPixelBuffer:output
+                 bounds:CGRectMake(0, 0, configuration_.width,
+                                   configuration_.height)
+             colorSpace:nil];
+  }
+  return output;
+}
+
+CVPixelBufferRef CodecGlitchEngineImpl::renderResidualRift(
+    CVPixelBufferRef input, CVPixelBufferRef history,
+    const FrameContext &context) {
+  if (input == nullptr || history == nullptr || fullSizePool_ == nullptr ||
+      ciContext_ == nil)
+    return nullptr;
+  CVPixelBufferRef output = nullptr;
+  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
+                                         &output) != kCVReturnSuccess ||
+      output == nullptr)
+    return nullptr;
+
+  @autoreleasepool {
+    CIImage *current = [CIImage imageWithCVPixelBuffer:input];
+    CIImage *previous = [CIImage imageWithCVPixelBuffer:history];
+    const double phase = temporalWave(context.frameIndex, context.controls.rate);
+    const CGFloat distance =
+        configuration_.width * context.controls.amount *
+        (0.015 + 0.095 * context.controls.feedback);
+    const CGFloat shiftX = distance * std::sin(phase * 6.283185307179586);
+    const CGFloat shiftY =
+        distance * 0.55 * std::cos(phase * 6.283185307179586);
+    CIImage *warped = [[previous imageByClampingToExtent]
+        imageByApplyingTransform:CGAffineTransformMakeTranslation(shiftX,
+                                                                   shiftY)];
+    warped = [warped
+        imageByCroppingToRect:CGRectMake(0, 0, configuration_.width,
+                                         configuration_.height)];
+
+    NSDictionary *negatePrediction = @{
+      @"inputRVector" : [CIVector vectorWithX:-1 Y:0 Z:0 W:0],
+      @"inputGVector" : [CIVector vectorWithX:0 Y:-1 Z:0 W:0],
+      @"inputBVector" : [CIVector vectorWithX:0 Y:0 Z:-1 W:0],
+      @"inputAVector" : [CIVector vectorWithX:0 Y:0 Z:0 W:1],
+      @"inputBiasVector" : [CIVector vectorWithX:0.5 Y:0.5 Z:0.5 W:0]
+    };
+    CIImage *negativePrevious =
+        [previous imageByApplyingFilter:@"CIColorMatrix"
+                    withInputParameters:negatePrediction];
+    CIImage *residual = [negativePrevious
+        imageByApplyingFilter:@"CIAdditionCompositing"
+          withInputParameters:@{kCIInputBackgroundImageKey : current}];
+    CIImage *recombined = [warped
+        imageByApplyingFilter:@"CIAdditionCompositing"
+          withInputParameters:@{kCIInputBackgroundImageKey : residual}];
+    recombined = [recombined
+        imageByApplyingFilter:@"CIColorMatrix"
+          withInputParameters:@{
+            @"inputRVector" : [CIVector vectorWithX:1 Y:0 Z:0 W:0],
+            @"inputGVector" : [CIVector vectorWithX:0 Y:1 Z:0 W:0],
+            @"inputBVector" : [CIVector vectorWithX:0 Y:0 Z:1 W:0],
+            @"inputAVector" : [CIVector vectorWithX:0 Y:0 Z:0 W:1],
+            @"inputBiasVector" :
+                [CIVector vectorWithX:-0.5 Y:-0.5 Z:-0.5 W:0]
+          }];
+    CIFilter *mix = [CIFilter filterWithName:@"CIDissolveTransition"];
+    [mix setValue:current forKey:kCIInputImageKey];
+    [mix setValue:recombined forKey:kCIInputTargetImageKey];
+    [mix setValue:@(0.30 + context.controls.amount * 0.64)
+             forKey:kCIInputTimeKey];
+    CIImage *result = mix.outputImage ?: recombined;
+    result = [result
+        imageByCroppingToRect:CGRectMake(0, 0, configuration_.width,
+                                         configuration_.height)];
+    [ciContext_ render:result
+        toCVPixelBuffer:output
+                 bounds:CGRectMake(0, 0, configuration_.width,
+                                   configuration_.height)
+             colorSpace:nil];
+  }
+  return output;
+}
+
+CVPixelBufferRef CodecGlitchEngineImpl::renderCodecGrainSynth(
+    CVPixelBufferRef input, const FrameContext &context) {
+  if (input == nullptr || fullSizePool_ == nullptr || ciContext_ == nil)
+    return nullptr;
+  CVPixelBufferRef output = nullptr;
+  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
+                                         &output) != kCVReturnSuccess ||
+      output == nullptr)
+    return nullptr;
+
+  @autoreleasepool {
+    CIImage *current = [CIImage imageWithCVPixelBuffer:input];
+    CIFilter *generator = [CIFilter filterWithName:@"CIRandomGenerator"];
+    CIImage *noise = generator.outputImage;
+    if (noise == nil) {
+      CFRelease(output);
+      return nullptr;
+    }
+    const uint64_t hash = mixHash(
+        context.controls.seed ^ (context.frameIndex * kHashMultiplier));
+    noise = [noise imageByApplyingTransform:CGAffineTransformMakeTranslation(
+                                                hashUnit(hash) * 4096.0,
+                                                hashUnit(hash ^
+                                                         0xa0761d6478bd642fULL) *
+                                                    4096.0)];
+    CIFilter *pixelate = [CIFilter filterWithName:@"CIPixellate"];
+    [pixelate setValue:noise forKey:kCIInputImageKey];
+    [pixelate setValue:@(1.0 + context.controls.feedback * 7.0)
+                 forKey:kCIInputScaleKey];
+    noise = pixelate.outputImage ?: noise;
+    const CGFloat gain =
+        0.08 + context.controls.amount *
+                   (0.18 + 0.18 * temporalWave(context.frameIndex,
+                                                context.controls.rate));
+    const CGFloat third = gain / 3.0;
+    noise = [noise
+        imageByApplyingFilter:@"CIColorMatrix"
+          withInputParameters:@{
+            @"inputRVector" :
+                [CIVector vectorWithX:third Y:third Z:third W:0],
+            @"inputGVector" :
+                [CIVector vectorWithX:third Y:third Z:third W:0],
+            @"inputBVector" :
+                [CIVector vectorWithX:third Y:third Z:third W:0],
+            @"inputAVector" : [CIVector vectorWithX:0 Y:0 Z:0 W:0],
+            @"inputBiasVector" :
+                [CIVector vectorWithX:-gain * 0.5
+                                    Y:-gain * 0.5
+                                    Z:-gain * 0.5
+                                    W:1]
+          }];
+    noise = [noise
+        imageByCroppingToRect:CGRectMake(0, 0, configuration_.width,
+                                         configuration_.height)];
+    CIImage *result = [noise
+        imageByApplyingFilter:@"CIAdditionCompositing"
+          withInputParameters:@{kCIInputBackgroundImageKey : current}];
+    result = [result
+        imageByCroppingToRect:CGRectMake(0, 0, configuration_.width,
+                                         configuration_.height)];
+    [ciContext_ render:result
+        toCVPixelBuffer:output
+                 bounds:CGRectMake(0, 0, configuration_.width,
+                                   configuration_.height)
+             colorSpace:nil];
+  }
+  return output;
+}
+
+CVPixelBufferRef CodecGlitchEngineImpl::renderRecursiveCodecSkin(
+    CVPixelBufferRef input, CVPixelBufferRef history,
+    const FrameContext &context) {
+  if (input == nullptr || history == nullptr || fullSizePool_ == nullptr ||
+      ciContext_ == nil)
+    return nullptr;
+  CVPixelBufferRef output = nullptr;
+  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
+                                         &output) != kCVReturnSuccess ||
+      output == nullptr)
+    return nullptr;
+
+  @autoreleasepool {
+    CIImage *current = [CIImage imageWithCVPixelBuffer:input];
+    CIImage *skin = [CIImage imageWithCVPixelBuffer:history];
+    skin = [skin imageByApplyingFilter:@"CINoiseReduction"
+                   withInputParameters:@{
+                     @"inputNoiseLevel" :
+                         @(0.015 + context.controls.amount * 0.075),
+                     @"inputSharpness" :
+                         @(0.30 + context.controls.feedback * 0.55)
+                   }];
+    skin = [skin imageByApplyingFilter:@"CISharpenLuminance"
+                   withInputParameters:@{
+                     kCIInputSharpnessKey :
+                         @(0.45 + context.controls.amount * 1.65)
+                   }];
+    skin = [skin imageByApplyingFilter:@"CIColorControls"
+                   withInputParameters:@{
+                     kCIInputSaturationKey :
+                         @(1.0 - context.controls.amount * 0.32),
+                     kCIInputContrastKey :
+                         @(1.0 + context.controls.amount * 0.24)
+                   }];
+    CIFilter *mix = [CIFilter filterWithName:@"CIDissolveTransition"];
+    [mix setValue:current forKey:kCIInputImageKey];
+    [mix setValue:skin forKey:kCIInputTargetImageKey];
+    [mix setValue:@(clampValue(
+                      context.controls.amount *
+                          (0.35f + context.controls.feedback * 0.58f),
+                      0.0f, 0.92f))
+             forKey:kCIInputTimeKey];
+    CIImage *result = mix.outputImage ?: skin;
+    result = [result
+        imageByCroppingToRect:CGRectMake(0, 0, configuration_.width,
+                                         configuration_.height)];
+    [ciContext_ render:result
+        toCVPixelBuffer:output
+                 bounds:CGRectMake(0, 0, configuration_.width,
+                                   configuration_.height)
+             colorSpace:nil];
+  }
+  return output;
+}
+
+CVPixelBufferRef CodecGlitchEngineImpl::renderConcealmentChoreography(
+    CVPixelBufferRef input, CVPixelBufferRef nearHistory,
+    CVPixelBufferRef farHistory, const FrameContext &context) {
+  if (input == nullptr || nearHistory == nullptr || farHistory == nullptr ||
+      fullSizePool_ == nullptr || ciContext_ == nil)
+    return nullptr;
+  CVPixelBufferRef output = nullptr;
+  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
+                                         &output) != kCVReturnSuccess ||
+      output == nullptr)
+    return nullptr;
+
+  @autoreleasepool {
+    CIImage *result = [CIImage imageWithCVPixelBuffer:input];
+    CIImage *nearFrame = [CIImage imageWithCVPixelBuffer:nearHistory];
+    CIImage *farFrame = [CIImage imageWithCVPixelBuffer:farHistory];
+    const int regions = 1 + static_cast<int>(context.controls.amount * 3.0f);
+    for (int region = 0; region < regions; ++region) {
+      const uint64_t hash = mixHash(
+          context.controls.seed ^ (context.frameIndex * kHashMultiplier) ^
+          (static_cast<uint64_t>(region + 1) * 0x632be59bd9b4e019ULL));
+      if (hashUnit(hash) > 0.30 + context.controls.amount *
+                                      (0.50 + 0.18 * context.controls.rate))
+        continue;
+      const CGFloat x = hashUnit(hash ^ 0x91e10da5c79e7b1dULL) *
+                        configuration_.width;
+      const CGFloat y = hashUnit(hash ^ 0xd1b54a32d192ed03ULL) *
+                        configuration_.height;
+      const CGFloat radius =
+          std::min(configuration_.width, configuration_.height) *
+          (0.08 + context.controls.amount * 0.28) *
+          (0.65 + 0.65 * hashUnit(hash ^ 0x94d049bb133111ebULL));
+      CIFilter *gradient = [CIFilter filterWithName:@"CIRadialGradient"];
+      [gradient setValue:[CIVector vectorWithX:x Y:y]
+                  forKey:@"inputCenter"];
+      [gradient setValue:@(radius * 0.55) forKey:@"inputRadius0"];
+      [gradient setValue:@(radius) forKey:@"inputRadius1"];
+      [gradient setValue:[CIColor colorWithRed:1 green:1 blue:1 alpha:1]
+                  forKey:@"inputColor0"];
+      [gradient setValue:[CIColor colorWithRed:0 green:0 blue:0 alpha:0]
+                  forKey:@"inputColor1"];
+      CIImage *mask = gradient.outputImage;
+      if (mask == nil)
+        continue;
+      CIImage *concealed = (region & 1) == 0 ? nearFrame : farFrame;
+      result = [concealed
+          imageByApplyingFilter:@"CIBlendWithMask"
+            withInputParameters:@{
+              kCIInputBackgroundImageKey : result,
+              kCIInputMaskImageKey : mask
+            }];
+    }
+    result = [result
+        imageByCroppingToRect:CGRectMake(0, 0, configuration_.width,
+                                         configuration_.height)];
+    [ciContext_ render:result
+        toCVPixelBuffer:output
+                 bounds:CGRectMake(0, 0, configuration_.width,
+                                   configuration_.height)
+             colorSpace:nil];
+  }
+  return output;
+}
+
 void CodecGlitchEngineImpl::handleDecoded(CodecStage &stage,
                                           uint64_t decodeToken, OSStatus status,
                                           VTDecodeInfoFlags infoFlags,
@@ -2380,6 +2788,58 @@ void CodecGlitchEngineImpl::finishDecodedFrame(CodecStage &stage,
       requiredPostProcessing = true;
       CFRelease(history);
     }
+  } else if (context.controls.effect ==
+             CodecGlitchEffect::TemporalPolyphony) {
+    CVPixelBufferRef nearHistory = copyHistoricalOutput(2);
+    const size_t farAge =
+        4 + static_cast<size_t>(context.controls.feedback * 8.0f);
+    CVPixelBufferRef farHistory = copyHistoricalOutput(farAge);
+    if (nearHistory != nullptr && farHistory != nullptr) {
+      processed = renderTemporalPolyphony(imageBuffer, nearHistory, farHistory,
+                                           context);
+      requiredPostProcessing = true;
+    }
+    if (nearHistory != nullptr)
+      CFRelease(nearHistory);
+    if (farHistory != nullptr)
+      CFRelease(farHistory);
+  } else if (context.controls.effect ==
+             CodecGlitchEffect::IntraCannibalism) {
+    processed = renderIntraCannibalism(imageBuffer, context);
+    requiredPostProcessing = true;
+  } else if (context.controls.effect == CodecGlitchEffect::ResidualRift) {
+    CVPixelBufferRef history = copyLastOutput();
+    if (history != nullptr) {
+      processed = renderResidualRift(imageBuffer, history, context);
+      requiredPostProcessing = true;
+      CFRelease(history);
+    }
+  } else if (context.controls.effect == CodecGlitchEffect::CodecGrainSynth) {
+    processed = renderCodecGrainSynth(imageBuffer, context);
+    requiredPostProcessing = true;
+  } else if (context.controls.effect ==
+             CodecGlitchEffect::RecursiveCodecSkin) {
+    CVPixelBufferRef history = copyLastOutput();
+    if (history != nullptr) {
+      processed = renderRecursiveCodecSkin(imageBuffer, history, context);
+      requiredPostProcessing = true;
+      CFRelease(history);
+    }
+  } else if (context.controls.effect ==
+             CodecGlitchEffect::ConcealmentChoreography) {
+    CVPixelBufferRef nearHistory = copyHistoricalOutput(1);
+    const size_t farAge =
+        3 + static_cast<size_t>(context.controls.feedback * 9.0f);
+    CVPixelBufferRef farHistory = copyHistoricalOutput(farAge);
+    if (nearHistory != nullptr && farHistory != nullptr) {
+      processed = renderConcealmentChoreography(
+          imageBuffer, nearHistory, farHistory, context);
+      requiredPostProcessing = true;
+    }
+    if (nearHistory != nullptr)
+      CFRelease(nearHistory);
+    if (farHistory != nullptr)
+      CFRelease(farHistory);
   }
 
   if (requiredPostProcessing && processed == nullptr) {

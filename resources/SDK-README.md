@@ -23,7 +23,7 @@ machine-readable contract for downstream coding agents. The adjacent
 `AI_INTEGRATION.md` is its normative implementation checklist.
 The asynchronous hardware-codec lane is exposed separately through
 `<glic_metal/codec_glitch.h>` and accepts opaque `CVPixelBufferRef` values. Its
-twelve effects use codec-quality control, intentional encoded-frame holds, and
+eighteen effects use codec-quality control, intentional encoded-frame holds, and
 safe codec-decoded history/post composites. All H.264 VCL bytes reach the
 decoder unchanged. `payload_xor` is a Metal-backed digital-damage composite,
 and `reference_timewarp` selects from a configurable history of four to twelve

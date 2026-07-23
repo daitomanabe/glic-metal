@@ -41,6 +41,16 @@ def main() -> int:
     assert lanes["original"]["apply"] == "glic_glitch_preset_apply_metal"
     assert lanes["spatial"]["apply"] == "glic_glitch_preset_apply_metal"
     assert lanes["codec"]["apply"] == "glic_glitch_preset_apply_codec"
+    expected_codec_effects = [
+        "qp_pump", "bitrate_crush", "slice_dropout", "slice_transplant",
+        "pframe_loss", "idr_starvation", "payload_xor",
+        "reference_timewarp", "codec_feedback", "generation_cascade",
+        "resolution_hop", "chroma_codec_echo", "temporal_polyphony",
+        "intra_cannibalism", "residual_rift", "codec_grain_synth",
+        "recursive_codec_skin", "concealment_choreography",
+    ]
+    assert lanes["codec"]["effect_count"] == len(expected_codec_effects) == 18
+    assert lanes["codec"]["effect_names"] == expected_codec_effects
 
     print("PASS AI integration manifest")
     return 0

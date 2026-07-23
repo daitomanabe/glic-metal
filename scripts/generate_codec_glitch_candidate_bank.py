@@ -27,56 +27,56 @@ def candidate(
 
 
 CANDIDATES = [
-    candidate("qp_soft_scan", "qp_pump", 0.38, 0.18, 0.15),
     candidate("qp_mid_pulse", "qp_pump", 0.62, 0.48, 0.25),
     candidate("qp_hard_wave", "qp_pump", 0.86, 0.72, 0.35),
     candidate("qp_erratic", "qp_pump", 0.98, 0.93, 0.45),
-    candidate("bitrate_fine", "bitrate_crush", 0.35, 0.20, 0.20),
     candidate("bitrate_pulse", "bitrate_crush", 0.58, 0.45, 0.35),
     candidate("bitrate_blocks", "bitrate_crush", 0.82, 0.25, 0.45),
     candidate("bitrate_meltdown", "bitrate_crush", 0.96, 0.78, 0.55),
-    candidate("dropout_sparse", "slice_dropout", 0.35, 0.18, 0.30),
     candidate("dropout_traveling", "slice_dropout", 0.55, 0.65, 0.42),
     candidate("dropout_dense", "slice_dropout", 0.78, 0.38, 0.55),
     candidate("dropout_storm", "slice_dropout", 0.93, 0.88, 0.70),
-    candidate("transplant_narrow", "slice_transplant", 0.32, 0.22, 0.40),
     candidate("transplant_offset", "slice_transplant", 0.50, 0.65, 0.62),
     candidate("transplant_weave", "slice_transplant", 0.70, 0.40, 0.82),
     candidate("transplant_mosaic", "slice_transplant", 0.90, 0.86, 0.95),
-    candidate("pframe_skip", "pframe_loss", 0.28, 0.20, 0.30),
     candidate("pframe_stagger", "pframe_loss", 0.48, 0.45, 0.45),
     candidate("pframe_stutter", "pframe_loss", 0.70, 0.68, 0.60),
     candidate("pframe_freeze_bursts", "pframe_loss", 0.90, 0.90, 0.80),
-    candidate("idr_rare", "idr_starvation", 0.30, 0.20, 0.40),
     candidate("idr_drift", "idr_starvation", 0.50, 0.40, 0.55),
     candidate("idr_drought", "idr_starvation", 0.72, 0.65, 0.70),
     candidate("idr_collapse", "idr_starvation", 0.92, 0.90, 0.85),
-    candidate("payload_chromatic", "payload_xor", 0.35, 0.25, 0.25),
     candidate("payload_tiles", "payload_xor", 0.55, 0.52, 0.40),
     candidate("payload_mosaic", "payload_xor", 0.75, 0.30, 0.55),
     candidate("payload_rupture", "payload_xor", 0.94, 0.83, 0.70),
-    candidate("timewarp_echo", "reference_timewarp", 0.30, 0.20, 0.45),
     candidate("timewarp_jump", "reference_timewarp", 0.52, 0.40, 0.65),
     candidate("timewarp_deep", "reference_timewarp", 0.72, 0.64, 0.85),
     candidate("timewarp_nonlinear", "reference_timewarp", 0.92, 0.90, 0.98),
-    candidate("feedback_haze", "codec_feedback", 0.28, 0.20, 0.45),
     candidate("feedback_trails", "codec_feedback", 0.50, 0.40, 0.68),
     candidate("feedback_recursion", "codec_feedback", 0.72, 0.62, 0.86),
     candidate("feedback_overload", "codec_feedback", 0.92, 0.84, 0.98),
-    candidate("cascade_soft", "generation_cascade", 0.35, 0.18, 0.30),
     candidate("cascade_aged", "generation_cascade", 0.55, 0.40, 0.45),
     candidate("cascade_deep", "generation_cascade", 0.76, 0.62, 0.62),
     candidate("cascade_collapse", "generation_cascade", 0.94, 0.86, 0.80),
-    candidate("resolution_half", "resolution_hop", 0.32, 0.20, 0.30),
     candidate("resolution_pulse", "resolution_hop", 0.52, 0.55, 0.40),
     candidate("resolution_quarter", "resolution_hop", 0.78, 0.35, 0.55),
     candidate("resolution_staircase", "resolution_hop", 0.95, 0.82, 0.70),
-    candidate("chroma_subtle", "chroma_codec_echo", 0.30, 0.18, 0.45),
     candidate("chroma_drift", "chroma_codec_echo", 0.52, 0.38, 0.65),
     candidate("chroma_split", "chroma_codec_echo", 0.75, 0.62, 0.86),
     candidate("chroma_flood", "chroma_codec_echo", 0.94, 0.85, 0.98),
     candidate("pframe_syncopated", "pframe_loss", 0.62, 0.95, 0.52),
     candidate("timewarp_rewind_burst", "reference_timewarp", 0.86, 0.12, 0.94),
+    candidate("polyphony_luma_choir", "temporal_polyphony", 0.58, 0.38, 0.78),
+    candidate("polyphony_deep_regions", "temporal_polyphony", 0.86, 0.72, 0.96),
+    candidate("intra_recursive_blocks", "intra_cannibalism", 0.62, 0.44, 0.72),
+    candidate("intra_recursive_collapse", "intra_cannibalism", 0.90, 0.80, 0.95),
+    candidate("residual_affine_rift", "residual_rift", 0.58, 0.34, 0.72),
+    candidate("residual_phase_split", "residual_rift", 0.86, 0.76, 0.92),
+    candidate("grain_fine", "codec_grain_synth", 0.42, 0.35, 0.18),
+    candidate("grain_pulse", "codec_grain_synth", 0.78, 0.82, 0.64),
+    candidate("skin_recursive", "recursive_codec_skin", 0.58, 0.34, 0.72),
+    candidate("skin_overgrowth", "recursive_codec_skin", 0.86, 0.70, 0.95),
+    candidate("concealment_regions", "concealment_choreography", 0.60, 0.45, 0.75),
+    candidate("concealment_orbit", "concealment_choreography", 0.88, 0.82, 0.94),
 ]
 
 
@@ -87,8 +87,8 @@ def validate_candidates() -> None:
     if len(names) != len(set(names)):
         raise ValueError("candidate names must be unique")
     effects = {entry["effect"] for entry in CANDIDATES}
-    if len(effects) != 12:
-        raise ValueError("candidate bank must cover all 12 codec effects")
+    if len(effects) != 18:
+        raise ValueError("candidate bank must cover all 18 codec effects")
     for entry in CANDIDATES:
         for key in ("amount", "rate", "feedback"):
             value = entry[key]
@@ -138,7 +138,7 @@ def main() -> int:
     args = parse_args()
     validate_candidates()
     if args.selftest:
-        print(f"PASS codec candidate bank candidates={len(CANDIDATES)} effects=12")
+        print(f"PASS codec candidate bank candidates={len(CANDIDATES)} effects=18")
         return 0
     if args.input is None or not args.input.is_file():
         raise SystemExit("input video is required and must exist")

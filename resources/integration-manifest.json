@@ -50,6 +50,15 @@
       "prepare": "glic_codec_glitch_prepare",
       "process": "glic_codec_glitch_submit_pixel_buffer",
       "output": "glic_codec_glitch_copy_latest_pixel_buffer",
+      "effect_count": 18,
+      "effect_names": [
+        "qp_pump", "bitrate_crush", "slice_dropout", "slice_transplant",
+        "pframe_loss", "idr_starvation", "payload_xor",
+        "reference_timewarp", "codec_feedback", "generation_cascade",
+        "resolution_hop", "chroma_codec_echo", "temporal_polyphony",
+        "intra_cannibalism", "residual_rift", "codec_grain_synth",
+        "recursive_codec_skin", "concealment_choreography"
+      ],
       "required_resources": []
     }
   },

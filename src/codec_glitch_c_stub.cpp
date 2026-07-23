@@ -15,6 +15,9 @@ constexpr const char *kEffectNames[] = {
     "payload_xor",    "reference_timewarp",
     "codec_feedback", "generation_cascade",
     "resolution_hop", "chroma_codec_echo",
+    "temporal_polyphony", "intra_cannibalism",
+    "residual_rift", "codec_grain_synth",
+    "recursive_codec_skin", "concealment_choreography",
 };
 
 } // namespace
@@ -50,7 +53,7 @@ const char *glic_codec_glitch_status_string(glic_codec_glitch_status status) {
 
 const char *glic_codec_glitch_effect_name(glic_codec_glitch_effect effect) {
   if (effect < GLIC_CODEC_GLITCH_QP_PUMP ||
-      effect > GLIC_CODEC_GLITCH_CHROMA_CODEC_ECHO)
+      effect > GLIC_CODEC_GLITCH_CONCEALMENT_CHOREOGRAPHY)
     return "unknown";
   return kEffectNames[effect];
 }

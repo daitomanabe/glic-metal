@@ -138,6 +138,12 @@ if (status == GLIC_CODEC_GLITCH_OK) {
 `NO_FRAME_AVAILABLE` は正常状態。取得成功したpixel bufferは必ず
 `glic_codec_glitch_pixel_buffer_release()` で1回だけ解放する。
 
+採用済み19 presetのメニューとは別に、実験用Codec Glitchを全て表示する場合は
+`resources/integration-manifest.json`の`lanes.codec.effect_names`を参照する。
+現在は18 effectで、public enumと`glic_codec_glitch_effect_name()`が実行時の
+正規名です。将来追加されるeffectを取り込むAI実装は、名前を独自に推測せず、
+同梱manifestとpublic headerを同じSDK版から読む。
+
 ### 配布方法
 
 推奨順序:
@@ -241,6 +247,13 @@ unknown presets and category mismatches as fail-closed. A codec submit may
 return `BACKPRESSURE`; drop that input rather than blocking. A codec poll may
 return `NO_FRAME_AVAILABLE`; this is normal. Release every successfully polled
 pixel buffer exactly once with `glic_codec_glitch_pixel_buffer_release()`.
+
+The adopted 19-preset menu is separate from the complete experimental Codec
+Glitch effect list. If the host exposes every effect, read the 18 canonical
+names from `lanes.codec.effect_names` in the bundled integration manifest;
+the public enum and `glic_codec_glitch_effect_name()` are authoritative at
+runtime. An agent adopting future effects must read the manifest and public
+header from the same SDK version instead of inventing names.
 
 Do not import headers from `src/`, duplicate preset constants, modify H.264 VCL
 payloads, or claim pixel-exact equivalence with the Processing implementation.

@@ -49,12 +49,13 @@ ORIGINAL = [
 ]
 
 CODEC = [
-    "pframe_freeze_bursts", "feedback_overload", "timewarp_nonlinear",
-    "bitrate_meltdown", "transplant_mosaic", "dropout_storm",
-    "payload_rupture", "cascade_collapse", "idr_collapse", "chroma_flood",
-    "resolution_staircase", "qp_erratic", "pframe_syncopated",
-    "feedback_recursion", "timewarp_rewind_burst", "bitrate_blocks",
-    "payload_mosaic", "chroma_split",
+    "pframe_freeze_bursts", "timewarp_nonlinear", "bitrate_meltdown",
+    "transplant_mosaic", "dropout_storm", "payload_rupture",
+    "cascade_collapse", "idr_collapse", "chroma_flood",
+    "resolution_staircase", "qp_erratic", "feedback_recursion",
+    "polyphony_luma_choir", "intra_recursive_blocks",
+    "residual_affine_rift", "grain_pulse", "skin_recursive",
+    "concealment_regions",
 ]
 
 

@@ -28,6 +28,12 @@ CODEC_GLITCH_EFFECTS = (
     "generation_cascade",
     "resolution_hop",
     "chroma_codec_echo",
+    "temporal_polyphony",
+    "intra_cannibalism",
+    "residual_rift",
+    "codec_grain_synth",
+    "recursive_codec_skin",
+    "concealment_choreography",
 )
 
 
