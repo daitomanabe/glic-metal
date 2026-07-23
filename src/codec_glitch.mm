@@ -602,6 +602,9 @@ private:
   CVPixelBufferRef renderRealtimeCrossbreed(
       CVPixelBufferRef input, CVPixelBufferRef nearHistory,
       CVPixelBufferRef farHistory, const FrameContext &context);
+  CVPixelBufferRef renderAdvancedRealtime(
+      CVPixelBufferRef input, CVPixelBufferRef nearHistory,
+      CVPixelBufferRef farHistory, const FrameContext &context);
   void finishDecodedFrame(CodecStage &stage, FrameContext &context,
                           CVPixelBufferRef imageBuffer);
   void emit(FrameContext &context, CVPixelBufferRef imageBuffer,
@@ -2884,6 +2887,166 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderRealtimeCrossbreed(
   return result;
 }
 
+CVPixelBufferRef CodecGlitchEngineImpl::renderAdvancedRealtime(
+    CVPixelBufferRef input, CVPixelBufferRef nearHistory,
+    CVPixelBufferRef farHistory, const FrameContext &context) {
+  if (input == nullptr || nearHistory == nullptr || farHistory == nullptr ||
+      fullSizePool_ == nullptr || ciContext_ == nil)
+    return nullptr;
+  CVPixelBufferRef output = nullptr;
+  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
+                                         &output) != kCVReturnSuccess ||
+      output == nullptr)
+    return nullptr;
+
+  @autoreleasepool {
+    const CGRect bounds =
+        CGRectMake(0, 0, configuration_.width, configuration_.height);
+    CIImage *current = [CIImage imageWithCVPixelBuffer:input];
+    CIImage *nearFrame = [CIImage imageWithCVPixelBuffer:nearHistory];
+    CIImage *farFrame = [CIImage imageWithCVPixelBuffer:farHistory];
+    CIImage *result = nil;
+    switch (context.controls.effect) {
+    case CodecGlitchEffect::PlaneTimeSplit: {
+      CIImage *currentLuma =
+          [current imageByApplyingFilter:@"CIColorControls"
+                     withInputParameters:@{kCIInputSaturationKey : @0.0}];
+      CIImage *historyColor =
+          [farFrame imageByApplyingFilter:@"CIColorControls"
+                      withInputParameters:@{
+                        kCIInputSaturationKey :
+                            @(1.15 + context.controls.amount * 1.35),
+                        kCIInputContrastKey :
+                            @(0.92 + context.controls.feedback * 0.20)
+                      }];
+      result = [historyColor
+          imageByApplyingFilter:@"CIColorBlendMode"
+            withInputParameters:@{
+              kCIInputBackgroundImageKey : currentLuma
+            }];
+      break;
+    }
+    case CodecGlitchEffect::ReferenceAtlas: {
+      result = current;
+      const int columns = context.controls.amount > 0.62f ? 6 : 4;
+      const int rows = context.controls.amount > 0.82f ? 6 : 4;
+      const CGFloat tileWidth =
+          static_cast<CGFloat>(configuration_.width) / columns;
+      const CGFloat tileHeight =
+          static_cast<CGFloat>(configuration_.height) / rows;
+      for (int row = 0; row < rows; ++row) {
+        for (int column = 0; column < columns; ++column) {
+          const uint64_t index =
+              static_cast<uint64_t>(row * columns + column + 1);
+          const uint64_t hash =
+              mixHash(context.controls.seed ^
+                      (context.frameIndex * kHashMultiplier) ^
+                      (index * 0x94d049bb133111ebULL));
+          if (hashUnit(hash) >
+              0.20 + context.controls.amount * 0.72)
+            continue;
+          CIImage *source = (hash & 1ULL) == 0 ? nearFrame : farFrame;
+          const CGFloat sourceX =
+              hashUnit(hash ^ 0x632be59bd9b4e019ULL) *
+              std::max<CGFloat>(0, configuration_.width - tileWidth);
+          const CGFloat sourceY =
+              hashUnit(hash ^ 0xd1b54a32d192ed03ULL) *
+              std::max<CGFloat>(0, configuration_.height - tileHeight);
+          const CGRect sourceRect =
+              CGRectMake(sourceX, sourceY, tileWidth, tileHeight);
+          CIImage *tile = [source imageByCroppingToRect:sourceRect];
+          tile = [tile imageByApplyingTransform:CGAffineTransformMakeTranslation(
+                                                  column * tileWidth - sourceX,
+                                                  row * tileHeight - sourceY)];
+          result = [tile
+              imageByApplyingFilter:@"CISourceOverCompositing"
+                withInputParameters:@{
+                  kCIInputBackgroundImageKey : result
+                }];
+        }
+      }
+      break;
+    }
+    case CodecGlitchEffect::FlowLattice: {
+      result = farFrame;
+      constexpr int columns = 6;
+      constexpr int rows = 4;
+      const CGFloat cellWidth =
+          static_cast<CGFloat>(configuration_.width) / columns;
+      const CGFloat cellHeight =
+          static_cast<CGFloat>(configuration_.height) / rows;
+      const CGFloat phase =
+          (context.frameIndex + 1) *
+          (0.13 + context.controls.rate * 0.67);
+      for (int row = 0; row < rows; ++row) {
+        for (int column = 0; column < columns; ++column) {
+          const CGFloat x = column * cellWidth;
+          const CGFloat y = row * cellHeight;
+          const CGFloat direction =
+              std::sin(phase + column * 0.91 + row * 1.37);
+          const CGFloat shiftX =
+              direction * context.controls.amount * cellWidth * 0.72;
+          const CGFloat shiftY =
+              std::cos(phase * 0.73 + column - row) *
+              context.controls.amount * cellHeight * 0.48;
+          CIImage *cell = [current
+              imageByCroppingToRect:CGRectMake(
+                                        x, y, cellWidth + 0.5,
+                                        cellHeight + 0.5)];
+          cell = [cell imageByApplyingTransform:CGAffineTransformMakeTranslation(
+                                                   shiftX, shiftY)];
+          result = [cell
+              imageByApplyingFilter:@"CISourceOverCompositing"
+                withInputParameters:@{
+                  kCIInputBackgroundImageKey : result
+                }];
+        }
+      }
+      break;
+    }
+    case CodecGlitchEffect::ScanOrderFold: {
+      result = [CIImage emptyImage];
+      const int stripCount = context.controls.amount > 0.58f ? 16 : 8;
+      const int bitCount = stripCount == 16 ? 4 : 3;
+      const CGFloat stripHeight =
+          static_cast<CGFloat>(configuration_.height) / stripCount;
+      for (int destination = 0; destination < stripCount; ++destination) {
+        int sourceIndex = 0;
+        for (int bit = 0; bit < bitCount; ++bit)
+          sourceIndex |= ((destination >> bit) & 1) << (bitCount - bit - 1);
+        const CGFloat sourceY = sourceIndex * stripHeight;
+        const CGFloat destinationY = destination * stripHeight;
+        CIImage *strip = [current
+            imageByCroppingToRect:CGRectMake(
+                                      0, sourceY, configuration_.width,
+                                      stripHeight + 0.5)];
+        strip = [strip
+            imageByApplyingTransform:CGAffineTransformMakeTranslation(
+                                         0, destinationY - sourceY)];
+        result = [strip
+            imageByApplyingFilter:@"CISourceOverCompositing"
+              withInputParameters:@{
+                kCIInputBackgroundImageKey : result
+              }];
+      }
+      break;
+    }
+    default:
+      break;
+    }
+    if (result == nil) {
+      CFRelease(output);
+      return nullptr;
+    }
+    result = [result imageByCroppingToRect:bounds];
+    [ciContext_ render:result
+        toCVPixelBuffer:output
+                 bounds:bounds
+             colorSpace:nil];
+  }
+  return output;
+}
+
 void CodecGlitchEngineImpl::handleDecoded(CodecStage &stage,
                                           uint64_t decodeToken, OSStatus status,
                                           VTDecodeInfoFlags infoFlags,
@@ -3058,6 +3221,24 @@ void CodecGlitchEngineImpl::finishDecodedFrame(CodecStage &stage,
     if (nearHistory != nullptr && farHistory != nullptr) {
       processed =
           renderRealtimeCrossbreed(imageBuffer, nearHistory, farHistory, context);
+      requiredPostProcessing = true;
+    }
+    if (nearHistory != nullptr)
+      CFRelease(nearHistory);
+    if (farHistory != nullptr)
+      CFRelease(farHistory);
+  } else if (context.controls.effect >= CodecGlitchEffect::PlaneTimeSplit &&
+             context.controls.effect <= CodecGlitchEffect::ScanOrderFold) {
+    CVPixelBufferRef nearHistory = copyLastOutput();
+    CVPixelBufferRef farHistory = copyHistoricalOutput(
+        3 + static_cast<size_t>(context.controls.feedback * 7.0f));
+    if (nearHistory != nullptr && farHistory == nullptr) {
+      farHistory = nearHistory;
+      CFRetain(farHistory);
+    }
+    if (nearHistory != nullptr && farHistory != nullptr) {
+      processed =
+          renderAdvancedRealtime(imageBuffer, nearHistory, farHistory, context);
       requiredPostProcessing = true;
     }
     if (nearHistory != nullptr)
