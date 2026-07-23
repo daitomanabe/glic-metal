@@ -283,6 +283,22 @@ const char *codecGlitchEffectName(CodecGlitchEffect effect) noexcept {
     return "pts_rubberband";
   case CodecGlitchEffect::BitrateRaster:
     return "bitrate_raster";
+  case CodecGlitchEffect::PlaneTimeSplit:
+    return "plane_time_split";
+  case CodecGlitchEffect::ReferenceAtlas:
+    return "reference_atlas";
+  case CodecGlitchEffect::FlowLattice:
+    return "flow_lattice";
+  case CodecGlitchEffect::ScanOrderFold:
+    return "scan_order_fold";
+  case CodecGlitchEffect::RegionalGopClock:
+    return "regional_gop_clock";
+  case CodecGlitchEffect::EntropyFeedback:
+    return "entropy_feedback";
+  case CodecGlitchEffect::RollingTimeShutter:
+    return "rolling_time_shutter";
+  case CodecGlitchEffect::AsymmetricPlaneCodec:
+    return "asymmetric_plane_codec";
   case CodecGlitchEffect::Count:
     break;
   }

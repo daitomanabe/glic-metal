@@ -44,6 +44,14 @@ CODEC_GLITCH_EFFECTS = (
     "encoder_hot_swap",
     "pts_rubberband",
     "bitrate_raster",
+    "plane_time_split",
+    "reference_atlas",
+    "flow_lattice",
+    "scan_order_fold",
+    "regional_gop_clock",
+    "entropy_feedback",
+    "rolling_time_shutter",
+    "asymmetric_plane_codec",
 )
 
 

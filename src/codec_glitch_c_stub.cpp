@@ -23,6 +23,10 @@ constexpr const char *kEffectNames[] = {
     "plane_split_codec", "roi_quality_islands",
     "codec_phase_mosaic", "encoder_hot_swap",
     "pts_rubberband", "bitrate_raster",
+    "plane_time_split", "reference_atlas",
+    "flow_lattice", "scan_order_fold",
+    "regional_gop_clock", "entropy_feedback",
+    "rolling_time_shutter", "asymmetric_plane_codec",
 };
 
 } // namespace
@@ -58,7 +62,7 @@ const char *glic_codec_glitch_status_string(glic_codec_glitch_status status) {
 
 const char *glic_codec_glitch_effect_name(glic_codec_glitch_effect effect) {
   if (effect < GLIC_CODEC_GLITCH_QP_PUMP ||
-      effect > GLIC_CODEC_GLITCH_BITRATE_RASTER)
+      effect > GLIC_CODEC_GLITCH_ASYMMETRIC_PLANE_CODEC)
     return "unknown";
   return kEffectNames[effect];
 }

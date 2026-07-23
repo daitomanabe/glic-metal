@@ -28,7 +28,7 @@ bool validHeader(uint32_t structSize, uint32_t abiVersion,
 
 bool validEffect(glic_codec_glitch_effect effect) {
   return effect >= GLIC_CODEC_GLITCH_QP_PUMP &&
-         effect <= GLIC_CODEC_GLITCH_BITRATE_RASTER;
+         effect <= GLIC_CODEC_GLITCH_ASYMMETRIC_PLANE_CODEC;
 }
 
 bool validCodec(glic_codec_glitch_codec codec) {

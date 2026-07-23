@@ -61,6 +61,14 @@ enum class CodecGlitchEffect : uint32_t {
   EncoderHotSwap,
   PtsRubberband,
   BitrateRaster,
+  PlaneTimeSplit,
+  ReferenceAtlas,
+  FlowLattice,
+  ScanOrderFold,
+  RegionalGopClock,
+  EntropyFeedback,
+  RollingTimeShutter,
+  AsymmetricPlaneCodec,
   Count,
 };
 

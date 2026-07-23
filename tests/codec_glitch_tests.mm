@@ -362,8 +362,9 @@ int runCApiTest() {
                       GLIC_CODEC_GLITCH_CONCEALMENT_CHOREOGRAPHY),
                   "concealment_choreography") != 0 ||
       std::strcmp(
-          glic_codec_glitch_effect_name(GLIC_CODEC_GLITCH_BITRATE_RASTER),
-          "bitrate_raster") != 0) {
+          glic_codec_glitch_effect_name(
+              GLIC_CODEC_GLITCH_ASYMMETRIC_PLANE_CODEC),
+          "asymmetric_plane_codec") != 0) {
     std::fprintf(stderr, "FAIL C ABI metadata\n");
     return 20;
   }
