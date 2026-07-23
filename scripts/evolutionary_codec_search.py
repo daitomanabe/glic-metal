@@ -30,6 +30,8 @@ def candidate(index: int, seed: int) -> dict:
         codec = "av1"
     if effect == "av2_optical_flow_wound":
         codec = "av2"
+    if effect.startswith("motion_vector_"):
+        codec = str(rng.choice(("h264", "hevc")))
     return {
         "index": index,
         "name": f"lab-{index:04d}-{effect}",
@@ -200,7 +202,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    probes = [candidate(index, args.seed) for index in range(34)]
+    probes = [candidate(index, args.seed) for index in range(len(EFFECTS) * 2)]
     assert len({item["name"] for item in probes}) == len(probes)
     assert set(EFFECTS).issubset({item["effect"] for item in probes})
     if args.selftest:

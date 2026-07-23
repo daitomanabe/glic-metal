@@ -16,9 +16,9 @@ import evolutionary_codec_search as search  # noqa: E402
 
 
 def main() -> int:
-    assert len(lab.SYNTAX_EFFECTS) == 12
+    assert len(lab.SYNTAX_EFFECTS) == 13
     assert len(lab.ANALYSIS_EFFECTS) == 5
-    assert len(lab.EFFECTS) == 17
+    assert len(lab.EFFECTS) == 18
     catalog = json.loads(
         (ROOT / "resources" / "codec-lab-effects.json").read_text()
     )
@@ -107,10 +107,27 @@ def main() -> int:
         == "decoder_exported_motion_vector_field_rewrite"
         for effect in lab.SYNTAX_EFFECTS[:4]
     )
+    assert all(
+        lab.IMPLEMENTATION_LEVEL[effect]
+        == "decoded_block_dct_coefficient_rewrite"
+        for effect in (
+            "residual_sign_flip",
+            "residual_band_gate",
+            "transform_block_transplant",
+            "transform_scan_fold",
+        )
+    )
+    assert len(lab.zigzag_indices()) == 64
+    assert len(set(lab.zigzag_indices())) == 64
 
-    generated = [search.candidate(index, 1234) for index in range(34)]
-    assert len({entry["name"] for entry in generated}) == 34
+    generated = [search.candidate(index, 1234) for index in range(36)]
+    assert len({entry["name"] for entry in generated}) == 36
     assert set(lab.EFFECTS).issubset({entry["effect"] for entry in generated})
+    assert all(
+        entry["codec"] in {"h264", "hevc"}
+        for entry in generated
+        if entry["effect"].startswith("motion_vector_")
+    )
     print("PASS codec lab effects, catalog, and evolutionary recipes")
     return 0
 

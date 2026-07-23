@@ -35,6 +35,7 @@ SYNTAX_EFFECTS = (
     "residual_sign_flip",
     "residual_band_gate",
     "transform_block_transplant",
+    "transform_scan_fold",
     "reference_graph_swap",
     "entropy_state_puncture",
     "loop_filter_oscillator",
@@ -57,6 +58,10 @@ IMPLEMENTATION_LEVEL = {
     "motion_vector_mirror": "decoder_exported_motion_vector_field_rewrite",
     "motion_vector_quantizer": "decoder_exported_motion_vector_field_rewrite",
     "motion_vector_freeze": "decoder_exported_motion_vector_field_rewrite",
+    "residual_sign_flip": "decoded_block_dct_coefficient_rewrite",
+    "residual_band_gate": "decoded_block_dct_coefficient_rewrite",
+    "transform_block_transplant": "decoded_block_dct_coefficient_rewrite",
+    "transform_scan_fold": "decoded_block_dct_coefficient_rewrite",
     "av1_film_grain_instrument": "av1_codec_cycle_plus_grain_reconstruction",
     "av2_optical_flow_wound": "official_avm_cycle_plus_flow_reconstruction",
     "semantic_reference_retarget": "opencv_motion_semantic_fallback",
@@ -223,6 +228,122 @@ def block_transplant(
     return result
 
 
+def zigzag_indices(size: int = 8) -> list[tuple[int, int]]:
+    result: list[tuple[int, int]] = []
+    for diagonal in range(size * 2 - 1):
+        start = max(0, diagonal - size + 1)
+        stop = min(size - 1, diagonal)
+        points = [(row, diagonal - row) for row in range(start, stop + 1)]
+        result.extend(reversed(points) if diagonal % 2 == 0 else points)
+    return result
+
+
+def rewrite_transform_coefficients(
+    effect: str,
+    frame: np.ndarray,
+    prediction: np.ndarray,
+    donor: np.ndarray | None,
+    amount: float,
+    seed: int,
+    frame_index: int,
+) -> np.ndarray:
+    block_size = 8
+    height, width = frame.shape[:2]
+    usable_height = height - height % block_size
+    usable_width = width - width % block_size
+    current_ycc = cv2.cvtColor(frame, cv2.COLOR_BGR2YCrCb).astype(np.float32)
+    prediction_ycc = cv2.cvtColor(
+        prediction, cv2.COLOR_BGR2YCrCb
+    ).astype(np.float32)
+    donor_ycc = (
+        cv2.cvtColor(donor, cv2.COLOR_BGR2YCrCb).astype(np.float32)
+        if donor is not None
+        else prediction_ycc
+    )
+    residual = current_ycc - prediction_ycc
+    donor_residual = donor_ycc - prediction_ycc
+    rewritten = residual.copy()
+    rng = np.random.default_rng(seed ^ (frame_index * 0x9E3779B1))
+    zigzag = zigzag_indices(block_size)
+    folded = [zigzag[index ^ (index >> 1)] for index in range(len(zigzag))]
+    coordinates = [
+        (y, x)
+        for y in range(0, usable_height, block_size)
+        for x in range(0, usable_width, block_size)
+    ]
+
+    for channel in range(3):
+        donor_coefficients: list[np.ndarray] | None = None
+        if effect == "transform_block_transplant":
+            donor_coefficients = [
+                cv2.dct(
+                    donor_residual[
+                        y : y + block_size,
+                        x : x + block_size,
+                        channel,
+                    ]
+                )
+                for y, x in coordinates
+            ]
+        for block_index, (y, x) in enumerate(coordinates):
+            coefficients = cv2.dct(
+                residual[
+                    y : y + block_size,
+                    x : x + block_size,
+                    channel,
+                ]
+            )
+            if effect == "residual_sign_flip":
+                probability = 0.08 + amount * 0.72
+                signs = np.where(
+                    rng.random(coefficients.shape) < probability, -1.0, 1.0
+                ).astype(np.float32)
+                signs[0, 0] = 1.0
+                coefficients *= signs
+            elif effect == "residual_band_gate":
+                yy, xx = np.mgrid[:block_size, :block_size]
+                frequency = xx + yy
+                split = 2 + round(amount * 5)
+                if (block_index + frame_index) & 1:
+                    coefficients[frequency >= split] = 0.0
+                else:
+                    coefficients[(frequency > 0) & (frequency < split)] = 0.0
+            elif effect == "transform_block_transplant":
+                assert donor_coefficients is not None
+                donor_index = (
+                    block_index
+                    + 1
+                    + round(amount * max(1, len(coordinates) // 7))
+                ) % len(coordinates)
+                donor_coefficients_block = donor_coefficients[donor_index]
+                threshold = 2 + round((1.0 - amount) * 5)
+                yy, xx = np.mgrid[:block_size, :block_size]
+                selected = xx + yy >= threshold
+                coefficients[selected] = donor_coefficients_block[selected]
+            elif effect == "transform_scan_fold":
+                values = np.asarray(
+                    [coefficients[row, column] for row, column in zigzag],
+                    dtype=np.float32,
+                )
+                rotated = np.roll(
+                    values,
+                    1 + round(amount * 15) + (frame_index % 5),
+                )
+                permuted = coefficients.copy()
+                for value, (row, column) in zip(rotated, folded):
+                    permuted[row, column] = value
+                permuted[0, 0] = coefficients[0, 0]
+                coefficients = permuted
+            rewritten[
+                y : y + block_size,
+                x : x + block_size,
+                channel,
+            ] = cv2.idct(coefficients)
+
+    reconstructed = prediction_ycc + rewritten
+    return cv2.cvtColor(clamp_frame(reconstructed), cv2.COLOR_YCrCb2BGR)
+
+
 def transform_frame(
     effect: str,
     frame: np.ndarray,
@@ -299,24 +420,22 @@ def transform_frame(
         warped = warp_with_flow(previous, flow)
         return mix(frame, warped, 0.35 + strength * 0.6), frozen_flow
 
-    if effect == "residual_sign_flip":
-        prediction = previous.astype(np.float32)
-        residual = frame.astype(np.float32) - prediction
-        return clamp_frame(prediction - residual * (0.4 + strength * 1.35)), frozen_flow
-
-    if effect == "residual_band_gate":
-        sigma = 1.0 + strength * 8.0
-        low = cv2.GaussianBlur(frame, (0, 0), sigma)
-        high = frame.astype(np.float32) - low.astype(np.float32)
-        if (index // max(1, round(6 - rate * 5))) & 1:
-            gated = clamp_frame(128.0 + high * (1.5 + strength * 3.0))
-        else:
-            gated = low
-        return mix(frame, gated, 0.45 + strength * 0.5), frozen_flow
-
-    if effect == "transform_block_transplant":
+    if effect in {
+        "residual_sign_flip",
+        "residual_band_gate",
+        "transform_block_transplant",
+        "transform_scan_fold",
+    }:
         return (
-            block_transplant(frame, donor if donor is not None else far, strength, seed, index),
+            rewrite_transform_coefficients(
+                effect,
+                frame,
+                previous,
+                donor if donor is not None else far,
+                strength,
+                seed,
+                index,
+            ),
             frozen_flow,
         )
 
