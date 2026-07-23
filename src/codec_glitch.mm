@@ -3031,6 +3031,176 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderAdvancedRealtime(
       }
       break;
     }
+    case CodecGlitchEffect::RegionalGopClock: {
+      result = current;
+      constexpr int columns = 5;
+      constexpr int rows = 3;
+      const CGFloat tileWidth =
+          static_cast<CGFloat>(configuration_.width) / columns;
+      const CGFloat tileHeight =
+          static_cast<CGFloat>(configuration_.height) / rows;
+      const CGFloat clock =
+          context.frameIndex * (0.12 + context.controls.rate * 0.58);
+      for (int row = 0; row < rows; ++row) {
+        for (int column = 0; column < columns; ++column) {
+          const CGFloat phase =
+              clock + row * 1.71 + column * 0.93;
+          const CGFloat localClock = std::sin(phase);
+          CIImage *source =
+              localClock < -0.28 ? farFrame
+                                 : (localClock < 0.34 ? nearFrame : current);
+          const CGFloat x = column * tileWidth;
+          const CGFloat y = row * tileHeight;
+          CIImage *tile = [source
+              imageByCroppingToRect:CGRectMake(
+                                        x, y, tileWidth + 0.5,
+                                        tileHeight + 0.5)];
+          if (localClock < 0.34 &&
+              std::abs(localClock) <
+                  0.10 + context.controls.amount * 0.32) {
+            const CGFloat offset =
+                localClock * tileWidth * context.controls.amount * 0.38;
+            tile = [tile imageByApplyingTransform:
+                             CGAffineTransformMakeTranslation(offset, 0)];
+          }
+          result = [tile
+              imageByApplyingFilter:@"CISourceOverCompositing"
+                withInputParameters:@{
+                  kCIInputBackgroundImageKey : result
+                }];
+        }
+      }
+      break;
+    }
+    case CodecGlitchEffect::EntropyFeedback: {
+      result = current;
+      constexpr int columns = 6;
+      constexpr int rows = 4;
+      const CGFloat cellWidth =
+          static_cast<CGFloat>(configuration_.width) / columns;
+      const CGFloat cellHeight =
+          static_cast<CGFloat>(configuration_.height) / rows;
+      for (int row = 0; row < rows; ++row) {
+        for (int column = 0; column < columns; ++column) {
+          const uint64_t cell =
+              static_cast<uint64_t>(row * columns + column + 1);
+          const uint64_t spatial =
+              mixHash(context.controls.seed ^ (cell * kHashMultiplier));
+          const CGFloat density =
+              hashUnit(spatial) *
+              (0.35 + context.controls.feedback * 0.65);
+          const CGFloat temporal =
+              0.5 + 0.5 *
+                        std::sin(context.frameIndex *
+                                     (0.09 + context.controls.rate * 0.41) +
+                                 hashUnit(spatial >> 1) * 6.28318530718);
+          if (density * temporal <
+              0.36 - context.controls.amount * 0.22)
+            continue;
+          const CGFloat x = column * cellWidth;
+          const CGFloat y = row * cellHeight;
+          CIImage *source = (spatial & 1ULL) == 0 ? nearFrame : farFrame;
+          CIImage *cellImage = [source
+              imageByCroppingToRect:CGRectMake(
+                                        x, y, cellWidth + 0.5,
+                                        cellHeight + 0.5)];
+          const CGFloat contrast =
+              0.72 + density * (0.85 + context.controls.amount);
+          cellImage =
+              [cellImage imageByApplyingFilter:@"CIColorControls"
+                           withInputParameters:@{
+                             kCIInputContrastKey : @(contrast),
+                             kCIInputSaturationKey :
+                                 @(0.65 + temporal * 1.15)
+                           }];
+          const CGFloat shift =
+              (hashUnit(spatial ^ context.frameIndex) - 0.5) *
+              cellWidth * context.controls.amount * 0.55;
+          cellImage = [cellImage
+              imageByApplyingTransform:CGAffineTransformMakeTranslation(
+                                           shift, 0)];
+          result = [cellImage
+              imageByApplyingFilter:@"CISourceOverCompositing"
+                withInputParameters:@{
+                  kCIInputBackgroundImageKey : result
+                }];
+        }
+      }
+      break;
+    }
+    case CodecGlitchEffect::RollingTimeShutter: {
+      result = current;
+      const int stripCount = context.controls.amount > 0.65f ? 36 : 24;
+      const CGFloat stripHeight =
+          static_cast<CGFloat>(configuration_.height) / stripCount;
+      const CGFloat sweep =
+          std::fmod(context.frameIndex *
+                        (0.35 + context.controls.rate * 1.65),
+                    static_cast<CGFloat>(stripCount));
+      for (int strip = 0; strip < stripCount; ++strip) {
+        const CGFloat distance =
+            std::fmod(strip - sweep + stripCount,
+                      static_cast<CGFloat>(stripCount));
+        CIImage *source =
+            distance < stripCount * 0.22
+                ? farFrame
+                : (distance < stripCount * 0.56 ? nearFrame : current);
+        const CGFloat y = strip * stripHeight;
+        CIImage *line = [source
+            imageByCroppingToRect:CGRectMake(
+                                      0, y, configuration_.width,
+                                      stripHeight + 0.5)];
+        if (source != current) {
+          const CGFloat shift =
+              std::sin(strip * 0.77 + sweep * 0.21) *
+              context.controls.amount * configuration_.width * 0.045;
+          line = [line imageByApplyingTransform:
+                           CGAffineTransformMakeTranslation(shift, 0)];
+        }
+        result = [line
+            imageByApplyingFilter:@"CISourceOverCompositing"
+              withInputParameters:@{
+                kCIInputBackgroundImageKey : result
+              }];
+      }
+      break;
+    }
+    case CodecGlitchEffect::AsymmetricPlaneCodec: {
+      CIImage *currentLuma =
+          [current imageByApplyingFilter:@"CIColorControls"
+                     withInputParameters:@{
+                       kCIInputSaturationKey : @0.0,
+                       kCIInputContrastKey :
+                           @(0.88 + context.controls.amount * 0.30)
+                     }];
+      CIFilter *pixelate = [CIFilter filterWithName:@"CIPixellate"];
+      [pixelate setValue:farFrame forKey:kCIInputImageKey];
+      [pixelate
+          setValue:@(3.0 + context.controls.amount * 25.0)
+            forKey:kCIInputScaleKey];
+      CIImage *historyChroma = pixelate.outputImage ?: farFrame;
+      historyChroma =
+          [historyChroma imageByApplyingFilter:@"CIColorControls"
+                           withInputParameters:@{
+                             kCIInputSaturationKey :
+                                 @(1.8 + context.controls.feedback * 2.1),
+                             kCIInputBrightnessKey :
+                                 @(-0.08 + context.controls.rate * 0.14)
+                           }];
+      const CGFloat phase =
+          std::sin(context.frameIndex *
+                   (0.08 + context.controls.rate * 0.42));
+      historyChroma = [historyChroma
+          imageByApplyingTransform:CGAffineTransformMakeTranslation(
+                                       phase * context.controls.amount * 19.0,
+                                       -phase * context.controls.amount * 7.0)];
+      result = [historyChroma
+          imageByApplyingFilter:@"CIColorBlendMode"
+            withInputParameters:@{
+              kCIInputBackgroundImageKey : currentLuma
+            }];
+      break;
+    }
     default:
       break;
     }
@@ -3228,7 +3398,8 @@ void CodecGlitchEngineImpl::finishDecodedFrame(CodecStage &stage,
     if (farHistory != nullptr)
       CFRelease(farHistory);
   } else if (context.controls.effect >= CodecGlitchEffect::PlaneTimeSplit &&
-             context.controls.effect <= CodecGlitchEffect::ScanOrderFold) {
+             context.controls.effect <=
+                 CodecGlitchEffect::AsymmetricPlaneCodec) {
     CVPixelBufferRef nearHistory = copyLastOutput();
     CVPixelBufferRef farHistory = copyHistoricalOutput(
         3 + static_cast<size_t>(context.controls.feedback * 7.0f));
