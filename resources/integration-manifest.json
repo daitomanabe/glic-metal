@@ -50,6 +50,8 @@
       "prepare": "glic_codec_glitch_prepare",
       "process": "glic_codec_glitch_submit_pixel_buffer",
       "output": "glic_codec_glitch_copy_latest_pixel_buffer",
+      "native_codecs": ["h264", "hevc", "prores_422"],
+      "codec_selector": "glic_codec_glitch_config.codec",
       "effect_count": 18,
       "effect_names": [
         "qp_pump", "bitrate_crush", "slice_dropout", "slice_transplant",
@@ -60,6 +62,27 @@
         "recursive_codec_skin", "concealment_choreography"
       ],
       "required_resources": []
+    }
+  },
+  "offline_workflows": {
+    "codec_generations": {
+      "execution": "offline_process",
+      "entrypoint": "scripts/process_multicodec_glitch.py",
+      "codecs": ["av1", "av2", "hevc", "vp9", "prores"],
+      "software_codecs": {
+        "av1": "FFmpeg_libaom-av1_plus_libdav1d",
+        "vp9": "FFmpeg_libvpx-vp9",
+        "av2": "AOMedia_AVM_v1.0.0_reference"
+      },
+      "persistent_evidence": [
+        "compressed_bitstream",
+        "decoded_intermediate",
+        "sha256",
+        "codec_probe",
+        "timings",
+        "json_report"
+      ],
+      "realtime_claim": false
     }
   },
   "macos_link_frameworks": [
@@ -92,7 +115,8 @@
     "do_not_route_original_or_spatial_presets_to_codec_controls",
     "do_not_call_prepare_from_a_render_or_capture_callback",
     "do_not_share_one_context_across_concurrent_streams",
-    "do_not_modify_or_decode_compressed_h264_payloads",
+    "do_not_modify_compressed_videotoolbox_payload_bytes",
+    "do_not_substitute_av1_for_av2_when_avm_is_unavailable",
     "do_not_claim_pixel_exact_equivalence_with_processing_glic"
   ],
   "verification": [
@@ -103,6 +127,7 @@
   "documentation": {
     "human": "docs/EMBEDDING.md",
     "agent": "docs/AI_INTEGRATION.md",
-    "codec": "docs/CODEC_GLITCH.md"
+    "codec": "docs/CODEC_GLITCH.md",
+    "multicodec": "docs/MULTICODEC_GLITCH.md"
   }
 }

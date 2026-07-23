@@ -36,7 +36,7 @@ C++20とMetal ComputeによるGLIC (GLitch Image Codec) のリアルタイム映
 ### 特徴
 
 - C++20によるファイルcodecと、CPU / Metalリアルタイム処理
-- VideoToolbox hardware H.264とMetal-backed post pathによる18種類のCodec Glitch
+- VideoToolbox hardware H.264 / HEVC / ProResとMetal-backed post pathによる18種類のCodec Glitch
 - C / C++ / Objective-C / Swiftから利用できる安定C ABIとCMake package
 - モダンC++機能を活用（`std::ranges`, `std::span`, `std::bit_cast`, `[[likely]]`属性など）
 - CPU経路はmacOS / LinuxをCI対象とし、Windowsは設計対象・未認証
@@ -65,7 +65,7 @@ C++20とMetal ComputeによるGLIC (GLitch Image Codec) のリアルタイム映
 | 分割木 | 入力ごとにadaptive segmentationを評価 | 固定blockの分割木をcacheし、adaptive分散判定は結果が確定した時点で画像readを止めます。Fast Matchでは分割木を複数フレーム再利用できます |
 | GPU投入 | 該当なし | 原作スタイル経路を1フレームあたり1 command buffer、1 completion waitにまとめ、Apple unified memoryではmapped buffer copyを行いません |
 | ライブ配送 | Processingの同期UI | captureと処理を別queueにし、事前確保した3 slotから最新フレームを選びます。古い待機フレームを捨てるため遅延が蓄積しません |
-| 動画codec glitch | 該当なし | VideoToolboxのhardware H.264 encode / decodeとMetal post pathを非同期・bounded queueで動かします |
+| 動画codec glitch | 該当なし | VideoToolboxのhardware H.264 / HEVC / ProRes encode / decodeとMetal post pathを非同期・bounded queueで動かします |
 
 原作スタイルの`Strict`経路では、Processing互換48-bit RNGの消費順、チャンネル順、
 quadtreeのDFS順を変えると別の画像になるため、分割木の制御だけはCPUに残しています。
@@ -198,7 +198,7 @@ python3 scripts/process_video.py input.mov output-original.mp4 \
 
 入力・出力動画をローカルに保持する場合は、Git対象外の `test-videos/` を使用できます。
 
-### Codec Glitch（H.264動画codec）
+### Codec Glitch（H.264 / HEVC / ProRes + AV1 / AV2 / VP9）
 
 `codec_glitch`は、VideoToolbox hardware encoder/decoderとMetal互換
 `CVPixelBuffer`/post pathを使うmacOS専用の非同期動画レーンです。`.glic`ファイル
@@ -208,6 +208,7 @@ codec、37 presetの`original_visual`、全144 presetを視覚近似する
 ```bash
 python3 scripts/process_video.py input.mov output-codec.mp4 \
   --processing-mode codec_glitch \
+  --codec-format hevc \
   --codec-effect slice_transplant \
   --codec-amount 0.52 --codec-rate 0.34 --codec-feedback 0.58 \
   --seed 0x474c4943 \
@@ -254,7 +255,19 @@ p95 50ms以下が必要です。
 複数effectの動画比較と非類似rankingには
 `scripts/evaluate_codec_glitch_videos.py`を使います。
 詳細とC APIは[Codec Glitch](docs/CODEC_GLITCH.md)と
+[Multi-codec guide](docs/MULTICODEC_GLITCH.md)、
 [Embedding guide](docs/EMBEDDING.md#codec-glitch-c-api-macos-only)を参照してください。
+
+AV1 / VP9はFFmpeg、AV2は公式AVM v1.0.0 reference implementationで、実際の
+encode/decode世代を作ります。これらをVideoToolbox realtimeとは主張しません。
+各世代のbitstreamとSHA-256を残す共通runnerは次の通りです。
+
+```bash
+python3 scripts/build_av2_reference.py
+python3 scripts/process_multicodec_glitch.py input.mov output-av2.mp4 \
+  --codec av2 --effect generation_cascade --generations 2 \
+  --width 480 --height 270 --fps 15
+```
 
 ### グリッチ差分QA
 
@@ -554,7 +567,7 @@ The port keeps the file codec, original parameter semantics, realtime visual app
 ### Features
 
 - C++20 file codec plus CPU / Metal realtime processing
-- Eighteen VideoToolbox hardware-H.264 codec effects with a Metal-backed post path
+- Eighteen VideoToolbox H.264 / HEVC / ProRes codec effects with a Metal-backed post path
 - Stable C ABI and installable CMake package for C, C++, Objective-C, and Swift
 - Modern C++ features (`std::ranges`, `std::span`, `std::bit_cast`, `[[likely]]` attributes, etc.)
 - CPU paths are CI-tested on macOS and Linux; Windows is designed for but not
@@ -586,7 +599,7 @@ and how frames move through the application.
 | Segmentation | Evaluates adaptive segmentation for each input | Caches fixed-block trees, stops adaptive image reads once the variance decision is final, and can reuse adaptive trees in Fast Match |
 | GPU submission | Not applicable | Encodes the original-style frame into one command buffer with one completion wait and no mapped-buffer copy on Apple unified memory |
 | Live delivery | Synchronous Processing UI | Separates capture and processing, selects the newest of three preallocated slots, and drops stale waiting frames instead of accumulating latency |
-| Video codec glitch | Not applicable | Runs VideoToolbox hardware H.264 encode/decode plus a Metal post path through asynchronous bounded queues |
+| Video codec glitch | Not applicable | Runs VideoToolbox H.264 / HEVC / ProRes encode/decode plus a Metal post path through asynchronous bounded queues |
 
 The `Strict` original-style lane deliberately keeps quadtree control on the
 CPU. Changing the Processing-compatible 48-bit RNG consumption, channel order,
@@ -766,7 +779,7 @@ converting the recipe back through a preset name.
 
 Use the Git-ignored `test-videos/` directory for local input and preview files.
 
-### Codec Glitch (H.264 video codec)
+### Codec Glitch (H.264 / HEVC / ProRes + AV1 / AV2 / VP9)
 
 `codec_glitch` is a macOS-only asynchronous video lane built from the
 VideoToolbox hardware encoder/decoder and Metal-compatible `CVPixelBuffer`/post
@@ -777,6 +790,7 @@ preset semantics or claim upstream pixel equivalence.
 ```bash
 python3 scripts/process_video.py input.mov output-codec.mp4 \
   --processing-mode codec_glitch \
+  --codec-format hevc \
   --codec-effect slice_transplant \
   --codec-amount 0.52 --codec-rate 0.34 --codec-feedback 0.58 \
   --seed 0x474c4943 \
@@ -825,9 +839,20 @@ The 20 fps pass also requires at least 960×540, at least 120 frames, preserved
 frame count, hardware encode/decode, processing and stream rates of at least
 20 fps, and p95 at or below 50 ms. See
 [Codec Glitch](docs/CODEC_GLITCH.md) and the
+[multi-codec guide](docs/MULTICODEC_GLITCH.md), plus the
 [embedding guide](docs/EMBEDDING.md#codec-glitch-c-api-macos-only).
 Use `scripts/evaluate_codec_glitch_videos.py` for dry/wet analysis and
 diversity ranking across rendered effects.
+
+AV1 and VP9 use explicit FFmpeg encoders/decoders. AV2 uses the pinned official
+AVM v1.0.0 reference tools and fails closed when they are missing. The common
+offline runner retains every compressed generation and does not make a
+realtime claim:
+
+```bash
+python3 scripts/process_multicodec_glitch.py input.mov output-av1.mp4 \
+  --codec av1 --effect temporal_echo --generations 2
+```
 
 ### Glitch difference QA
 

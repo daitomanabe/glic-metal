@@ -16,7 +16,19 @@
 
 namespace glic {
 
-// Stateful effects backed by a valid H.264 encode -> decode loop, intentional
+enum class CodecGlitchCodec : uint32_t {
+  H264 = 0,
+  HEVC,
+  ProRes422,
+  Count,
+};
+
+const char *codecGlitchCodecName(CodecGlitchCodec codec) noexcept;
+bool codecGlitchCodecFromName(std::string_view name,
+                              CodecGlitchCodec &codec) noexcept;
+
+// Stateful effects backed by a valid VideoToolbox encode -> decode loop,
+// intentional
 // encoded-frame holds, and Metal-backed post-decode transforms. These are
 // separate from one-input/one-output image effects because codec effects keep
 // reference frames and are necessarily asynchronous.
@@ -66,13 +78,14 @@ struct CodecGlitchControls {
 };
 
 struct CodecGlitchConfiguration {
+  CodecGlitchCodec codec = CodecGlitchCodec::H264;
   int width = 960;
   int height = 540;
   int framesPerSecond = 30;
   int averageBitRate = 4000000;
   int keyFrameInterval = 60;
-  // Optional H.264 packet-size preference. Some hardware encoders ignore it;
-  // correctness and the slice effects never depend on physical VCL splitting.
+  // Optional H.264 packet-size preference. Other codecs ignore it; correctness
+  // and the slice effects never depend on physical compressed-frame splitting.
   int maximumSliceBytes = 4000;
   int decodedHistoryFrames = 12;
   int maximumInFlightFrames = 24;

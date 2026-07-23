@@ -350,6 +350,12 @@ int runCppApiTest() {
 int runCApiTest() {
   if (glic_codec_glitch_get_abi_version() != GLIC_CODEC_GLITCH_ABI_VERSION ||
       std::strcmp(
+          glic_codec_glitch_codec_name(GLIC_CODEC_GLITCH_CODEC_HEVC),
+          "hevc") != 0 ||
+      std::strcmp(
+          glic_codec_glitch_codec_name(GLIC_CODEC_GLITCH_CODEC_PRORES_422),
+          "prores_422") != 0 ||
+      std::strcmp(
           glic_codec_glitch_effect_name(GLIC_CODEC_GLITCH_GENERATION_CASCADE),
           "generation_cascade") != 0 ||
       std::strcmp(glic_codec_glitch_effect_name(

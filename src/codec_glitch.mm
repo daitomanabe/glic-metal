@@ -198,6 +198,33 @@ struct FrameContext {
 
 } // namespace
 
+const char *codecGlitchCodecName(CodecGlitchCodec codec) noexcept {
+  switch (codec) {
+  case CodecGlitchCodec::H264:
+    return "h264";
+  case CodecGlitchCodec::HEVC:
+    return "hevc";
+  case CodecGlitchCodec::ProRes422:
+    return "prores_422";
+  case CodecGlitchCodec::Count:
+    break;
+  }
+  return "unknown";
+}
+
+bool codecGlitchCodecFromName(std::string_view name,
+                              CodecGlitchCodec &codec) noexcept {
+  if (name == "h264" || name == "h.264" || name == "avc")
+    codec = CodecGlitchCodec::H264;
+  else if (name == "hevc" || name == "h265" || name == "h.265")
+    codec = CodecGlitchCodec::HEVC;
+  else if (name == "prores" || name == "prores_422" || name == "prores422")
+    codec = CodecGlitchCodec::ProRes422;
+  else
+    return false;
+  return true;
+}
+
 const char *codecGlitchEffectName(CodecGlitchEffect effect) noexcept {
   switch (effect) {
   case CodecGlitchEffect::QpPump:
@@ -657,7 +684,9 @@ CodecGlitchEngineImpl::~CodecGlitchEngineImpl() {
 }
 
 bool CodecGlitchEngineImpl::initialize(std::string &error) {
-  if (configuration_.width <= 0 || configuration_.height <= 0 ||
+  if (static_cast<uint32_t>(configuration_.codec) >=
+          static_cast<uint32_t>(CodecGlitchCodec::Count) ||
+      configuration_.width <= 0 || configuration_.height <= 0 ||
       configuration_.framesPerSecond <= 0 ||
       configuration_.averageBitRate < 16000 ||
       configuration_.keyFrameInterval < 1) {
@@ -665,7 +694,7 @@ bool CodecGlitchEngineImpl::initialize(std::string &error) {
     return false;
   }
   if ((configuration_.width & 1) != 0 || (configuration_.height & 1) != 0) {
-    error = "H.264 codec glitch dimensions must be even";
+    error = "Codec glitch dimensions must be even";
     return false;
   }
   configuration_.decodedHistoryFrames =
@@ -709,8 +738,13 @@ bool CodecGlitchEngineImpl::createResources(std::string &error) {
       // first asynchronous output on some macOS releases. A decoder capability
       // probe plus successful creation with RequireHardware=true is
       // authoritative.
+      CMVideoCodecType codecType = kCMVideoCodecType_H264;
+      if (configuration_.codec == CodecGlitchCodec::HEVC)
+        codecType = kCMVideoCodecType_HEVC;
+      else if (configuration_.codec == CodecGlitchCodec::ProRes422)
+        codecType = kCMVideoCodecType_AppleProRes422;
       if (configuration_.requireHardwareDecoder &&
-          VTIsHardwareDecodeSupported(kCMVideoCodecType_H264)) {
+          VTIsHardwareDecodeSupported(codecType)) {
         statistics_.hardwareDecoder.store(true, std::memory_order_relaxed);
       }
       metalDevice_ = MTLCreateSystemDefaultDevice();
@@ -923,9 +957,16 @@ bool CodecGlitchEngineImpl::ensureStageEncoder(CodecStage &stage,
     (__bridge NSString *)kCVPixelBufferMetalCompatibilityKey : @YES,
     (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey : @{}
   };
+  CMVideoCodecType codecType = kCMVideoCodecType_H264;
+  if (configuration_.codec == CodecGlitchCodec::HEVC)
+    codecType = kCMVideoCodecType_HEVC;
+  else if (configuration_.codec == CodecGlitchCodec::ProRes422)
+    codecType = kCMVideoCodecType_AppleProRes422;
   const OSStatus status = VTCompressionSessionCreate(
-      kCFAllocatorDefault, width, height, kCMVideoCodecType_H264,
-      (__bridge CFDictionaryRef)encoderSpecification,
+      kCFAllocatorDefault, width, height, codecType,
+      configuration_.codec == CodecGlitchCodec::ProRes422
+          ? nullptr
+          : (__bridge CFDictionaryRef)encoderSpecification,
       (__bridge CFDictionaryRef)sourceAttributes, kCFAllocatorDefault,
       compressionOutputCallback, &stage, &stage.encoder);
   if (status != noErr || stage.encoder == nullptr) {
@@ -938,11 +979,18 @@ bool CodecGlitchEngineImpl::ensureStageEncoder(CodecStage &stage,
   setSessionProperty(stage.encoder,
                      kVTCompressionPropertyKey_AllowFrameReordering,
                      kCFBooleanFalse);
+  const bool temporalCodec =
+      configuration_.codec != CodecGlitchCodec::ProRes422;
   setSessionProperty(stage.encoder,
                      kVTCompressionPropertyKey_AllowTemporalCompression,
-                     kCFBooleanTrue);
-  setSessionProperty(stage.encoder, kVTCompressionPropertyKey_ProfileLevel,
-                     kVTProfileLevel_H264_Main_AutoLevel);
+                     temporalCodec ? kCFBooleanTrue : kCFBooleanFalse);
+  if (configuration_.codec == CodecGlitchCodec::H264) {
+    setSessionProperty(stage.encoder, kVTCompressionPropertyKey_ProfileLevel,
+                       kVTProfileLevel_H264_Main_AutoLevel);
+  } else if (configuration_.codec == CodecGlitchCodec::HEVC) {
+    setSessionProperty(stage.encoder, kVTCompressionPropertyKey_ProfileLevel,
+                       kVTProfileLevel_HEVC_Main_AutoLevel);
+  }
   setSessionInt(stage.encoder, kVTCompressionPropertyKey_ExpectedFrameRate,
                 configuration_.framesPerSecond);
   setSessionInt(stage.encoder, kVTCompressionPropertyKey_MaxKeyFrameInterval,
@@ -951,10 +999,14 @@ bool CodecGlitchEngineImpl::ensureStageEncoder(CodecStage &stage,
                 kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration,
                 std::max(1, configuration_.keyFrameInterval /
                                 configuration_.framesPerSecond));
-  setSessionInt(stage.encoder, kVTCompressionPropertyKey_AverageBitRate,
-                configuration_.averageBitRate);
-  setSessionInt(stage.encoder, kVTCompressionPropertyKey_MaxH264SliceBytes,
-                configuration_.maximumSliceBytes);
+  if (temporalCodec) {
+    setSessionInt(stage.encoder, kVTCompressionPropertyKey_AverageBitRate,
+                  configuration_.averageBitRate);
+  }
+  if (configuration_.codec == CodecGlitchCodec::H264) {
+    setSessionInt(stage.encoder, kVTCompressionPropertyKey_MaxH264SliceBytes,
+                  configuration_.maximumSliceBytes);
+  }
 
   const OSStatus prepareStatus =
       VTCompressionSessionPrepareToEncodeFrames(stage.encoder);
@@ -1051,7 +1103,9 @@ bool CodecGlitchEngineImpl::createDecoder(CodecStage &stage,
       decompressionOutputCallback, &stage};
   const OSStatus status = VTDecompressionSessionCreate(
       kCFAllocatorDefault, format,
-      (__bridge CFDictionaryRef)decoderSpecification,
+      configuration_.codec == CodecGlitchCodec::ProRes422
+          ? nullptr
+          : (__bridge CFDictionaryRef)decoderSpecification,
       (__bridge CFDictionaryRef)destinationAttributes, &callbackRecord,
       &stage.decoder);
   if (status != noErr || stage.decoder == nullptr) {
@@ -1532,7 +1586,8 @@ bool CodecGlitchEngineImpl::configureFrameOptions(
     desiredBitRate =
         std::max(stableHardwareBitRateFloor, (desiredBitRate / 8000) * 8000);
   }
-  if ((!stage.qpMode || !stage.baseQpSupported) &&
+  if (configuration_.codec != CodecGlitchCodec::ProRes422 &&
+      (!stage.qpMode || !stage.baseQpSupported) &&
       desiredBitRate != stage.currentBitRate) {
     setSessionInt(stage.encoder, kVTCompressionPropertyKey_AverageBitRate,
                   desiredBitRate);
@@ -1613,7 +1668,7 @@ bool CodecGlitchEngineImpl::extractPacket(CodecStage &stage,
   format = static_cast<CMVideoFormatDescriptionRef>(
       CMSampleBufferGetFormatDescription(sampleBuffer));
   if (block == nullptr || format == nullptr) {
-    error = "Encoded H.264 sample is missing data or format description";
+    error = "Encoded sample is missing data or format description";
     return false;
   }
 
@@ -1621,7 +1676,7 @@ bool CodecGlitchEngineImpl::extractPacket(CodecStage &stage,
   if (dataLength == 0 ||
       dataLength > static_cast<size_t>(configuration_.width) *
                        static_cast<size_t>(configuration_.height) * 8) {
-    error = "Encoded H.264 sample has an invalid data length";
+    error = "Encoded sample has an invalid data length";
     return false;
   }
   stage.packetScratch.resize(dataLength);
@@ -1632,23 +1687,36 @@ bool CodecGlitchEngineImpl::extractPacket(CodecStage &stage,
     return false;
   }
 
-  const uint8_t *parameterSet = nullptr;
-  size_t parameterSetSize = 0;
-  size_t parameterSetCount = 0;
-  int lengthHeader = 0;
-  const OSStatus formatStatus =
-      CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+  nalLengthBytes = 0;
+  if (configuration_.codec != CodecGlitchCodec::ProRes422) {
+    const uint8_t *parameterSet = nullptr;
+    size_t parameterSetSize = 0;
+    size_t parameterSetCount = 0;
+    int lengthHeader = 0;
+    OSStatus formatStatus = noErr;
+    const char *operation = nullptr;
+    if (configuration_.codec == CodecGlitchCodec::H264) {
+      operation = "CMVideoFormatDescriptionGetH264ParameterSetAtIndex";
+      formatStatus = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
           format, 0, &parameterSet, &parameterSetSize, &parameterSetCount,
           &lengthHeader);
-  if (formatStatus != noErr || lengthHeader < 1 || lengthHeader > 4) {
-    error = statusError("CMVideoFormatDescriptionGetH264ParameterSetAtIndex",
-                        formatStatus);
-    return false;
-  }
-  nalLengthBytes = lengthHeader;
-  if (!parseNals(stage.packetScratch, nalLengthBytes, stage.nals)) {
-    error = "Encoded H.264 sample has malformed AVCC NAL lengths";
-    return false;
+    } else {
+      operation = "CMVideoFormatDescriptionGetHEVCParameterSetAtIndex";
+      formatStatus = CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
+          format, 0, &parameterSet, &parameterSetSize, &parameterSetCount,
+          &lengthHeader);
+    }
+    if (formatStatus != noErr || lengthHeader < 1 || lengthHeader > 4) {
+      error = statusError(operation, formatStatus);
+      return false;
+    }
+    nalLengthBytes = lengthHeader;
+    if (!parseNals(stage.packetScratch, nalLengthBytes, stage.nals)) {
+      error = std::string("Encoded ") +
+              codecGlitchCodecName(configuration_.codec) +
+              " sample has malformed length-prefixed NAL units";
+      return false;
+    }
   }
 
   keyFrame = true;

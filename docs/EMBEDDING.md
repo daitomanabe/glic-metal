@@ -20,6 +20,7 @@ The public surface is:
 - `presets/` — runtime preset data;
 - `selected-presets.json` — portable data copy of the adopted 19 presets.
 - `integration-manifest.json` — machine-readable integration contract.
+- `docs/MULTICODEC_GLITCH.md` — native and offline codec capability contract.
 
 Internal headers under `src/` are not part of the stable API.
 
@@ -27,7 +28,8 @@ Internal headers under `src/` are not part of the stable API.
 
 The shipped bank contains the exact 19 presets selected for production: 14
 original-style presets, four allocation-free spatial Metal presets, and one
-hardware H.264 codec preset. Stable names such as `original__vv01`,
+codec-control preset. The host may prepare that codec lane as H.264, HEVC, or
+ProRes 422. Stable names such as `original__vv01`,
 `spatial__poster_solar`, and `codec__bitrate_meltdown` can be stored by a host
 application. The compiled C API is the authoritative runtime catalog and
 preserves the order in `selected-presets.json`; the JSON is an optional
@@ -95,7 +97,20 @@ production bank is the 14 / 4 / 1 subset described above.
 | `GLIC_METAL_MODE_ORIGINAL` + Strict | 37 audited | BGRA/RGBA CPU buffer | Closest original-style result |
 | `GLIC_METAL_MODE_ORIGINAL` + Fast Match | 37 algorithm-supported | BGRA/RGBA CPU buffer | Faster approximate CDF 9/7 |
 | `GLIC_METAL_MODE_COMPAT_REALTIME` | all 144 | CPU buffer or Metal texture | Maximum variety and easiest GPU composition |
-| Codec Glitch | 18 codec effects | `CVPixelBufferRef` | Stateful H.264 encode/decode and codec-history effects |
+| Codec Glitch | 18 codec effects | `CVPixelBufferRef` | Stateful H.264 / HEVC / ProRes encode/decode and codec-history effects |
+
+Select the native codec before `glic_codec_glitch_prepare()`:
+
+```c
+glic_codec_glitch_config codec_config;
+glic_codec_glitch_config_init(&codec_config);
+codec_config.codec = GLIC_CODEC_GLITCH_CODEC_HEVC;
+```
+
+AV1, AV2, and VP9 are offline/reference workflows rather than members of this
+realtime C ABI. Integrations that need them should invoke
+`scripts/process_multicodec_glitch.py` and consume its JSON plus persistent
+stage bitstreams. See [MULTICODEC_GLITCH.md](MULTICODEC_GLITCH.md).
 
 The original-style lane still performs input conversion and segmentation on
 the CPU before Metal reconstruction, so its public integration path is a
@@ -241,7 +256,7 @@ encode/decode、frame数維持、実測/stream 20fps以上、p95 50ms以下を�
 
 ### English
 
-Codec Glitch is a separate asynchronous VideoToolbox H.264 path, not the
+Codec Glitch is a separate asynchronous VideoToolbox H.264 / HEVC / ProRes path, not the
 synchronous image API above. It is distinct from the GLIC file codec,
 37-preset `original_visual` lane, and all-144 `compat_realtime` lane. It accepts
 `CVPixelBufferRef` input and exposes the eighteen effects documented in

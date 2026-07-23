@@ -116,7 +116,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--codec-effect",
         choices=CODEC_GLITCH_EFFECTS,
         default="bitrate_crush",
-        help="Stateful H.264 encode/decode glitch used by codec_glitch mode.",
+        help="Stateful VideoToolbox encode/decode glitch used by codec_glitch mode.",
+    )
+    parser.add_argument(
+        "--codec-format",
+        choices=("h264", "hevc", "prores_422"),
+        default="h264",
+        help="Native VideoToolbox codec used by codec_glitch mode.",
     )
     parser.add_argument(
         "--codec-amount",
@@ -135,6 +141,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=0.60,
         help="Decoded history contribution from 0 to 1.",
+    )
+    parser.add_argument(
+        "--codec-generations",
+        type=int,
+        choices=(2, 3),
+        default=3,
+        help="Encode/decode generations for generation_cascade.",
     )
     parser.add_argument(
         "--seed",
@@ -394,10 +407,12 @@ def resolve_backend(
 
 def codec_glitch_filter_options(
     *,
+    codec_format: str = "h264",
     codec_effect: str,
     codec_amount: float,
     codec_rate: float,
     codec_feedback: float,
+    codec_generations: int = 3,
     seed: int,
     frame_rate: float,
 ) -> list[str]:
@@ -408,6 +423,8 @@ def codec_glitch_filter_options(
     return [
         "--fps",
         str(codec_frames_per_second),
+        "--codec",
+        codec_format,
         "--effect",
         codec_effect,
         "--amount",
@@ -416,6 +433,8 @@ def codec_glitch_filter_options(
         str(codec_rate),
         "--feedback",
         str(codec_feedback),
+        "--generations",
+        str(codec_generations),
         "--seed",
         str(seed),
     ]
@@ -435,6 +454,8 @@ def codec_glitch_report_fields(
         return filter_report.get(name, statistics.get(name, default))
 
     return {
+        "codec_format": filter_report.get("codec", args.codec_format),
+        "codec_backend": filter_report.get("codec_backend", "videotoolbox"),
         "codec_effect": filter_report.get(
             "effect_family", filter_report.get("codec_effect", args.codec_effect)
         ),
@@ -665,10 +686,12 @@ def main() -> int:
         elif args.processing_mode == "codec_glitch":
             filter_command.extend(
                 codec_glitch_filter_options(
+                    codec_format=args.codec_format,
                     codec_effect=args.codec_effect,
                     codec_amount=args.codec_amount,
                     codec_rate=args.codec_rate,
                     codec_feedback=args.codec_feedback,
+                    codec_generations=args.codec_generations,
                     seed=args.seed,
                     frame_rate=target_fps,
                 )

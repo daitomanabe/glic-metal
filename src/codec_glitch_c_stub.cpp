@@ -58,6 +58,19 @@ const char *glic_codec_glitch_effect_name(glic_codec_glitch_effect effect) {
   return kEffectNames[effect];
 }
 
+const char *glic_codec_glitch_codec_name(glic_codec_glitch_codec codec) {
+  switch (codec) {
+  case GLIC_CODEC_GLITCH_CODEC_H264:
+    return "h264";
+  case GLIC_CODEC_GLITCH_CODEC_HEVC:
+    return "hevc";
+  case GLIC_CODEC_GLITCH_CODEC_PRORES_422:
+    return "prores_422";
+  default:
+    return "unknown";
+  }
+}
+
 void glic_codec_glitch_config_init(glic_codec_glitch_config *config) {
   if (config == nullptr)
     return;
@@ -76,6 +89,7 @@ void glic_codec_glitch_config_init(glic_codec_glitch_config *config) {
   config->require_hardware_encoder = 1;
   config->require_hardware_decoder = 1;
   config->enable_low_latency_rate_control = 1;
+  config->codec = GLIC_CODEC_GLITCH_CODEC_H264;
 }
 
 void glic_codec_glitch_controls_init(glic_codec_glitch_controls *controls) {

@@ -2,7 +2,9 @@
 
 [日本語](#日本語) | [English](#english)
 
-Codec Glitch is the macOS-only, stateful H.264 processing lane in GLIC Metal.
+Codec Glitch is the macOS-only, stateful H.264 / HEVC / ProRes processing lane
+in GLIC Metal. AV1, AV2, and VP9 generation workflows are documented in
+[MULTICODEC_GLITCH.md](MULTICODEC_GLITCH.md).
 It is intentionally separate from the GLIC file codec and both realtime image
 lanes. The encoder and decoder are provided by VideoToolbox; Metal-compatible
 `CVPixelBuffer` pools and a Metal-backed post/composite path keep frames in a
@@ -12,9 +14,10 @@ GPU-friendly native video pipeline.
 
 ### 位置づけ
 
-Codec Glitchは、入力映像をVideoToolboxでH.264へencode/decodeし、その処理中に
+Codec Glitchは、入力映像をVideoToolboxでH.264、HEVC、またはProRes 422へ
+encode/decodeし、その処理中に
 codec品質の変調、意図的なframe hold、またはdecode履歴を使う前段／後段合成を行う
-macOS専用の非同期処理レーンです。圧縮H.264のVCL byteは変更しません。
+macOS専用の非同期処理レーンです。圧縮video payload byteは変更しません。
 
 このモードは、次の3経路とは別物です。
 
@@ -258,7 +261,7 @@ vary across macOS, Apple silicon, and VideoToolbox versions even with one seed.
 1. The host submits a BGRA `CVPixelBufferRef` to the asynchronous engine.
 2. `codec_feedback` composites the prior codec-decoded result into the encode
    input, while `resolution_hop` scales its encode input down.
-3. The VideoToolbox H.264 hardware encoder produces a packet in `RealTime`
+3. The selected VideoToolbox H.264 / HEVC / ProRes encoder produces a packet in `RealTime`
    mode. QP, bitrate, and generation effects strongly modulate or repeat codec
    stages.
 4. `pframe_loss` and `idr_starvation` intentionally hold selected encoded
@@ -273,7 +276,7 @@ vary across macOS, Apple silicon, and VideoToolbox versions even with one seed.
 7. The completed frame is delivered through a callback or bounded poll queue.
    Separate flags identify intentional holds and failure fallback.
 
-H.264 encode/decode is provided by VideoToolbox, not implemented as a Metal
+H.264 / HEVC / ProRes encode/decode is provided by VideoToolbox, not implemented as a Metal
 shader. Metal backs the native pixel-buffer/post-processing side of the lane.
 `prepare` creates the queues and pools, prepares the normal-stage hardware
 encoder, and validates the backend. Specialized QP, cascade, and downscale

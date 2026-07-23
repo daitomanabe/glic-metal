@@ -23,6 +23,7 @@ VideoToolbox処理へ振り分ける。
 4. `include/glic_metal/glic_metal.h` — Original / Spatial画像API
 5. `include/glic_metal/codec_glitch.h` — Codec非同期API
 6. `docs/EMBEDDING.md` — 人間向けの詳細な組み込み手順
+7. `docs/MULTICODEC_GLITCH.md` — codec別backend、速度claim、offline契約
 
 `src/` 内のヘッダーは公開APIではない。他アプリからincludeしない。
 
@@ -39,6 +40,9 @@ VideoToolbox処理へ振り分ける。
 - public structは必ず対応する `_init()` 関数で初期化する。
 - 内部C++ API、プリセット値、Metal shaderをホスト側へ複製しない。
 - Processing版GLICとのpixel完全一致を主張しない。
+- H.264 / HEVC / ProResは`glic_codec_glitch_config.codec`でprepare前に選ぶ。
+- AV1 / VP9 / AV2はC ABIへ偽装せず、multi-codec runnerのJSON契約を使う。
+- AV2 toolsが無い場合はAV1へ置換せずfail-closedする。
 
 ### 採用バンク
 

@@ -343,6 +343,9 @@ if(BUILD_TESTING)
         add_test(NAME glic_process_video_helpers
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_process_video_helpers.py")
+        add_test(NAME glic_multicodec_glitch_helpers
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${PROJECT_SOURCE_DIR}/tests/test_process_multicodec_glitch.py")
         add_test(NAME glic_codec_glitch_video_evaluator
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_evaluate_codec_glitch_videos.py")
@@ -458,9 +461,15 @@ if(BUILD_TESTING)
         target_link_libraries(glic_codec_glitch_tests PRIVATE glic_core)
         add_test(NAME glic_codec_glitch_all_effects
                  COMMAND glic_codec_glitch_tests)
+        add_test(NAME glic_codec_glitch_hevc_probe
+                 COMMAND glic_codec_glitch_filter --codec hevc --check)
+        add_test(NAME glic_codec_glitch_prores_probe
+                 COMMAND glic_codec_glitch_filter --codec prores_422 --check)
         set_tests_properties(
             glic_webcam_preview_selftest
             glic_codec_glitch_all_effects
+            glic_codec_glitch_hevc_probe
+            glic_codec_glitch_prores_probe
             PROPERTIES LABELS "hardware" TIMEOUT 60)
 
         add_executable(glic_original_realtime_metal_tests

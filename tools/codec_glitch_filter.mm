@@ -34,6 +34,7 @@ struct Options {
   int width = 960;
   int height = 540;
   int framesPerSecond = 30;
+  glic::CodecGlitchCodec codec = glic::CodecGlitchCodec::H264;
   glic::CodecGlitchControls controls;
   std::string statsPath;
   bool checkOnly = false;
@@ -95,6 +96,11 @@ Options parseOptions(int argc, const char *argv[]) {
       options.height = parseInt(value("--height"), "height");
     else if (argument == "--fps" || argument == "--target-fps")
       options.framesPerSecond = parseInt(value("--fps"), "frames per second");
+    else if (argument == "--codec") {
+      const char *name = value("--codec");
+      if (!glic::codecGlitchCodecFromName(name, options.codec))
+        failUsage(std::string("unknown native codec: ") + name);
+    }
     else if (argument == "--effect") {
       const char *name = value("--effect");
       if (!glic::codecGlitchEffectFromName(name, options.controls.effect))
@@ -130,6 +136,7 @@ Options parseOptions(int argc, const char *argv[]) {
     else if (argument == "--help") {
       std::cout << "Usage: glic_codec_glitch_filter [options] < BGRA > BGRA\n"
                 << "  --width N --height N --fps N\n"
+                << "  --codec h264|hevc|prores_422\n"
                 << "  --effect NAME --amount 0..1 --rate 0..1 --feedback 0..1\n"
                 << "  --seed N --stats-json PATH --check\n";
       std::exit(0);
@@ -275,6 +282,9 @@ void writeStats(const Options &options,
   output << std::fixed << std::setprecision(3) << "{\n"
          << "  \"schema\": \"glic-codec-glitch-filter-v1\",\n"
          << "  \"processing_mode\": \"codec_glitch\",\n"
+         << "  \"codec\": \"" << glic::codecGlitchCodecName(options.codec)
+         << "\",\n"
+         << "  \"codec_backend\": \"videotoolbox\",\n"
          << "  \"preset\": \""
          << glic::codecGlitchEffectName(options.controls.effect) << "\",\n"
          << "  \"effect_family\": \""
@@ -332,11 +342,19 @@ int main(int argc, const char *argv[]) {
     try {
       const Options options = parseOptions(argc, argv);
       glic::CodecGlitchConfiguration configuration;
+      configuration.codec = options.codec;
       configuration.width = options.width;
       configuration.height = options.height;
       configuration.framesPerSecond = options.framesPerSecond;
       configuration.maximumInFlightFrames = 4;
       configuration.pollQueueCapacity = 4;
+      // Apple exposes ProRes through VideoToolbox, but not every Mac exposes a
+      // hardware encoder/decoder for it. Keep the implementation functional
+      // through VideoToolbox's software fallback and report the actual flags.
+      if (options.codec == glic::CodecGlitchCodec::ProRes422) {
+        configuration.requireHardwareEncoder = false;
+        configuration.requireHardwareDecoder = false;
+      }
 
       std::string error;
       auto engine = glic::createCodecGlitchEngine(configuration, error);
@@ -423,6 +441,7 @@ int main(int argc, const char *argv[]) {
         const bool decoded = !outputState->frames.empty();
         std::cout << "effect="
                   << glic::codecGlitchEffectName(options.controls.effect)
+                  << " codec=" << glic::codecGlitchCodecName(options.codec)
                   << " hardware_encoder=" << statistics.hardwareEncoder
                   << " hardware_decoder=" << statistics.hardwareDecoder
                   << " base_frame_qp=" << statistics.baseFrameQpSupported

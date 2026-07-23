@@ -81,15 +81,19 @@ def main() -> int:
         assert parsed.codec_effect == effect
 
     assert MODULE.codec_glitch_filter_options(
+        codec_format="hevc",
         codec_effect="slice_transplant",
         codec_amount=0.625,
         codec_rate=0.25,
         codec_feedback=0.75,
+        codec_generations=2,
         seed=123,
         frame_rate=29.97002997,
     ) == [
         "--fps",
         "30",
+        "--codec",
+        "hevc",
         "--effect",
         "slice_transplant",
         "--amount",
@@ -98,6 +102,8 @@ def main() -> int:
         "0.25",
         "--feedback",
         "0.75",
+        "--generations",
+        "2",
         "--seed",
         "123",
     ]

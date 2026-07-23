@@ -8,6 +8,15 @@ semantic versioning for tagged releases.
 
 ### Added
 
+- Multi-codec encode/decode glitching for AV1, AV2, HEVC/H.265, VP9, and
+  ProRes. HEVC and ProRes extend the native VideoToolbox lane; AV1/VP9 use
+  explicit FFmpeg encoders/decoders; AV2 uses pinned official AVM v1.0.0
+  reference tools and fails closed when they are absent.
+- Persistent per-generation codec evidence: compressed bitstreams, SHA-256,
+  codec probes, timings, decoded intermediates, preview video, and a unified
+  JSON report.
+- A machine-readable local capability probe and a reproducible AV2 reference
+  build script pinned to the official v1.0.0 commit.
 - Six safe realtime adaptations of codec-prediction research concepts:
   temporal polyphony, recursive intra-frame self-copy, prediction/residual
   rifting, synthesized codec grain, recursive restoration skin, and regional

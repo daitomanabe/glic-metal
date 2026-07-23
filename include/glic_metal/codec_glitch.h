@@ -47,6 +47,13 @@ enum {
   GLIC_CODEC_GLITCH_CONCEALMENT_CHOREOGRAPHY = 17
 };
 
+typedef int32_t glic_codec_glitch_codec;
+enum {
+  GLIC_CODEC_GLITCH_CODEC_H264 = 0,
+  GLIC_CODEC_GLITCH_CODEC_HEVC = 1,
+  GLIC_CODEC_GLITCH_CODEC_PRORES_422 = 2
+};
+
 /*
  * Codec Glitch is macOS-only and operates asynchronously on opaque
  * CVPixelBufferRef values. Initialize this struct before changing fields.
@@ -74,7 +81,10 @@ typedef struct glic_codec_glitch_config {
    * bitrate uses min(average_bit_rate, width * height * fps / 4) as its floor.
    */
   uint32_t enable_low_latency_rate_control;
-  uint32_t reserved[8];
+  /* Selects the VideoToolbox encode/decode format. H.264 remains zero so
+   * source-compatible zero initialization retains the original behavior. */
+  glic_codec_glitch_codec codec;
+  uint32_t reserved[7];
 } glic_codec_glitch_config;
 
 typedef struct glic_codec_glitch_controls {
@@ -141,6 +151,7 @@ typedef struct glic_codec_glitch_stats {
 uint32_t glic_codec_glitch_get_abi_version(void);
 const char *glic_codec_glitch_status_string(glic_codec_glitch_status status);
 const char *glic_codec_glitch_effect_name(glic_codec_glitch_effect effect);
+const char *glic_codec_glitch_codec_name(glic_codec_glitch_codec codec);
 
 void glic_codec_glitch_config_init(glic_codec_glitch_config *config);
 void glic_codec_glitch_controls_init(glic_codec_glitch_controls *controls);

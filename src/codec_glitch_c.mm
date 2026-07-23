@@ -31,6 +31,11 @@ bool validEffect(glic_codec_glitch_effect effect) {
          effect <= GLIC_CODEC_GLITCH_CONCEALMENT_CHOREOGRAPHY;
 }
 
+bool validCodec(glic_codec_glitch_codec codec) {
+  return codec >= GLIC_CODEC_GLITCH_CODEC_H264 &&
+         codec <= GLIC_CODEC_GLITCH_CODEC_PRORES_422;
+}
+
 glic_codec_glitch_status fail(glic_codec_glitch_context *context,
                               glic_codec_glitch_status status,
                               std::string message) {
@@ -118,6 +123,13 @@ const char *glic_codec_glitch_effect_name(glic_codec_glitch_effect effect) {
       static_cast<glic::CodecGlitchEffect>(effect));
 }
 
+const char *glic_codec_glitch_codec_name(glic_codec_glitch_codec codec) {
+  if (!validCodec(codec))
+    return "unknown";
+  return glic::codecGlitchCodecName(
+      static_cast<glic::CodecGlitchCodec>(codec));
+}
+
 void glic_codec_glitch_config_init(glic_codec_glitch_config *config) {
   if (config == nullptr)
     return;
@@ -136,6 +148,7 @@ void glic_codec_glitch_config_init(glic_codec_glitch_config *config) {
   config->require_hardware_encoder = 1;
   config->require_hardware_decoder = 1;
   config->enable_low_latency_rate_control = 1;
+  config->codec = GLIC_CODEC_GLITCH_CODEC_H264;
 }
 
 void glic_codec_glitch_controls_init(glic_codec_glitch_controls *controls) {
@@ -224,11 +237,13 @@ glic_codec_glitch_prepare(glic_codec_glitch_context *context,
         config->maximum_slice_bytes < 0 ||
         config->decoded_history_frames <= 0 ||
         config->maximum_in_flight_frames <= 0 ||
-        config->poll_queue_capacity <= 0)
+        config->poll_queue_capacity <= 0 || !validCodec(config->codec))
       return fail(context, GLIC_CODEC_GLITCH_INVALID_ARGUMENT,
                   "codec configuration contains a non-positive value");
 
     glic::CodecGlitchConfiguration candidateConfig;
+    candidateConfig.codec =
+        static_cast<glic::CodecGlitchCodec>(config->codec);
     candidateConfig.width = config->width;
     candidateConfig.height = config->height;
     candidateConfig.framesPerSecond = config->frames_per_second;
