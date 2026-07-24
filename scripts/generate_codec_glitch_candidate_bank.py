@@ -28,28 +28,28 @@ def candidate(
 
 CANDIDATES = [
     candidate("qp_mid_pulse", "qp_pump", 0.62, 0.48, 0.25),
-    candidate("qp_hard_wave", "qp_pump", 0.86, 0.72, 0.35),
+    candidate("plane_time_channels", "plane_time_split", 0.78, 0.62, 0.74),
     candidate("crossbreed_regions", "dual_codec_crossbreed", 0.82, 0.58, 0.76),
     candidate("bitrate_pulse", "bitrate_crush", 0.58, 0.45, 0.35),
-    candidate("bitrate_blocks", "bitrate_crush", 0.82, 0.25, 0.45),
+    candidate("reference_atlas_regions", "reference_atlas", 0.76, 0.58, 0.86),
     candidate("codec_pingpong_fast", "codec_pingpong", 0.78, 0.88, 0.72),
     candidate("dropout_traveling", "slice_dropout", 0.55, 0.65, 0.42),
-    candidate("dropout_dense", "slice_dropout", 0.78, 0.38, 0.55),
+    candidate("flow_lattice_warp", "flow_lattice", 0.72, 0.66, 0.78),
     candidate("gop_accordion_burst", "gop_accordion", 0.84, 0.64, 0.88),
     candidate("transplant_offset", "slice_transplant", 0.50, 0.65, 0.62),
-    candidate("transplant_weave", "slice_transplant", 0.70, 0.40, 0.82),
+    candidate("scan_order_fold_bands", "scan_order_fold", 0.80, 0.54, 0.84),
     candidate("bframe_braid_deep", "bframe_braid", 0.82, 0.70, 0.92),
     candidate("pframe_stagger", "pframe_loss", 0.48, 0.45, 0.45),
-    candidate("pframe_stutter", "pframe_loss", 0.70, 0.68, 0.60),
+    candidate("regional_gop_polyrhythm", "regional_gop_clock", 0.74, 0.72, 0.88),
     candidate("plane_split_luma_chroma", "plane_split_codec", 0.86, 0.52, 0.90),
     candidate("idr_drift", "idr_starvation", 0.50, 0.40, 0.55),
-    candidate("idr_drought", "idr_starvation", 0.72, 0.65, 0.70),
+    candidate("entropy_feedback_cells", "entropy_feedback", 0.76, 0.56, 0.90),
     candidate("roi_quality_orbit", "roi_quality_islands", 0.80, 0.76, 0.88),
     candidate("payload_tiles", "payload_xor", 0.55, 0.52, 0.40),
-    candidate("payload_mosaic", "payload_xor", 0.75, 0.30, 0.55),
+    candidate("rolling_time_shutter_scan", "rolling_time_shutter", 0.82, 0.64, 0.88),
     candidate("phase_mosaic_tiles", "codec_phase_mosaic", 0.88, 0.74, 0.94),
     candidate("timewarp_jump", "reference_timewarp", 0.52, 0.40, 0.65),
-    candidate("timewarp_deep", "reference_timewarp", 0.72, 0.64, 0.85),
+    candidate("asymmetric_plane_drift", "asymmetric_plane_codec", 0.78, 0.48, 0.86),
     candidate("encoder_hot_swap_cycle", "encoder_hot_swap", 0.76, 0.86, 0.72),
     candidate("feedback_trails", "codec_feedback", 0.50, 0.40, 0.68),
     candidate("feedback_recursion", "codec_feedback", 0.72, 0.62, 0.86),
@@ -87,8 +87,8 @@ def validate_candidates() -> None:
     if len(names) != len(set(names)):
         raise ValueError("candidate names must be unique")
     effects = {entry["effect"] for entry in CANDIDATES}
-    if len(effects) != 28:
-        raise ValueError("candidate bank must cover all 28 codec effects")
+    if len(effects) != 36:
+        raise ValueError("candidate bank must cover all 36 codec effects")
     for entry in CANDIDATES:
         for key in ("amount", "rate", "feedback"):
             value = entry[key]
