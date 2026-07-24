@@ -2520,7 +2520,11 @@ PacketDecision CodecGlitchEngineImpl::decidePacketDrop(CodecStage &stage,
                static_cast<uint64_t>(stage.index));
   const double amount = context.controls.amount;
 
-  if (effect == CodecGlitchEffect::PFrameLoss && !keyFrame &&
+  // Dropping a HEVC reference picture can poison the hardware decoder until a
+  // later random-access point. H.264 retains the packet-hold experiment;
+  // HEVC and intra-only ProRes use the equivalent fused-Metal temporal hold.
+  if (effect == CodecGlitchEffect::PFrameLoss &&
+      configuration_.codec == CodecGlitchCodec::H264 && !keyFrame &&
       randomGate < amount * (0.15 + 0.55 * context.controls.rate)) {
     result.drop = true;
     return result;

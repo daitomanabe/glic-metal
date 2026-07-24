@@ -139,6 +139,9 @@ semantic versioning for tagged releases.
 
 ### Changed
 
+- HEVC `pframe_loss` now uses a fused-Metal temporal hold instead of dropping
+  reference pictures that can poison the hardware decoder until the next
+  random-access point. H.264 retains the encoded-sample hold experiment.
 - Decoded NV12 frames now leave the VideoToolbox callback immediately after
   committing a Metal command buffer. GPU completion has its own bounded
   watchdog token, accepted submissions are delivered in order even when work

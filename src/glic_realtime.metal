@@ -166,7 +166,6 @@ kernel void glicCodecFusedEffect(
 
     switch (uniform.effect) {
         case 0u: // QP pump: VideoToolbox has already applied QP variation.
-        case 4u: // P-frame loss and IDR starvation act in encoded time.
         case 5u:
             break;
         case 1u:
@@ -200,6 +199,15 @@ kernel void glicCodecFusedEffect(
                 result = codecHistoryAt(farHistory, currentY, currentCbCr,
                                         point + int2(shift, 0), hasFar, uniform);
             }
+            break;
+        }
+        case 4u: { // Safe P-frame loss hold for codecs with fragile refs.
+            uint frameHash = codecHash32(
+                uint(uniform.seed) ^ uint(uniform.seed >> 32u) ^
+                uniform.frameIndex * 0x9e3779b9u);
+            float gate = float(frameHash & 0xffffu) / 65535.0;
+            if (gate < amount * (0.15 + 0.55 * uniform.rate))
+                result = nearColor;
             break;
         }
         case 6u: { // Payload XOR reconstruction.
