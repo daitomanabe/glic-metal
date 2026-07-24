@@ -95,6 +95,7 @@ for tool in \
   structured_bitstream.py \
   process_transport_glitch.py \
   transport_glitch.py \
+  process_metadata_glitch.py \
   evolutionary_codec_search.py \
   probe_multicodec_capabilities.py \
   build_av2_reference.py \

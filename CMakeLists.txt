@@ -375,6 +375,9 @@ if(BUILD_TESTING)
         add_test(NAME glic_transport_glitch_helpers
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_transport_glitch.py")
+        add_test(NAME glic_metadata_glitch_helpers
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${PROJECT_SOURCE_DIR}/tests/test_metadata_glitch.py")
         add_test(NAME glic_codec_glitch_video_evaluator
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_evaluate_codec_glitch_videos.py")
@@ -595,6 +598,7 @@ install(PROGRAMS scripts/process_multicodec_glitch.py
                  scripts/structured_bitstream.py
                  scripts/process_transport_glitch.py
                  scripts/transport_glitch.py
+                 scripts/process_metadata_glitch.py
                  scripts/evolutionary_codec_search.py
                  scripts/probe_multicodec_capabilities.py
                  scripts/build_av2_reference.py
