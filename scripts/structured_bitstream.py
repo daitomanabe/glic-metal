@@ -216,6 +216,8 @@ def mutate_av1_field_syntax(
     changed_fields = 0
     changed_bytes = 0
     matched_units = 0
+    tile_ordinal = 0
+    dropped_units: set[int] = set()
 
     for unit_index, (obu, traced) in enumerate(zip(obus, aligned)):
         if traced is None:
@@ -262,28 +264,32 @@ def mutate_av1_field_syntax(
                 start = traced.tile_group_start_bit // 8
             else:
                 continue
+            current_tile = tile_ordinal
+            tile_ordinal += 1
             if start >= len(obu.raw):
                 continue
             matched_units += 1
-            stride = max(17, round(113 - amount * 88))
-            for byte_index in range(start + 4, len(obu.raw), stride):
-                if rng.random() <= 0.35 + amount * 0.55:
-                    bit = 1 << rng.randrange(0, 8)
-                    obu.raw[byte_index] ^= bit
-                    changed_bytes += 1
+            period = max(2, round(6 - amount * 4))
+            if current_tile == 0 or current_tile % period != seed % period:
+                continue
+            dropped_units.add(unit_index)
         else:
             raise ValueError(f"unsupported AV1 syntax effect: {effect}")
 
     if matched_units == 0:
         raise RuntimeError(f"{effect} found no matching AV1 syntax")
-    if changed_fields == 0 and changed_bytes == 0:
+    if changed_fields == 0 and changed_bytes == 0 and not dropped_units:
         raise RuntimeError(f"{effect} made no structured mutation")
-    return join_av1_obus(obus), {
+    output_obus = [
+        obu for index, obu in enumerate(obus) if index not in dropped_units
+    ]
+    return join_av1_obus(output_obus), {
         "parsed_obus": len(obus),
         "trace_obus": len(parse_trace_headers(trace_text)),
         "matched_units": matched_units,
         "changed_fields": changed_fields,
         "changed_bytes": changed_bytes,
+        "dropped_tile_group_obus": len(dropped_units),
         "trace_alignment_complete": all(item is not None for item in aligned),
     }
 

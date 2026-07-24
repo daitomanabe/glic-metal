@@ -91,6 +91,8 @@ for tool in \
   process_offline_packet_glitch.py \
   evaluate_offline_packet_glitches.py \
   process_codec_lab.py \
+  process_structured_codec_glitch.py \
+  structured_bitstream.py \
   evolutionary_codec_search.py \
   probe_multicodec_capabilities.py \
   build_av2_reference.py \
