@@ -76,7 +76,7 @@ glic_codec_glitch_effect_implementation_level(glic_codec_glitch_effect effect) {
     return "videotoolbox_clean_encode_decode_plus_gpu_reconstruction";
   if (effect <= GLIC_CODEC_GLITCH_BITRATE_RASTER)
     return "videotoolbox_single_codec_crossbreed_plus_gpu_reconstruction";
-  return "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction";
+  return "videotoolbox_decoded_history_plus_fused_metal_or_coreimage_fallback";
 }
 
 const char *glic_codec_glitch_codec_name(glic_codec_glitch_codec codec) {

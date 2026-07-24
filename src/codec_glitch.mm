@@ -198,6 +198,25 @@ void updateAtomicPeak(std::atomic<uint64_t> &peak, uint64_t value) noexcept {
   }
 }
 
+struct alignas(16) CodecEffectUniform {
+  uint32_t outputWidth = 0;
+  uint32_t outputHeight = 0;
+  uint32_t inputWidth = 0;
+  uint32_t inputHeight = 0;
+  uint32_t effect = 0;
+  uint32_t frameIndex = 0;
+  uint32_t hasNearHistory = 0;
+  uint32_t hasFarHistory = 0;
+  float amount = 0.0f;
+  float rate = 0.0f;
+  float feedback = 0.0f;
+  float reducedResolutionScale = 1.0f;
+  uint64_t seed = 0;
+  uint32_t reserved0 = 0;
+  uint32_t reserved1 = 0;
+};
+static_assert(sizeof(CodecEffectUniform) == 64);
+
 struct FrameContext {
   std::atomic<bool> inUse{false};
   // Compression uses a separate opaque token and deadline. VideoToolbox must
@@ -217,6 +236,7 @@ struct FrameContext {
   std::atomic<int> decodeStageIndex{-1};
   dispatch_source_t decodeDeadlineTimer = nullptr;
   CFMutableDictionaryRef frameOptions = nullptr;
+  id<MTLBuffer> effectUniformBuffer = nil;
   CVPixelBufferRef fallbackInput = nullptr;
   uint64_t frameIndex = 0;
   CMTime presentationTimeStamp = kCMTimeInvalid;
@@ -355,7 +375,7 @@ codecGlitchEffectImplementationLevel(CodecGlitchEffect effect) noexcept {
   }
   if (value <
       static_cast<uint32_t>(CodecGlitchEffect::Count)) {
-    return "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction";
+    return "videotoolbox_decoded_history_plus_fused_metal_or_coreimage_fallback";
   }
   return "unknown";
 }
@@ -519,6 +539,7 @@ struct AtomicStatistics {
   std::atomic<bool> prioritizesEncodingSpeed{false};
   std::atomic<bool> nv12MetalFastPath{false};
   std::atomic<bool> metalTextureCache{false};
+  std::atomic<bool> fusedMetalEffects{false};
 };
 
 struct CallbackDeliveryState {
@@ -697,6 +718,10 @@ private:
   CVPixelBufferRef convertBgraToNv12(CVPixelBufferRef input,
                                      CVPixelBufferPoolRef pool);
   CVPixelBufferRef convertNv12ToBgra(CVPixelBufferRef input);
+  CVPixelBufferRef renderFusedMetal(CVPixelBufferRef input,
+                                    CVPixelBufferRef nearHistory,
+                                    CVPixelBufferRef farHistory,
+                                    FrameContext &context);
   void finishDecodedFrame(CodecStage &stage, FrameContext &context,
                           CVPixelBufferRef imageBuffer);
   void emit(FrameContext &context, CVPixelBufferRef imageBuffer,
@@ -750,6 +775,8 @@ private:
   id<MTLCommandQueue> metalQueue_ = nil;
   id<MTLComputePipelineState> bgraToNv12Pipeline_ = nil;
   id<MTLComputePipelineState> nv12ToBgraPipeline_ = nil;
+  id<MTLComputePipelineState> codecEffectPipeline_ = nil;
+  id<MTLTexture> codecFallbackTexture_ = nil;
   CVMetalTextureCacheRef metalTextureCache_ = nullptr;
   bool useNv12FastPath_ = false;
   CIContext *ciContext_ = nil;
@@ -955,9 +982,11 @@ bool CodecGlitchEngineImpl::createMetalFastPath(std::string &error) {
       [library newFunctionWithName:@"glicCodecBgraToNv12"];
   id<MTLFunction> toBgra =
       [library newFunctionWithName:@"glicCodecNv12ToBgra"];
-  if (toNv12 == nil || toBgra == nil) {
+  id<MTLFunction> effect =
+      [library newFunctionWithName:@"glicCodecFusedEffect"];
+  if (toNv12 == nil || toBgra == nil || effect == nil) {
     metalQueue_ = nil;
-    error = "Metal library is missing codec NV12 conversion kernels";
+    error = "Metal library is missing codec NV12/effect kernels";
     return false;
   }
   NSError *pipelineError = nil;
@@ -981,9 +1010,46 @@ bool CodecGlitchEngineImpl::createMetalFastPath(std::string &error) {
             metalErrorString(pipelineError);
     return false;
   }
+  pipelineError = nil;
+  codecEffectPipeline_ =
+      [metalDevice_ newComputePipelineStateWithFunction:effect
+                                                  error:&pipelineError];
+  if (codecEffectPipeline_ == nil) {
+    nv12ToBgraPipeline_ = nil;
+    bgraToNv12Pipeline_ = nil;
+    metalQueue_ = nil;
+    error = "Failed to create fused codec-effect pipeline: " +
+            metalErrorString(pipelineError);
+    return false;
+  }
+  MTLTextureDescriptor *fallbackDescriptor = [MTLTextureDescriptor
+      texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                   width:1
+                                  height:1
+                               mipmapped:NO];
+  fallbackDescriptor.usage = MTLTextureUsageShaderRead;
+  fallbackDescriptor.storageMode = MTLStorageModeShared;
+  codecFallbackTexture_ =
+      [metalDevice_ newTextureWithDescriptor:fallbackDescriptor];
+  if (codecFallbackTexture_ == nil) {
+    codecEffectPipeline_ = nil;
+    nv12ToBgraPipeline_ = nil;
+    bgraToNv12Pipeline_ = nil;
+    metalQueue_ = nil;
+    error = "Failed to create fused codec-effect fallback texture";
+    return false;
+  }
+  const uint32_t opaqueBlack = 0xff000000U;
+  [codecFallbackTexture_
+      replaceRegion:MTLRegionMake2D(0, 0, 1, 1)
+        mipmapLevel:0
+          withBytes:&opaqueBlack
+        bytesPerRow:sizeof(opaqueBlack)];
   const CVReturn cacheStatus = CVMetalTextureCacheCreate(
       kCFAllocatorDefault, nullptr, metalDevice_, nullptr, &metalTextureCache_);
   if (cacheStatus != kCVReturnSuccess || metalTextureCache_ == nullptr) {
+    codecFallbackTexture_ = nil;
+    codecEffectPipeline_ = nil;
     nv12ToBgraPipeline_ = nil;
     bgraToNv12Pipeline_ = nil;
     metalQueue_ = nil;
@@ -994,6 +1060,7 @@ bool CodecGlitchEngineImpl::createMetalFastPath(std::string &error) {
   useNv12FastPath_ = true;
   statistics_.nv12MetalFastPath.store(true, std::memory_order_relaxed);
   statistics_.metalTextureCache.store(true, std::memory_order_relaxed);
+  statistics_.fusedMetalEffects.store(true, std::memory_order_relaxed);
   error.clear();
   return true;
 }
@@ -1031,6 +1098,8 @@ bool CodecGlitchEngineImpl::createResources(std::string &error) {
           statistics_.nv12MetalFastPath.store(false,
                                               std::memory_order_relaxed);
           statistics_.metalTextureCache.store(false,
+                                              std::memory_order_relaxed);
+          statistics_.fusedMetalEffects.store(false,
                                               std::memory_order_relaxed);
         }
       }
@@ -1111,11 +1180,17 @@ bool CodecGlitchEngineImpl::createResources(std::string &error) {
         context->frameOptions = CFDictionaryCreateMutable(
             kCFAllocatorDefault, 3, &kCFTypeDictionaryKeyCallBacks,
             &kCFTypeDictionaryValueCallBacks);
+        if (useNv12FastPath_) {
+          context->effectUniformBuffer = [metalDevice_
+              newBufferWithLength:sizeof(CodecEffectUniform)
+                           options:MTLResourceStorageModeShared];
+        }
         context->encodeDeadlineTimer = dispatch_source_create(
             DISPATCH_SOURCE_TYPE_TIMER, 0, 0, watchdogQueue_);
         context->decodeDeadlineTimer = dispatch_source_create(
             DISPATCH_SOURCE_TYPE_TIMER, 0, 0, watchdogQueue_);
         if (context->frameOptions == nullptr ||
+            (useNv12FastPath_ && context->effectUniformBuffer == nil) ||
             context->encodeDeadlineTimer == nullptr ||
             context->decodeDeadlineTimer == nullptr) {
           error = "Failed to create codec per-frame resources";
@@ -1178,6 +1253,8 @@ bool CodecGlitchEngineImpl::createResources(std::string &error) {
                                               std::memory_order_relaxed);
           statistics_.metalTextureCache.store(false,
                                               std::memory_order_relaxed);
+          statistics_.fusedMetalEffects.store(false,
+                                              std::memory_order_relaxed);
           return createResources(error);
         }
         destroyResources();
@@ -1207,6 +1284,7 @@ void CodecGlitchEngineImpl::destroyResources() {
         CFRelease(context.frameOptions);
         context.frameOptions = nullptr;
       }
+      context.effectUniformBuffer = nil;
       if (context.encodeDeadlineTimer != nullptr) {
         dispatch_source_cancel(context.encodeDeadlineTimer);
         context.encodeDeadlineTimer = nullptr;
@@ -1285,6 +1363,8 @@ void CodecGlitchEngineImpl::destroyResources() {
   }
   nv12ToBgraPipeline_ = nil;
   bgraToNv12Pipeline_ = nil;
+  codecEffectPipeline_ = nil;
+  codecFallbackTexture_ = nil;
   metalQueue_ = nil;
   useNv12FastPath_ = false;
   ciContext_ = nil;
@@ -1975,6 +2055,8 @@ CodecGlitchStatistics CodecGlitchEngineImpl::stats() const noexcept {
       statistics_.nv12MetalFastPath.load(std::memory_order_relaxed);
   result.metalTextureCache =
       statistics_.metalTextureCache.load(std::memory_order_relaxed);
+  result.fusedMetalEffects =
+      statistics_.fusedMetalEffects.load(std::memory_order_relaxed);
   return result;
 }
 
@@ -2617,6 +2699,137 @@ CodecGlitchEngineImpl::convertNv12ToBgra(CVPixelBufferRef input) {
   CFRelease(inputYTextureRef);
   CFRelease(inputCbCrTextureRef);
   CFRelease(outputTextureRef);
+  if (!succeeded) {
+    CFRelease(output);
+    return nullptr;
+  }
+  CVBufferPropagateAttachments(input, output);
+  return output;
+}
+
+CVPixelBufferRef CodecGlitchEngineImpl::renderFusedMetal(
+    CVPixelBufferRef input, CVPixelBufferRef nearHistory,
+    CVPixelBufferRef farHistory, FrameContext &context) {
+  const OSType inputFormat =
+      input != nullptr ? CVPixelBufferGetPixelFormatType(input) : 0;
+  if (!useNv12FastPath_ || input == nullptr ||
+      context.effectUniformBuffer == nil || metalTextureCache_ == nullptr ||
+      metalQueue_ == nil || codecEffectPipeline_ == nil ||
+      codecFallbackTexture_ == nil ||
+      (inputFormat != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange &&
+       inputFormat != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange))
+    return nullptr;
+
+  CVPixelBufferRef output = nullptr;
+  if (allocatePixelBuffer(fullSizePool_, &output) != kCVReturnSuccess ||
+      output == nullptr)
+    return nullptr;
+  const size_t inputWidth = CVPixelBufferGetWidth(input);
+  const size_t inputHeight = CVPixelBufferGetHeight(input);
+  const size_t outputWidth = CVPixelBufferGetWidth(output);
+  const size_t outputHeight = CVPixelBufferGetHeight(output);
+  CVMetalTextureRef currentYRef = nullptr;
+  CVMetalTextureRef currentCbCrRef = nullptr;
+  CVMetalTextureRef outputRef = nullptr;
+  CVMetalTextureRef nearRef = nullptr;
+  CVMetalTextureRef farRef = nullptr;
+
+  CVReturn status = CVMetalTextureCacheCreateTextureFromImage(
+      kCFAllocatorDefault, metalTextureCache_, input, nullptr,
+      MTLPixelFormatR8Unorm, inputWidth, inputHeight, 0, &currentYRef);
+  if (status == kCVReturnSuccess)
+    status = CVMetalTextureCacheCreateTextureFromImage(
+        kCFAllocatorDefault, metalTextureCache_, input, nullptr,
+        MTLPixelFormatRG8Unorm, inputWidth / 2, inputHeight / 2, 1,
+        &currentCbCrRef);
+  if (status == kCVReturnSuccess)
+    status = CVMetalTextureCacheCreateTextureFromImage(
+        kCFAllocatorDefault, metalTextureCache_, output, nullptr,
+        MTLPixelFormatBGRA8Unorm, outputWidth, outputHeight, 0, &outputRef);
+  if (status != kCVReturnSuccess || currentYRef == nullptr ||
+      currentCbCrRef == nullptr || outputRef == nullptr) {
+    if (currentYRef != nullptr)
+      CFRelease(currentYRef);
+    if (currentCbCrRef != nullptr)
+      CFRelease(currentCbCrRef);
+    if (outputRef != nullptr)
+      CFRelease(outputRef);
+    CFRelease(output);
+    return nullptr;
+  }
+
+  const auto mapHistory = [&](CVPixelBufferRef buffer,
+                              CVMetalTextureRef &textureRef) -> id<MTLTexture> {
+    if (buffer == nullptr ||
+        CVPixelBufferGetPixelFormatType(buffer) != kCVPixelFormatType_32BGRA ||
+        CVPixelBufferGetWidth(buffer) != outputWidth ||
+        CVPixelBufferGetHeight(buffer) != outputHeight)
+      return codecFallbackTexture_;
+    const CVReturn historyStatus =
+        CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault, metalTextureCache_, buffer, nullptr,
+            MTLPixelFormatBGRA8Unorm, outputWidth, outputHeight, 0,
+            &textureRef);
+    if (historyStatus != kCVReturnSuccess || textureRef == nullptr)
+      return codecFallbackTexture_;
+    return CVMetalTextureGetTexture(textureRef);
+  };
+  id<MTLTexture> nearTexture = mapHistory(nearHistory, nearRef);
+  id<MTLTexture> farTexture = mapHistory(farHistory, farRef);
+
+  CodecEffectUniform uniform;
+  uniform.outputWidth = static_cast<uint32_t>(outputWidth);
+  uniform.outputHeight = static_cast<uint32_t>(outputHeight);
+  uniform.inputWidth = static_cast<uint32_t>(inputWidth);
+  uniform.inputHeight = static_cast<uint32_t>(inputHeight);
+  uniform.effect = static_cast<uint32_t>(context.controls.effect);
+  uniform.frameIndex = static_cast<uint32_t>(context.frameIndex);
+  uniform.hasNearHistory = nearRef != nullptr ? 1u : 0u;
+  uniform.hasFarHistory = farRef != nullptr ? 1u : 0u;
+  uniform.amount = context.controls.amount;
+  uniform.rate = context.controls.rate;
+  uniform.feedback = context.controls.feedback;
+  uniform.reducedResolutionScale = context.controls.reducedResolutionScale;
+  uniform.seed = context.controls.seed;
+  std::memcpy(context.effectUniformBuffer.contents, &uniform, sizeof(uniform));
+
+  id<MTLCommandBuffer> command = [metalQueue_ commandBuffer];
+  id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+  if (command == nil || encoder == nil) {
+    if (nearRef != nullptr)
+      CFRelease(nearRef);
+    if (farRef != nullptr)
+      CFRelease(farRef);
+    CFRelease(currentYRef);
+    CFRelease(currentCbCrRef);
+    CFRelease(outputRef);
+    CFRelease(output);
+    return nullptr;
+  }
+  [encoder setComputePipelineState:codecEffectPipeline_];
+  [encoder setTexture:CVMetalTextureGetTexture(currentYRef) atIndex:0];
+  [encoder setTexture:CVMetalTextureGetTexture(currentCbCrRef) atIndex:1];
+  [encoder setTexture:nearTexture atIndex:2];
+  [encoder setTexture:farTexture atIndex:3];
+  [encoder setTexture:CVMetalTextureGetTexture(outputRef) atIndex:4];
+  [encoder setBuffer:context.effectUniformBuffer offset:0 atIndex:0];
+  const NSUInteger threadWidth = codecEffectPipeline_.threadExecutionWidth;
+  const NSUInteger threadHeight =
+      std::max<NSUInteger>(1, codecEffectPipeline_.maxTotalThreadsPerThreadgroup /
+                                  threadWidth);
+  [encoder dispatchThreads:MTLSizeMake(outputWidth, outputHeight, 1)
+      threadsPerThreadgroup:MTLSizeMake(threadWidth, threadHeight, 1)];
+  [encoder endEncoding];
+  [command commit];
+  [command waitUntilCompleted];
+  const bool succeeded = command.status == MTLCommandBufferStatusCompleted;
+  if (nearRef != nullptr)
+    CFRelease(nearRef);
+  if (farRef != nullptr)
+    CFRelease(farRef);
+  CFRelease(currentYRef);
+  CFRelease(currentCbCrRef);
+  CFRelease(outputRef);
   if (!succeeded) {
     CFRelease(output);
     return nullptr;
@@ -3921,7 +4134,25 @@ void CodecGlitchEngineImpl::finishDecodedFrame(CodecStage &stage,
   const auto postProcessStartedAt = std::chrono::steady_clock::now();
   CVPixelBufferRef processed = nullptr;
   bool requiredPostProcessing = false;
-  if (stage.lowResolution ||
+  const OSType decodedFormat = CVPixelBufferGetPixelFormatType(imageBuffer);
+  if (useNv12FastPath_ &&
+      (decodedFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
+       decodedFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)) {
+    CVPixelBufferRef nearHistory = copyLastOutput();
+    CVPixelBufferRef farHistory = copyHistoricalOutput(
+        3 + static_cast<size_t>(context.controls.feedback * 7.0f));
+    if (nearHistory != nullptr && farHistory == nullptr) {
+      farHistory = nearHistory;
+      CFRetain(farHistory);
+    }
+    processed =
+        renderFusedMetal(imageBuffer, nearHistory, farHistory, context);
+    requiredPostProcessing = true;
+    if (nearHistory != nullptr)
+      CFRelease(nearHistory);
+    if (farHistory != nullptr)
+      CFRelease(farHistory);
+  } else if (stage.lowResolution ||
       CVPixelBufferGetWidth(imageBuffer) !=
           static_cast<size_t>(configuration_.width) ||
       CVPixelBufferGetHeight(imageBuffer) !=

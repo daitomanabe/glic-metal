@@ -154,6 +154,7 @@ struct CodecGlitchStatistics {
   bool prioritizesEncodingSpeed = false;
   bool nv12MetalFastPath = false;
   bool metalTextureCache = false;
+  bool fusedMetalEffects = false;
 };
 
 // Owns one retain on its pixel buffer.  Copying a frame retains the buffer;

@@ -378,6 +378,8 @@ void writeStats(const Options &options,
          << jsonBool(statistics.nv12MetalFastPath) << ",\n"
          << "  \"metal_texture_cache\": "
          << jsonBool(statistics.metalTextureCache) << ",\n"
+         << "  \"fused_metal_effects\": "
+         << jsonBool(statistics.fusedMetalEffects) << ",\n"
          << "  \"kernel_realtime_20fps_passed\": " << jsonBool(kernelPassed20)
          << ",\n"
          << "  \"kernel_realtime_30fps_passed\": " << jsonBool(kernelPassed30)

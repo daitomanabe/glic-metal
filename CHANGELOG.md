@@ -8,6 +8,10 @@ semantic versioning for tagged releases.
 
 ### Added
 
+- A single fused Metal reconstruction kernel now covers all 36 realtime codec
+  effects directly from decoded NV12 planes, samples retained BGRA history
+  through IOSurface textures, and writes the compatibility BGRA output in one
+  GPU dispatch. Core Image remains an explicit BGRA fallback.
 - An ABI-compatible codec pixel-path selector adds a required or automatic
   NV12/IOSurface fast path. VideoToolbox can now encode and decode NV12 while
   `CVMetalTextureCache` maps its planes directly into Metal conversion kernels;

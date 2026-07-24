@@ -51,6 +51,443 @@ kernel void glicCodecNv12ToBgra(
     output.write(float4(clamp(rgb, 0.0, 1.0), 1.0), gid);
 }
 
+struct CodecEffectUniform {
+    uint outputWidth;
+    uint outputHeight;
+    uint inputWidth;
+    uint inputHeight;
+    uint effect;
+    uint frameIndex;
+    uint hasNearHistory;
+    uint hasFarHistory;
+    float amount;
+    float rate;
+    float feedback;
+    float reducedResolutionScale;
+    ulong seed;
+    uint reserved0;
+    uint reserved1;
+};
+
+static uint codecHash32(uint value) {
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    return value ^ (value >> 16u);
+}
+
+static uint codecPixelHash(int2 point, uint frame, ulong seed) {
+    uint value = uint(seed) ^ uint(seed >> 32u);
+    value ^= uint(point.x) * 0x9e3779b9u;
+    value ^= uint(point.y) * 0x85ebca6bu;
+    value ^= frame * 0xc2b2ae35u;
+    return codecHash32(value);
+}
+
+static int codecWrap(int value, int size) {
+    int wrapped = value % max(1, size);
+    return wrapped < 0 ? wrapped + size : wrapped;
+}
+
+static int2 codecWrappedPoint(int2 point, constant CodecEffectUniform& uniform) {
+    return int2(codecWrap(point.x, int(uniform.outputWidth)),
+                codecWrap(point.y, int(uniform.outputHeight)));
+}
+
+static float3 codecYcbcrToRgb(float y, float2 chroma) {
+    y = (y - 16.0 / 255.0) * (255.0 / 219.0);
+    chroma = (chroma - float2(128.0 / 255.0)) * (255.0 / 224.0);
+    return clamp(float3(y + 1.5748 * chroma.y,
+                        y - 0.187324 * chroma.x - 0.468124 * chroma.y,
+                        y + 1.8556 * chroma.x), 0.0, 1.0);
+}
+
+static float3 codecRgbToYcbcr(float3 rgb) {
+    return float3(dot(rgb, float3(0.2126, 0.7152, 0.0722)),
+                  dot(rgb, float3(-0.114572, -0.385428, 0.5)) + 0.5,
+                  dot(rgb, float3(0.5, -0.454153, -0.045847)) + 0.5);
+}
+
+static float3 codecCurrentAt(
+    texture2d<float, access::read> currentY,
+    texture2d<float, access::read> currentCbCr,
+    int2 outputPoint,
+    constant CodecEffectUniform& uniform) {
+    int2 wrapped = codecWrappedPoint(outputPoint, uniform);
+    uint2 source = uint2(
+        min(uniform.inputWidth - 1u,
+            uint((ulong(wrapped.x) * uniform.inputWidth) /
+                 max(1u, uniform.outputWidth))),
+        min(uniform.inputHeight - 1u,
+            uint((ulong(wrapped.y) * uniform.inputHeight) /
+                 max(1u, uniform.outputHeight))));
+    return codecYcbcrToRgb(currentY.read(source).r,
+                           currentCbCr.read(source / 2u).rg);
+}
+
+static float3 codecHistoryAt(
+    texture2d<float, access::read> history,
+    texture2d<float, access::read> currentY,
+    texture2d<float, access::read> currentCbCr,
+    int2 point,
+    bool available,
+    constant CodecEffectUniform& uniform) {
+    if (!available)
+        return codecCurrentAt(currentY, currentCbCr, point, uniform);
+    int2 wrapped = codecWrappedPoint(point, uniform);
+    return history.read(uint2(wrapped)).rgb;
+}
+
+kernel void glicCodecFusedEffect(
+    texture2d<float, access::read> currentY [[texture(0)]],
+    texture2d<float, access::read> currentCbCr [[texture(1)]],
+    texture2d<float, access::read> nearHistory [[texture(2)]],
+    texture2d<float, access::read> farHistory [[texture(3)]],
+    texture2d<float, access::write> output [[texture(4)]],
+    constant CodecEffectUniform& uniform [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= uniform.outputWidth || gid.y >= uniform.outputHeight)
+        return;
+
+    int2 point = int2(gid);
+    bool hasNear = uniform.hasNearHistory != 0u;
+    bool hasFar = uniform.hasFarHistory != 0u;
+    float amount = clamp(uniform.amount, 0.0, 1.0);
+    float feedback = clamp(uniform.feedback, 0.0, 0.98);
+    float phase = float(uniform.frameIndex) * (0.025 + uniform.rate * 0.19);
+    uint hash = codecPixelHash(point, uniform.frameIndex, uniform.seed);
+    float3 current = codecCurrentAt(currentY, currentCbCr, point, uniform);
+    float3 nearColor = codecHistoryAt(nearHistory, currentY, currentCbCr,
+                                      point, hasNear, uniform);
+    float3 farColor = codecHistoryAt(farHistory, currentY, currentCbCr,
+                                     point, hasFar, uniform);
+    float3 result = current;
+
+    switch (uniform.effect) {
+        case 0u: // QP pump: VideoToolbox has already applied QP variation.
+        case 4u: // P-frame loss and IDR starvation act in encoded time.
+        case 5u:
+            break;
+        case 1u:
+        case 9u: { // Bitrate crush / generation cascade.
+            int block = 3 + int(round(amount * (uniform.effect == 9u ? 42.0 : 24.0)));
+            int2 origin = (point / block) * block;
+            float3 sampled = codecCurrentAt(currentY, currentCbCr, origin, uniform);
+            float levels = uniform.effect == 9u ? 5.0 : 9.0;
+            levels = max(2.0, levels - amount * 4.0);
+            result = round(sampled * levels) / levels;
+            break;
+        }
+        case 2u: { // Slice dropout.
+            int bandHeight = 2 + int(round((1.0 - uniform.rate) * 20.0));
+            uint bandHash = codecPixelHash(int2(0, point.y / bandHeight),
+                                           uniform.frameIndex / 2u, uniform.seed);
+            if (float(bandHash & 0xffffu) / 65535.0 < amount * 0.72)
+                result = (bandHash & 1u) != 0u
+                             ? codecHistoryAt(nearHistory, currentY, currentCbCr,
+                                              point + int2(int(bandHash % 81u) - 40, 0),
+                                              hasNear, uniform)
+                             : current * (0.08 + feedback * 0.35);
+            break;
+        }
+        case 3u: { // Slice transplant.
+            int bandHeight = 3 + int(round((1.0 - uniform.rate) * 26.0));
+            uint bandHash = codecPixelHash(int2(0, point.y / bandHeight),
+                                           uniform.frameIndex / 3u, uniform.seed);
+            if (float(bandHash & 0xffffu) / 65535.0 < 0.12 + amount * 0.78) {
+                int shift = int((bandHash >> 16u) % 241u) - 120;
+                result = codecHistoryAt(farHistory, currentY, currentCbCr,
+                                        point + int2(shift, 0), hasFar, uniform);
+            }
+            break;
+        }
+        case 6u: { // Payload XOR reconstruction.
+            int block = 4 + int(round((1.0 - uniform.rate) * 28.0));
+            uint blockHash = codecPixelHash(point / block,
+                                            uniform.frameIndex / 2u, uniform.seed);
+            if (float(blockHash & 0xffffu) / 65535.0 < amount * 0.88) {
+                uint3 bytes = uint3(clamp(current * 255.0, 0.0, 255.0));
+                uint mask = 1u << ((blockHash >> 18u) % 7u);
+                bytes ^= uint3(mask, mask << 1u, mask << 2u);
+                result = float3(bytes & 255u) / 255.0;
+                if ((blockHash & 1u) != 0u)
+                    result = result.brg;
+            }
+            break;
+        }
+        case 7u: { // Reference timewarp.
+            float gate = float(hash & 0xffffu) / 65535.0;
+            if (gate < 0.16 + amount * (0.54 + 0.24 * uniform.rate))
+                result = mix(current, farColor, 0.35 + feedback * 0.65);
+            break;
+        }
+        case 8u: // Codec feedback is also fed into the encoder.
+            result = mix(current, nearColor, amount * feedback * 0.48);
+            break;
+        case 10u: { // Resolution hop, with explicit nearest-neighbor blocks.
+            int block = 2 + int(round(amount * 13.0));
+            result = codecCurrentAt(currentY, currentCbCr,
+                                    (point / block) * block, uniform);
+            break;
+        }
+        case 11u: { // Chroma codec echo.
+            float3 currentYC = codecRgbToYcbcr(current);
+            float3 historyYC = codecRgbToYcbcr(codecHistoryAt(
+                nearHistory, currentY, currentCbCr,
+                point + int2(int(sin(phase) * amount * 23.0), 0),
+                hasNear, uniform));
+            result = codecYcbcrToRgb(
+                16.0 / 255.0 + currentYC.x * (219.0 / 255.0),
+                float2(128.0 / 255.0) +
+                    (mix(currentYC.yz, historyYC.yz, amount * feedback) - 0.5) *
+                        (224.0 / 255.0));
+            break;
+        }
+        case 12u: // Temporal polyphony.
+            result = float3(current.r, nearColor.g, farColor.b);
+            result = mix(current, result, 0.25 + amount * 0.72);
+            break;
+        case 13u: { // Intra cannibalism.
+            int block = 12 + int(round((1.0 - uniform.rate) * 52.0));
+            int2 origin = (point / block) * block;
+            int2 local = point - origin;
+            int2 source = origin + int2((local.y + int(hash & 15u)) % block,
+                                         (local.x + int((hash >> 4u) & 15u)) % block);
+            result = mix(current,
+                         codecCurrentAt(currentY, currentCbCr, source, uniform),
+                         amount);
+            break;
+        }
+        case 14u: { // Residual rift.
+            int shift = 2 + int(round(amount * 34.0));
+            float3 displaced = codecHistoryAt(
+                nearHistory, currentY, currentCbCr,
+                point + int2((point.y & 1) != 0 ? shift : -shift, 0),
+                hasNear, uniform);
+            result = clamp(current + (current - displaced) *
+                                         (0.45 + amount * 1.65), 0.0, 1.0);
+            break;
+        }
+        case 15u: { // Codec grain synth.
+            int block = 2 + int(round((1.0 - uniform.rate) * 9.0));
+            uint grainHash = codecPixelHash(point / block,
+                                            uniform.frameIndex, uniform.seed);
+            float grain = (float(grainHash & 255u) / 255.0 - 0.5) *
+                          amount * 0.42;
+            result = clamp(current + float3(grain, -grain * 0.45, grain * 0.72),
+                           0.0, 1.0);
+            break;
+        }
+        case 16u: { // Recursive codec skin.
+            int radius = 1 + int(round(amount * 12.0));
+            float3 echo = codecHistoryAt(
+                nearHistory, currentY, currentCbCr,
+                point + int2(int(sin(phase + point.y * 0.013) * radius),
+                             int(cos(phase + point.x * 0.009) * radius)),
+                hasNear, uniform);
+            result = mix(current, echo, 0.18 + feedback * amount * 0.72);
+            break;
+        }
+        case 17u: { // Concealment choreography.
+            int tile = 18 + int(round((1.0 - uniform.rate) * 72.0));
+            uint tileHash = codecPixelHash(point / tile,
+                                           uniform.frameIndex / 3u, uniform.seed);
+            float gate = float(tileHash & 0xffffu) / 65535.0;
+            if (gate < amount * 0.82)
+                result = (tileHash & 1u) != 0u ? nearColor : farColor;
+            break;
+        }
+        case 18u: { // Dual codec crossbreed.
+            bool alternate = ((point.x / 48 + point.y / 48) & 1) != 0;
+            result = mix(current, alternate ? nearColor : farColor,
+                         amount * (0.35 + feedback * 0.55));
+            break;
+        }
+        case 19u: { // Codec ping-pong.
+            bool useFar = ((point.y / max(2, 4 + int((1.0 - uniform.rate) * 28.0)) +
+                            int(uniform.frameIndex / 2u)) & 1) != 0;
+            result = mix(current, useFar ? farColor : nearColor, amount);
+            break;
+        }
+        case 20u: { // GOP accordion.
+            int span = 10 + int(round((1.0 - uniform.rate) * 70.0));
+            int foldedX = abs(codecWrap(point.x + int(phase * 24.0), span * 2) - span);
+            result = mix(current,
+                         codecHistoryAt(farHistory, currentY, currentCbCr,
+                                        int2((point.x / span) * span + foldedX,
+                                             point.y), hasFar, uniform),
+                         amount);
+            break;
+        }
+        case 21u: { // B-frame braid.
+            int braid = codecWrap(point.y + int(uniform.frameIndex), 6);
+            result = braid < 2 ? nearColor : (braid < 4 ? current : farColor);
+            break;
+        }
+        case 22u: // Plane split codec.
+            result = mix(current, float3(current.r, nearColor.g, farColor.b),
+                         amount);
+            break;
+        case 23u: { // ROI quality islands.
+            float2 center = float2(uniform.outputWidth, uniform.outputHeight) * 0.5;
+            float distance = length((float2(point) - center) / center);
+            int block = 5 + int(round(amount * 34.0));
+            float3 coarse = codecHistoryAt(
+                farHistory, currentY, currentCbCr,
+                (point / block) * block, hasFar, uniform);
+            result = distance < 0.28 + (1.0 - amount) * 0.25
+                         ? current
+                         : mix(current, coarse, amount);
+            break;
+        }
+        case 24u: { // Codec phase mosaic.
+            int tile = 18 + int(round((1.0 - uniform.rate) * 62.0));
+            uint selector = codecPixelHash(point / tile,
+                                           uniform.frameIndex / 2u, uniform.seed) % 3u;
+            result = selector == 0u ? current : (selector == 1u ? nearColor : farColor);
+            break;
+        }
+        case 25u: { // Encoder hot swap.
+            int region = codecWrap(point.x + int(phase * 90.0),
+                                   max(1, int(uniform.outputWidth)));
+            result = region < int(uniform.outputWidth / 2u) ? current : farColor;
+            result = mix(current, result, amount);
+            break;
+        }
+        case 26u: { // PTS rubberband.
+            int shift = int(sin(phase + point.y * 0.016) *
+                            amount * float(uniform.outputWidth) * 0.10);
+            result = codecHistoryAt(nearHistory, currentY, currentCbCr,
+                                    point + int2(shift, 0), hasNear, uniform);
+            break;
+        }
+        case 27u: { // Bitrate raster.
+            int rowGroup = max(1, 2 + int((1.0 - uniform.rate) * 18.0));
+            float levels = 3.0 + float((point.y / rowGroup +
+                                       int(uniform.frameIndex)) % 8);
+            result = mix(current, round(current * levels) / levels, amount);
+            break;
+        }
+        case 28u: { // Plane time split.
+            float3 currentYC = codecRgbToYcbcr(current);
+            float3 farYC = codecRgbToYcbcr(farColor);
+            float3 combined = float3(currentYC.x, farYC.yz);
+            float y = 16.0 / 255.0 + combined.x * (219.0 / 255.0);
+            float2 uv = float2(128.0 / 255.0) +
+                        (combined.yz - 0.5) * (224.0 / 255.0);
+            result = codecYcbcrToRgb(y, uv);
+            break;
+        }
+        case 29u: { // Reference atlas.
+            int tileWidth = max(1, int(uniform.outputWidth) / 6);
+            int tileHeight = max(1, int(uniform.outputHeight) / 4);
+            int2 tile = point / int2(tileWidth, tileHeight);
+            uint tileHash = codecPixelHash(tile, 0u, uniform.seed);
+            if (float(tileHash & 0xffffu) / 65535.0 <
+                0.20 + amount * 0.72) {
+                int2 offset = int2(int((tileHash >> 16u) % uint(tileWidth * 2 + 1)) - tileWidth,
+                                   int(codecHash32(tileHash) % uint(tileHeight * 2 + 1)) - tileHeight);
+                if ((tileHash & 1u) != 0u)
+                    result = codecHistoryAt(nearHistory, currentY, currentCbCr,
+                                            point + offset, hasNear, uniform);
+                else
+                    result = codecHistoryAt(farHistory, currentY, currentCbCr,
+                                            point + offset, hasFar, uniform);
+            }
+            break;
+        }
+        case 30u: { // Flow lattice.
+            int cellWidth = max(1, int(uniform.outputWidth) / 6);
+            int cellHeight = max(1, int(uniform.outputHeight) / 4);
+            int2 cell = point / int2(cellWidth, cellHeight);
+            int shiftX = int(sin(phase + float(cell.x) * 0.91 +
+                                 float(cell.y) * 1.37) *
+                             amount * float(cellWidth) * 0.72);
+            int shiftY = int(cos(phase * 0.73 + float(cell.x - cell.y)) *
+                             amount * float(cellHeight) * 0.48);
+            float3 warped = codecCurrentAt(currentY, currentCbCr,
+                                           point - int2(shiftX, shiftY), uniform);
+            result = mix(farColor, warped, 0.62 + amount * 0.38);
+            break;
+        }
+        case 31u: { // Scan-order fold.
+            int strips = amount > 0.58 ? 16 : 8;
+            int bits = strips == 16 ? 4 : 3;
+            int destination = min(strips - 1,
+                                  point.y * strips / int(uniform.outputHeight));
+            int source = 0;
+            for (int bit = 0; bit < bits; ++bit)
+                source |= ((destination >> bit) & 1) << (bits - bit - 1);
+            int sourceY = source * int(uniform.outputHeight) / strips +
+                          point.y % max(1, int(uniform.outputHeight) / strips);
+            result = codecCurrentAt(currentY, currentCbCr,
+                                    int2(point.x, sourceY), uniform);
+            break;
+        }
+        case 32u: { // Regional GOP clock.
+            int2 tileSize = int2(max(1, int(uniform.outputWidth) / 5),
+                                 max(1, int(uniform.outputHeight) / 3));
+            int2 tile = point / tileSize;
+            float local = sin(phase + float(tile.y) * 1.71 +
+                              float(tile.x) * 0.93);
+            result = local < -0.28 ? farColor : (local < 0.34 ? nearColor : current);
+            break;
+        }
+        case 33u: { // Entropy feedback.
+            int2 cellSize = int2(max(1, int(uniform.outputWidth) / 6),
+                                 max(1, int(uniform.outputHeight) / 4));
+            uint cellHash = codecPixelHash(point / cellSize, 0u, uniform.seed);
+            float density = float(cellHash & 0xffffu) / 65535.0;
+            float temporal = 0.5 + 0.5 * sin(phase * 2.2 +
+                                             density * 6.2831853);
+            if (density * temporal > 0.36 - amount * 0.22) {
+                float3 source = (cellHash & 1u) != 0u ? nearColor : farColor;
+                float contrast = 0.85 + density * (0.25 + amount * 0.35);
+                result = clamp((source - 0.5) * contrast + 0.5, 0.0, 1.0);
+            }
+            break;
+        }
+        case 34u: { // Rolling time shutter.
+            int strips = amount > 0.65 ? 36 : 24;
+            int strip = point.y * strips / int(uniform.outputHeight);
+            float sweep = fmod(float(uniform.frameIndex) *
+                                   (0.35 + uniform.rate * 1.65),
+                               float(strips));
+            float distance = fmod(float(strip) - sweep + float(strips),
+                                  float(strips));
+            int shift = int(sin(float(strip) * 0.77 + sweep * 0.21) *
+                            amount * float(uniform.outputWidth) * 0.045);
+            if (distance < float(strips) * 0.22)
+                result = codecHistoryAt(farHistory, currentY, currentCbCr,
+                                        point + int2(shift, 0), hasFar, uniform);
+            else if (distance < float(strips) * 0.56)
+                result = codecHistoryAt(nearHistory, currentY, currentCbCr,
+                                        point + int2(shift, 0), hasNear, uniform);
+            break;
+        }
+        case 35u: { // Asymmetric plane codec.
+            float3 currentYC = codecRgbToYcbcr(current);
+            int block = 3 + int(round(amount * 25.0));
+            float3 history = codecHistoryAt(
+                farHistory, currentY, currentCbCr,
+                (point / block) * block +
+                    int2(int(sin(phase) * amount * 19.0),
+                         int(-sin(phase) * amount * 7.0)),
+                hasFar, uniform);
+            float3 historyYC = codecRgbToYcbcr(history);
+            float y = 16.0 / 255.0 + currentYC.x * (219.0 / 255.0);
+            float2 uv = float2(128.0 / 255.0) +
+                        (historyYC.yz - 0.5) * (224.0 / 255.0);
+            result = codecYcbcrToRgb(y, uv);
+            break;
+        }
+        default:
+            break;
+    }
+    output.write(float4(clamp(result, 0.0, 1.0), 1.0), gid);
+}
+
 struct ChannelUniform {
     uint minBlockSize;
     uint maxBlockSize;

@@ -375,7 +375,7 @@ int runCApiTest() {
       std::strcmp(
           glic_codec_glitch_effect_implementation_level(
               GLIC_CODEC_GLITCH_PLANE_TIME_SPLIT),
-          "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction") !=
+          "videotoolbox_decoded_history_plus_fused_metal_or_coreimage_fallback") !=
           0 ||
       std::strcmp(glic_codec_glitch_effect_implementation_level(-1),
                   "unknown") != 0) {

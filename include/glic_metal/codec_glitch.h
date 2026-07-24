@@ -178,7 +178,8 @@ typedef struct glic_codec_glitch_stats {
   /* Active runtime path, not merely requested configuration. */
   uint32_t nv12_metal_fast_path;
   uint32_t metal_texture_cache;
-  uint32_t reserved[6];
+  uint32_t fused_metal_effects;
+  uint32_t reserved[5];
 } glic_codec_glitch_stats;
 
 uint32_t glic_codec_glitch_get_abi_version(void);
