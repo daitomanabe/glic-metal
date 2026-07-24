@@ -139,6 +139,10 @@ semantic versioning for tagged releases.
 
 ### Changed
 
+- The fused QP, IDR-starvation, chroma-echo, plane-split, recursive-skin,
+  concealment, and GOP-accordion reconstructions now use distinct spatial,
+  temporal, and color signatures. The Phase 6 visual evaluator no longer finds
+  exact or near-exact duplicates in the 36-effect realtime bank.
 - Video-range NV12 (`420v`) host inputs now enter the required NV12/Metal path
   without a Core Image BGRA staging conversion. BGRA inputs remain supported
   through the Metal BGRA-to-NV12 conversion kernel.

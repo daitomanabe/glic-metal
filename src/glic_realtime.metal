@@ -165,9 +165,29 @@ kernel void glicCodecFusedEffect(
     float3 result = current;
 
     switch (uniform.effect) {
-        case 0u: // QP pump: VideoToolbox has already applied QP variation.
-        case 5u:
+        case 0u: { // QP pump plus visible fallback when BaseFrameQP is absent.
+            float pump = 0.5 + 0.5 * sin(phase * 3.7);
+            int block = 2 + int(round(amount * pump * 22.0));
+            float levels = max(2.0, 13.0 - amount * pump * 9.0);
+            float3 sampled = codecCurrentAt(
+                currentY, currentCbCr, (point / block) * block, uniform);
+            float3 quantized = round(sampled * levels) / levels;
+            result = mix(current, quantized, 0.20 + amount * pump * 0.72);
             break;
+        }
+        case 5u: { // IDR starvation as long sparse history windows.
+            int period = 18 + int(round((1.0 - uniform.rate) * 74.0));
+            int clock = int(uniform.frameIndex % uint(max(1, period)));
+            int window = 2 + int(round(amount * float(period) * 0.42));
+            if (clock < window) {
+                int shift = int(sin(float(point.y) * 0.021 + phase) *
+                                amount * 28.0);
+                result = codecHistoryAt(
+                    farHistory, currentY, currentCbCr,
+                    point + int2(shift, 0), hasFar, uniform);
+            }
+            break;
+        }
         case 1u:
         case 9u: { // Bitrate crush / generation cascade.
             int block = 3 + int(round(amount * (uniform.effect == 9u ? 42.0 : 24.0)));
@@ -243,12 +263,14 @@ kernel void glicCodecFusedEffect(
             float3 currentYC = codecRgbToYcbcr(current);
             float3 historyYC = codecRgbToYcbcr(codecHistoryAt(
                 nearHistory, currentY, currentCbCr,
-                point + int2(int(sin(phase) * amount * 23.0), 0),
+                point + int2(int(sin(phase * 1.7) * (8.0 + amount * 48.0)),
+                             int(cos(phase) * amount * 9.0)),
                 hasNear, uniform));
             result = codecYcbcrToRgb(
                 16.0 / 255.0 + currentYC.x * (219.0 / 255.0),
                 float2(128.0 / 255.0) +
-                    (mix(currentYC.yz, historyYC.yz, amount * feedback) - 0.5) *
+                    (mix(currentYC.yz, historyYC.yz,
+                         0.22 + amount * feedback * 0.78) - 0.5) *
                         (224.0 / 255.0));
             break;
         }
@@ -288,22 +310,44 @@ kernel void glicCodecFusedEffect(
             break;
         }
         case 16u: { // Recursive codec skin.
-            int radius = 1 + int(round(amount * 12.0));
+            int radius = 3 + int(round(amount * 28.0));
             float3 echo = codecHistoryAt(
                 nearHistory, currentY, currentCbCr,
-                point + int2(int(sin(phase + point.y * 0.013) * radius),
-                             int(cos(phase + point.x * 0.009) * radius)),
+                point + int2(int(sin(phase * 1.3 + point.y * 0.017) * radius),
+                             int(cos(phase * 0.8 + point.x * 0.011) *
+                                 radius * 0.55)),
                 hasNear, uniform);
-            result = mix(current, echo, 0.18 + feedback * amount * 0.72);
+            float3 residual = abs(current - echo);
+            float3 skin = clamp(echo * (0.68 + feedback * 0.28) +
+                                    sqrt(residual) * (0.22 + amount * 0.86),
+                                0.0, 1.0);
+            int scales = 5 + int(round(amount * 9.0));
+            skin = round(skin * float(scales)) / float(scales);
+            if (((point.y / max(2, radius / 2)) +
+                 int(uniform.frameIndex / 3u)) & 1)
+                skin = skin.gbr;
+            result = mix(current, skin, 0.34 + amount * 0.62);
             break;
         }
         case 17u: { // Concealment choreography.
             int tile = 18 + int(round((1.0 - uniform.rate) * 72.0));
-            uint tileHash = codecPixelHash(point / tile,
+            int2 tilePoint = point / tile;
+            int2 local = point - tilePoint * tile;
+            uint tileHash = codecPixelHash(tilePoint,
                                            uniform.frameIndex / 3u, uniform.seed);
             float gate = float(tileHash & 0xffffu) / 65535.0;
-            if (gate < amount * 0.82)
-                result = (tileHash & 1u) != 0u ? nearColor : farColor;
+            if (gate < amount * 0.82) {
+                int2 jump = int2(int((tileHash >> 16u) % 5u) - 2,
+                                 int((tileHash >> 24u) % 3u) - 1) * tile;
+                result = codecHistoryAt(
+                    (tileHash & 1u) != 0u ? nearHistory : farHistory,
+                    currentY, currentCbCr, point + jump,
+                    (tileHash & 1u) != 0u ? hasNear : hasFar, uniform);
+                int seam = 1 + int(round(amount * 4.0));
+                if (local.x < seam || local.y < seam ||
+                    local.x >= tile - seam || local.y >= tile - seam)
+                    result *= 0.12 + feedback * 0.22;
+            }
             break;
         }
         case 18u: { // Dual codec crossbreed.
@@ -320,12 +364,23 @@ kernel void glicCodecFusedEffect(
         }
         case 20u: { // GOP accordion.
             int span = 10 + int(round((1.0 - uniform.rate) * 70.0));
-            int foldedX = abs(codecWrap(point.x + int(phase * 24.0), span * 2) - span);
-            result = mix(current,
-                         codecHistoryAt(farHistory, currentY, currentCbCr,
-                                        int2((point.x / span) * span + foldedX,
-                                             point.y), hasFar, uniform),
-                         amount);
+            int movingX = point.x + int(phase * (18.0 + amount * 46.0));
+            int cell = movingX / max(1, span * 2);
+            int foldedX =
+                abs(codecWrap(movingX, span * 2) - span);
+            int sourceX = cell * span * 2 + foldedX * 2;
+            float3 folded = codecHistoryAt(
+                farHistory, currentY, currentCbCr,
+                int2(sourceX, point.y +
+                     int(sin(float(cell) + phase) * amount * 18.0)),
+                hasFar, uniform);
+            if ((cell & 1) != 0)
+                folded = folded.bgr;
+            result = mix(current, folded, 0.38 + amount * 0.60);
+            int ridge = min(foldedX, abs(foldedX - span));
+            if (ridge < 1 + int(round(amount * 3.0)))
+                result = mix(result, float3(1.0, 0.18, 0.04),
+                             0.25 + amount * 0.42);
             break;
         }
         case 21u: { // B-frame braid.
@@ -333,10 +388,17 @@ kernel void glicCodecFusedEffect(
             result = braid < 2 ? nearColor : (braid < 4 ? current : farColor);
             break;
         }
-        case 22u: // Plane split codec.
-            result = mix(current, float3(current.r, nearColor.g, farColor.b),
-                         amount);
+        case 22u: { // Plane split codec: spatially separated coding planes.
+            int region = point.x * 3 / int(uniform.outputWidth);
+            float3 selected =
+                region == 0 ? current : (region == 1 ? nearColor : farColor);
+            int seam = max(2, int(round(amount * 18.0)));
+            if (abs(point.x - int(uniform.outputWidth / 3u)) < seam ||
+                abs(point.x - int((uniform.outputWidth * 2u) / 3u)) < seam)
+                selected = float3(current.r, nearColor.g, farColor.b);
+            result = mix(current, selected, 0.28 + amount * 0.70);
             break;
+        }
         case 23u: { // ROI quality islands.
             float2 center = float2(uniform.outputWidth, uniform.outputHeight) * 0.5;
             float distance = length((float2(point) - center) / center);
