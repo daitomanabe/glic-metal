@@ -149,7 +149,10 @@ def quality_for(codec: str, amount: float, generation: int) -> int:
     if codec == "theora":
         return round(8 - damage * 7)
     if codec == "dirac":
-        return round(15_000_000 - damage * 13_000_000)
+        # VC-2 may legally encode but collapse every slice to neutral grey
+        # below its practical slice budget. Keep enough headroom for repeated
+        # generations while still allowing visible wavelet loss.
+        return max(10_000_000, round(15_000_000 - damage * 13_000_000))
     return round(20 + damage * 38)
 
 
@@ -221,6 +224,16 @@ def ffmpeg_container(codec: str) -> tuple[str, str]:
     if codec == "dirac":
         return ".mkv", "dirac"
     raise RuntimeError(f"FFmpeg container is not defined for {codec}")
+
+
+def codec_working_dimensions(codec: str, width: int, height: int) -> tuple[int, int]:
+    if codec == "dirac":
+        # FFmpeg's VC-2 encoder uses 32x16 slices by default. Partial slices at
+        # the right/bottom edge can decode as a flat neutral frame, so pad the
+        # lossless working raster and scale the public preview back to the
+        # requested dimensions.
+        return ((width + 31) // 32 * 32, (height + 15) // 16 * 16)
+    return width, height
 
 
 def process_native(args: argparse.Namespace, root: Path, report: Path) -> dict:
@@ -309,12 +322,15 @@ def process_ffmpeg_codec(
     work: Path,
 ) -> tuple[Path, list[dict]]:
     current = work / "normalized.mkv"
+    working_width, working_height = codec_working_dimensions(
+        args.codec, args.width, args.height
+    )
     normalize_input(
         ffmpeg,
         args.input,
         current,
-        args.width,
-        args.height,
+        working_width,
+        working_height,
         args.fps,
         args.max_frames,
     )
@@ -611,6 +627,8 @@ def create_preview(
         "0:v:0",
         "-map",
         "1:a?",
+        "-vf",
+        f"scale={args.width}:{args.height}:flags=lanczos",
         *video_options,
         "-c:a",
         "aac",

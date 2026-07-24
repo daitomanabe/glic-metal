@@ -39,6 +39,9 @@ def main() -> int:
         "native_" in level
         for level in MODULE.IMPLEMENTATION_LEVEL.values()
     )
+    assert "zscale=" in MODULE.DISPLAY_NORMALIZATION_FILTER
+    assert "contrast=0.82" in MODULE.DISPLAY_NORMALIZATION_FILTER
+    assert "colorlevels=" in MODULE.DISPLAY_NORMALIZATION_FILTER
     print("PASS temporal metadata profiles and native field labels")
     return 0
 

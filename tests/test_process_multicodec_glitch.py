@@ -45,6 +45,9 @@ def main() -> int:
     assert dirac[dirac.index("-c:v") + 1] == "vc2"
     assert MODULE.ffmpeg_container("theora") == (".ogv", "theora")
     assert MODULE.ffmpeg_container("dirac") == (".mkv", "dirac")
+    assert MODULE.codec_working_dimensions("dirac", 480, 270) == (480, 272)
+    assert MODULE.codec_working_dimensions("dirac", 481, 272) == (512, 272)
+    assert MODULE.codec_working_dimensions("theora", 480, 270) == (480, 270)
     assert MODULE.effect_filter("generation_cascade", 0.5, 1) == "null"
     assert MODULE.effect_filter("temporal_echo", 0.8, 2).startswith("tmix=")
     assert MODULE.effect_filter("chroma_drift", 0.8, 2).startswith("chromashift=")
@@ -52,6 +55,7 @@ def main() -> int:
     assert 0 <= MODULE.quality_for("av2", 0.0, 1) <= 255
     assert 0 <= MODULE.quality_for("av2", 1.0, 3) <= 255
     assert 0 <= MODULE.quality_for("av1", 1.0, 3) <= 63
+    assert MODULE.quality_for("dirac", 1.0, 3) >= 10_000_000
     print("PASS multi-codec command and effect helpers")
     return 0
 

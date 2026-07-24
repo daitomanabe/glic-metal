@@ -33,6 +33,12 @@ IMPLEMENTATION_LEVEL = {
         "native_hevc_vui_and_mastering_display_sei_temporal_reencode"
     ),
 }
+DISPLAY_NORMALIZATION_FILTER = (
+    "zscale=primaries=bt709:transfer=bt709:matrix=bt709,"
+    "eq=contrast=0.82:brightness=-0.04:saturation=0.92,"
+    "colorlevels=romax=0.88:gomax=0.88:bomax=0.88,"
+    "format=yuv420p"
+)
 
 
 def metadata_profiles(effect: str) -> list[dict[str, object]]:
@@ -370,10 +376,7 @@ def main() -> int:
             "0:v:0",
             "-an",
             "-vf",
-            (
-                "zscale=primaries=bt709:transfer=bt709:matrix=bt709,"
-                "format=yuv420p"
-            ),
+            DISPLAY_NORMALIZATION_FILTER,
             "-c:v",
             "ffv1",
             str(rendered),
@@ -426,6 +429,7 @@ def main() -> int:
         "effect": args.effect,
         "codec": args.codec,
         "implementation_level": IMPLEMENTATION_LEVEL[args.effect],
+        "preview_display_normalization": DISPLAY_NORMALIZATION_FILTER,
         "input": str(args.input),
         "output": str(args.output),
         "amount": args.amount,
