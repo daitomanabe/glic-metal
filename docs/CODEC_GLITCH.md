@@ -44,8 +44,9 @@ macOS専用の非同期処理レーンです。圧縮video payload byteは変更
    `resolution_hop`はencode前に入力を縮小します。
 3. 選択したVideoToolbox hardware encoderが`RealTime` modeでpacketを生成し、元の
    `CMSampleBufferRef`を再構築・payload copyせずdecoderへ渡します。
-4. H.264の`pframe_loss`だけが選択したencode済みframeをholdします。HEVC/ProResの
-   `pframe_loss`と`idr_starvation`はdecoderを壊さないfused-Metal履歴holdです。
+4. H.264の`pframe_loss`と各codecの`idr_starvation`は選択したencode済みframeを
+   holdします。HEVC/ProResの`pframe_loss`はdecoderを壊さないfused-Metal履歴
+   holdです。
 5. decoderの420v Y/CbCr planeを`CVMetalTextureCache`から直接参照し、現在frameと
    近い／遠いBGRA履歴を1つのfused Metal kernelへ渡します。
 6. 36 effectすべてが公開契約の32BGRA outputを1回のGPU dispatchで生成します。
@@ -297,8 +298,8 @@ vary across macOS, Apple silicon, and VideoToolbox versions even with one seed.
    input, while `resolution_hop` scales its encode input down.
 3. The VideoToolbox encoder produces a packet in `RealTime` mode. Its original
    `CMSampleBufferRef` reaches the decoder without payload rebuild or copy.
-4. Only H.264 `pframe_loss` holds encoded samples. HEVC/ProRes `pframe_loss`
-   and `idr_starvation` use decoder-safe fused-Metal history holds.
+4. H.264 `pframe_loss` and each codec's `idr_starvation` hold encoded samples.
+   HEVC/ProRes `pframe_loss` uses a decoder-safe fused-Metal history hold.
 5. `CVMetalTextureCache` maps the decoder's 420v Y/CbCr planes directly, and
    one fused kernel reads the current planes plus near/far BGRA history.
 6. All 36 effects create the stable 32BGRA output in one GPU dispatch. Only

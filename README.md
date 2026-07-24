@@ -246,8 +246,8 @@ macroblock状tileでdigital damageを作ります。`reference_timewarp`は4〜1
 新しい6 effectは、複数時点の領域合成、再帰的な自己block copy、予測と残差の
 再合成、GPU grain、復元filter feedback、領域別concealmentをMetal-backed pathで
 実装します。
-H.264の`pframe_loss`だけがencode済みsampleをholdします。HEVC/ProResの
-`pframe_loss`と`idr_starvation`はdecoderを壊さないfused-Metal履歴holdです。
+H.264の`pframe_loss`と各codecの`idr_starvation`はencode済みsampleをholdします。
+HEVC/ProResの`pframe_loss`はdecoderを壊さないfused-Metal履歴holdです。
 
 `prepare`は通常stageのhardware encoderでbackendを検証し、QP/cascade/縮小encoderと
 decoderは最初の利用時に遅延生成します。VideoToolboxの`RealTime`とlow-latency rate
@@ -884,9 +884,9 @@ instead of reusing a compressed P packet. `resolution_hop` adds pixelation
 while restoring its one-half or one-quarter-resolution codec result.
 The six additional effects use Metal-backed multi-age regional composition,
 recursive self-copy, prediction/residual recomposition, synthesized grain,
-restoration feedback, and regional concealment. Only H.264 `pframe_loss`
-holds encoded samples. HEVC/ProRes `pframe_loss` and `idr_starvation` use
-decoder-safe fused-Metal history holds.
+restoration feedback, and regional concealment. H.264 `pframe_loss` and each
+codec's `idr_starvation` hold encoded samples. HEVC/ProRes `pframe_loss` uses a
+decoder-safe fused-Metal history hold.
 
 `prepare` validates the backend with the normal-stage hardware encoder;
 specialized QP/cascade/downscale encoders and the decoder are created on first
