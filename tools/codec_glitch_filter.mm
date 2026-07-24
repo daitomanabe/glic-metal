@@ -280,7 +280,7 @@ void writeStats(const Options &options,
   if (!output)
     throw std::runtime_error("could not open stats JSON: " + options.statsPath);
   output << std::fixed << std::setprecision(3) << "{\n"
-         << "  \"schema\": \"glic-codec-glitch-filter-v1\",\n"
+         << "  \"schema\": \"glic-codec-glitch-filter-v2\",\n"
          << "  \"processing_mode\": \"codec_glitch\",\n"
          << "  \"codec\": \"" << glic::codecGlitchCodecName(options.codec)
          << "\",\n"
@@ -306,6 +306,30 @@ void writeStats(const Options &options,
          << "  \"latency_p95_ms\": " << p95 << ",\n"
          << "  \"average_latency_milliseconds\": "
          << statistics.averageLatencyMilliseconds << ",\n"
+         << "  \"stage_latency_average_ms\": {\n"
+         << "    \"queue\": " << statistics.averageQueueLatencyMilliseconds
+         << ",\n"
+         << "    \"encode\": " << statistics.averageEncodeLatencyMilliseconds
+         << ",\n"
+         << "    \"sample_processing\": "
+         << statistics.averageSampleProcessingMilliseconds << ",\n"
+         << "    \"decode\": " << statistics.averageDecodeLatencyMilliseconds
+         << ",\n"
+         << "    \"post_process\": "
+         << statistics.averagePostProcessLatencyMilliseconds << ",\n"
+         << "    \"delivery_queue\": "
+         << statistics.averageDeliveryQueueLatencyMilliseconds << "\n"
+         << "  },\n"
+         << "  \"compressed_copy_bytes\": "
+         << statistics.compressedCopyBytes << ",\n"
+         << "  \"sample_buffer_rebuilds\": "
+         << statistics.sampleBufferRebuilds << ",\n"
+         << "  \"pixel_buffer_pool_requests\": "
+         << statistics.pixelBufferPoolRequests << ",\n"
+         << "  \"pixel_buffer_pool_failures\": "
+         << statistics.pixelBufferPoolFailures << ",\n"
+         << "  \"peak_in_flight_frames\": "
+         << statistics.peakInFlightFrames << ",\n"
          << "  \"fallback_frames\": " << fallbackFrames << ",\n"
          << "  \"intentional_repeat_frames\": " << intentionalRepeatFrames
          << ",\n"

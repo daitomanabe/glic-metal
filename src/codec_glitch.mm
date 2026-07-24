@@ -127,6 +127,24 @@ int64_t steadyNanoseconds() noexcept {
       .count();
 }
 
+uint64_t elapsedMicroseconds(
+    std::chrono::steady_clock::time_point started) noexcept {
+  if (started == std::chrono::steady_clock::time_point{})
+    return 0;
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  return static_cast<uint64_t>(std::max<int64_t>(
+      0, std::chrono::duration_cast<std::chrono::microseconds>(elapsed)
+             .count()));
+}
+
+void updateAtomicPeak(std::atomic<uint64_t> &peak, uint64_t value) noexcept {
+  uint64_t observed = peak.load(std::memory_order_relaxed);
+  while (observed < value &&
+         !peak.compare_exchange_weak(observed, value, std::memory_order_relaxed,
+                                     std::memory_order_relaxed)) {
+  }
+}
+
 struct NalSpan {
   size_t lengthOffset = 0;
   size_t payloadOffset = 0;
@@ -188,6 +206,9 @@ struct FrameContext {
   CMTime presentationTimeStamp = kCMTimeInvalid;
   CodecGlitchControls controls;
   std::chrono::steady_clock::time_point submittedAt;
+  std::chrono::steady_clock::time_point encodeSubmittedAt;
+  std::chrono::steady_clock::time_point sampleProcessingStartedAt;
+  std::chrono::steady_clock::time_point decodeSubmittedAt;
   int generation = 0;
   int targetGenerations = 1;
   bool lowResolution = false;
@@ -352,6 +373,7 @@ CodecGlitchFrame::CodecGlitchFrame(const CodecGlitchFrame &other) noexcept
       codecWarmupFrame(other.codecWarmupFrame),
       watchdogRecoveryFrame(other.watchdogRecoveryFrame),
       latencyMilliseconds(other.latencyMilliseconds),
+      deliveryQueuedAt(other.deliveryQueuedAt),
       pixelBuffer_(other.pixelBuffer_) {
   if (pixelBuffer_ != nullptr)
     CFRetain(pixelBuffer_);
@@ -377,6 +399,7 @@ CodecGlitchFrame::operator=(const CodecGlitchFrame &other) noexcept {
   codecWarmupFrame = other.codecWarmupFrame;
   watchdogRecoveryFrame = other.watchdogRecoveryFrame;
   latencyMilliseconds = other.latencyMilliseconds;
+  deliveryQueuedAt = other.deliveryQueuedAt;
   return *this;
 }
 
@@ -390,6 +413,7 @@ CodecGlitchFrame::CodecGlitchFrame(CodecGlitchFrame &&other) noexcept
       codecWarmupFrame(other.codecWarmupFrame),
       watchdogRecoveryFrame(other.watchdogRecoveryFrame),
       latencyMilliseconds(other.latencyMilliseconds),
+      deliveryQueuedAt(other.deliveryQueuedAt),
       pixelBuffer_(std::exchange(other.pixelBuffer_, nullptr)) {}
 
 CodecGlitchFrame &
@@ -409,6 +433,7 @@ CodecGlitchFrame::operator=(CodecGlitchFrame &&other) noexcept {
   codecWarmupFrame = other.codecWarmupFrame;
   watchdogRecoveryFrame = other.watchdogRecoveryFrame;
   latencyMilliseconds = other.latencyMilliseconds;
+  deliveryQueuedAt = other.deliveryQueuedAt;
   return *this;
 }
 
@@ -452,7 +477,22 @@ struct AtomicStatistics {
   std::atomic<uint64_t> codecErrors{0};
   std::atomic<uint64_t> recoveries{0};
   std::atomic<uint64_t> pollDrops{0};
+  std::atomic<uint64_t> compressedCopyBytes{0};
+  std::atomic<uint64_t> sampleBufferRebuilds{0};
+  std::atomic<uint64_t> pixelBufferPoolRequests{0};
+  std::atomic<uint64_t> pixelBufferPoolFailures{0};
+  std::atomic<uint64_t> peakInFlightFrames{0};
   std::atomic<uint64_t> totalLatencyMicroseconds{0};
+  std::atomic<uint64_t> totalQueueMicroseconds{0};
+  std::atomic<uint64_t> queueSamples{0};
+  std::atomic<uint64_t> totalEncodeMicroseconds{0};
+  std::atomic<uint64_t> encodeSamples{0};
+  std::atomic<uint64_t> totalSampleProcessingMicroseconds{0};
+  std::atomic<uint64_t> sampleProcessingSamples{0};
+  std::atomic<uint64_t> totalDecodeMicroseconds{0};
+  std::atomic<uint64_t> decodeSamples{0};
+  std::atomic<uint64_t> totalPostProcessMicroseconds{0};
+  std::atomic<uint64_t> postProcessSamples{0};
   std::atomic<double> lastLatencyMilliseconds{0.0};
   std::atomic<bool> hardwareEncoder{false};
   std::atomic<bool> hardwareDecoder{false};
@@ -468,6 +508,8 @@ struct CallbackDeliveryState {
   size_t count = 0;
   bool drainScheduled = false;
   std::atomic<uint64_t> drops{0};
+  std::atomic<uint64_t> totalQueueMicroseconds{0};
+  std::atomic<uint64_t> queueSamples{0};
   dispatch_group_t group = dispatch_group_create();
 };
 
@@ -494,6 +536,10 @@ void drainCallbackState(
     if (callback) {
       try {
         @autoreleasepool {
+          state->totalQueueMicroseconds.fetch_add(
+              elapsedMicroseconds(frame.deliveryQueuedAt),
+              std::memory_order_relaxed);
+          state->queueSamples.fetch_add(1, std::memory_order_relaxed);
           callback(frame);
         }
       } catch (...) {
@@ -570,6 +616,7 @@ private:
   bool configureFrameOptions(CodecStage &stage, FrameContext &context,
                              CFMutableDictionaryRef options,
                              std::string &error);
+  void recordSampleProcessing(FrameContext &context) noexcept;
   bool extractPacket(CodecStage &stage, CMSampleBufferRef sampleBuffer,
                      bool &keyFrame, int &nalLengthBytes,
                      CMVideoFormatDescriptionRef &format,
@@ -623,6 +670,8 @@ private:
   CVPixelBufferRef renderAdvancedRealtime(
       CVPixelBufferRef input, CVPixelBufferRef nearHistory,
       CVPixelBufferRef farHistory, const FrameContext &context);
+  CVReturn allocatePixelBuffer(CVPixelBufferPoolRef pool,
+                               CVPixelBufferRef *output) noexcept;
   void finishDecodedFrame(CodecStage &stage, FrameContext &context,
                           CVPixelBufferRef imageBuffer);
   void emit(FrameContext &context, CVPixelBufferRef imageBuffer,
@@ -1194,7 +1243,9 @@ FrameContext *CodecGlitchEngineImpl::acquireContext() {
     if (contexts_[index].inUse.compare_exchange_strong(
             expected, true, std::memory_order_acq_rel,
             std::memory_order_relaxed)) {
-      inFlight_.fetch_add(1, std::memory_order_relaxed);
+      const uint64_t current =
+          inFlight_.fetch_add(1, std::memory_order_relaxed) + 1;
+      updateAtomicPeak(statistics_.peakInFlightFrames, current);
       contexts_[index].decodeToken.store(0, std::memory_order_relaxed);
       contexts_[index].encodeToken.store(0, std::memory_order_relaxed);
       return &contexts_[index];
@@ -1419,6 +1470,9 @@ bool CodecGlitchEngineImpl::submit(CVPixelBufferRef input, uint64_t frameIndex,
                        configuration_.framesPerSecond);
   context->controls = controlsSnapshot;
   context->submittedAt = std::chrono::steady_clock::now();
+  context->encodeSubmittedAt = {};
+  context->sampleProcessingStartedAt = {};
+  context->decodeSubmittedAt = {};
   context->generation = 0;
   context->targetGenerations =
       controlsSnapshot.effect == CodecGlitchEffect::GenerationCascade
@@ -1489,6 +1543,16 @@ bool CodecGlitchEngineImpl::poll(CodecGlitchFrame &frame) {
 
 CodecGlitchStatistics CodecGlitchEngineImpl::stats() const noexcept {
   CodecGlitchStatistics result;
+  const auto averageMilliseconds =
+      [](const std::atomic<uint64_t> &total,
+         const std::atomic<uint64_t> &samples) noexcept {
+        const uint64_t count = samples.load(std::memory_order_relaxed);
+        return count == 0
+                   ? 0.0
+                   : static_cast<double>(
+                         total.load(std::memory_order_relaxed)) /
+                         (1000.0 * static_cast<double>(count));
+      };
   result.submittedFrames =
       statistics_.submitted.load(std::memory_order_relaxed);
   result.encodedFrames = statistics_.encoded.load(std::memory_order_relaxed);
@@ -1505,6 +1569,16 @@ CodecGlitchStatistics CodecGlitchEngineImpl::stats() const noexcept {
   if (callbackState_)
     result.pollQueueDrops +=
         callbackState_->drops.load(std::memory_order_relaxed);
+  result.compressedCopyBytes =
+      statistics_.compressedCopyBytes.load(std::memory_order_relaxed);
+  result.sampleBufferRebuilds =
+      statistics_.sampleBufferRebuilds.load(std::memory_order_relaxed);
+  result.pixelBufferPoolRequests =
+      statistics_.pixelBufferPoolRequests.load(std::memory_order_relaxed);
+  result.pixelBufferPoolFailures =
+      statistics_.pixelBufferPoolFailures.load(std::memory_order_relaxed);
+  result.peakInFlightFrames =
+      statistics_.peakInFlightFrames.load(std::memory_order_relaxed);
   result.lastLatencyMilliseconds =
       statistics_.lastLatencyMilliseconds.load(std::memory_order_relaxed);
   const uint64_t emitted = result.emittedFrames;
@@ -1514,6 +1588,26 @@ CodecGlitchStatistics CodecGlitchEngineImpl::stats() const noexcept {
           : static_cast<double>(statistics_.totalLatencyMicroseconds.load(
                 std::memory_order_relaxed)) /
                 (1000.0 * static_cast<double>(emitted));
+  result.averageQueueLatencyMilliseconds =
+      averageMilliseconds(statistics_.totalQueueMicroseconds,
+                          statistics_.queueSamples);
+  result.averageEncodeLatencyMilliseconds =
+      averageMilliseconds(statistics_.totalEncodeMicroseconds,
+                          statistics_.encodeSamples);
+  result.averageSampleProcessingMilliseconds =
+      averageMilliseconds(statistics_.totalSampleProcessingMicroseconds,
+                          statistics_.sampleProcessingSamples);
+  result.averageDecodeLatencyMilliseconds =
+      averageMilliseconds(statistics_.totalDecodeMicroseconds,
+                          statistics_.decodeSamples);
+  result.averagePostProcessLatencyMilliseconds =
+      averageMilliseconds(statistics_.totalPostProcessMicroseconds,
+                          statistics_.postProcessSamples);
+  if (callbackState_) {
+    result.averageDeliveryQueueLatencyMilliseconds =
+        averageMilliseconds(callbackState_->totalQueueMicroseconds,
+                            callbackState_->queueSamples);
+  }
   result.hardwareEncoder =
       statistics_.hardwareEncoder.load(std::memory_order_relaxed);
   result.hardwareDecoder =
@@ -1525,6 +1619,9 @@ CodecGlitchStatistics CodecGlitchEngineImpl::stats() const noexcept {
 
 void CodecGlitchEngineImpl::encodeInitial(FrameContext &context,
                                           CVPixelBufferRef input) {
+  statistics_.totalQueueMicroseconds.fetch_add(
+      elapsedMicroseconds(context.submittedAt), std::memory_order_relaxed);
+  statistics_.queueSamples.fetch_add(1, std::memory_order_relaxed);
   CVPixelBufferRef prepared = nullptr;
   CodecStage *stage = &stages_[kStageNormal];
 
@@ -1695,6 +1792,7 @@ void CodecGlitchEngineImpl::encodeOnStage(CodecStage &stage,
                 "Codec glitch operation tokens require a 64-bit macOS process");
   void *const callbackToken =
       reinterpret_cast<void *>(static_cast<uintptr_t>(encodeToken));
+  context.encodeSubmittedAt = std::chrono::steady_clock::now();
   const OSStatus status = VTCompressionSessionEncodeFrame(
       stage.encoder, input, context.presentationTimeStamp, duration,
       frameOptions, callbackToken, nullptr);
@@ -1706,12 +1804,28 @@ void CodecGlitchEngineImpl::encodeOnStage(CodecStage &stage,
                                                      std::memory_order_acquire))
       return;
     disarmEncodeDeadline(context);
+    statistics_.totalEncodeMicroseconds.fetch_add(
+        elapsedMicroseconds(context.encodeSubmittedAt),
+        std::memory_order_relaxed);
+    statistics_.encodeSamples.fetch_add(1, std::memory_order_relaxed);
     if (std::getenv("GLIC_CODEC_DEADLINE_DEBUG") != nullptr)
       std::fprintf(stderr, "codec-encode-submit-error frame=%llu status=%d\n",
                    static_cast<unsigned long long>(context.frameIndex),
                    static_cast<int>(status));
     markDecodeFailure(context);
   }
+}
+
+void CodecGlitchEngineImpl::recordSampleProcessing(
+    FrameContext &context) noexcept {
+  if (context.sampleProcessingStartedAt ==
+      std::chrono::steady_clock::time_point{})
+    return;
+  statistics_.totalSampleProcessingMicroseconds.fetch_add(
+      elapsedMicroseconds(context.sampleProcessingStartedAt),
+      std::memory_order_relaxed);
+  statistics_.sampleProcessingSamples.fetch_add(1, std::memory_order_relaxed);
+  context.sampleProcessingStartedAt = {};
 }
 
 bool CodecGlitchEngineImpl::extractPacket(CodecStage &stage,
@@ -1746,6 +1860,8 @@ bool CodecGlitchEngineImpl::extractPacket(CodecStage &stage,
     error = statusError("CMBlockBufferCopyDataBytes", copyStatus);
     return false;
   }
+  statistics_.compressedCopyBytes.fetch_add(dataLength,
+                                            std::memory_order_relaxed);
 
   nalLengthBytes = 0;
   if (configuration_.codec != CodecGlitchCodec::ProRes422) {
@@ -1870,6 +1986,7 @@ bool CodecGlitchEngineImpl::decodeBytes(
     error = statusError("CMSampleBufferCreateReady", status);
     return false;
   }
+  statistics_.sampleBufferRebuilds.fetch_add(1, std::memory_order_relaxed);
   CFArrayRef attachments =
       CMSampleBufferGetSampleAttachmentsArray(sample, true);
   if (!keyFrame && attachments != nullptr && CFArrayGetCount(attachments) > 0) {
@@ -1889,6 +2006,8 @@ bool CodecGlitchEngineImpl::decodeBytes(
                 "Codec glitch decode tokens require a 64-bit macOS process");
   void *const callbackToken =
       reinterpret_cast<void *>(static_cast<uintptr_t>(decodeToken));
+  recordSampleProcessing(context);
+  context.decodeSubmittedAt = std::chrono::steady_clock::now();
   status = VTDecompressionSessionDecodeFrame(stage.decoder, sample, flags,
                                              callbackToken, nullptr);
   CFRelease(sample);
@@ -1902,6 +2021,10 @@ bool CodecGlitchEngineImpl::decodeBytes(
       return true;
     }
     disarmDecodeDeadline(context);
+    statistics_.totalDecodeMicroseconds.fetch_add(
+        elapsedMicroseconds(context.decodeSubmittedAt),
+        std::memory_order_relaxed);
+    statistics_.decodeSamples.fetch_add(1, std::memory_order_relaxed);
     error = statusError("VTDecompressionSessionDecodeFrame", status);
     return false;
   }
@@ -1924,6 +2047,10 @@ void CodecGlitchEngineImpl::handleCompressed(CodecStage &stage,
     return;
   disarmEncodeDeadline(*contextPointer);
   FrameContext &context = *contextPointer;
+  statistics_.totalEncodeMicroseconds.fetch_add(
+      elapsedMicroseconds(context.encodeSubmittedAt),
+      std::memory_order_relaxed);
+  statistics_.encodeSamples.fetch_add(1, std::memory_order_relaxed);
   try {
     @autoreleasepool {
       if (status != noErr || (infoFlags & kVTEncodeInfo_FrameDropped) != 0 ||
@@ -1940,6 +2067,7 @@ void CodecGlitchEngineImpl::handleCompressed(CodecStage &stage,
         return;
       }
       statistics_.encoded.fetch_add(1, std::memory_order_relaxed);
+      context.sampleProcessingStartedAt = std::chrono::steady_clock::now();
 
       bool keyFrame = false;
       int nalLengthBytes = 4;
@@ -1951,6 +2079,7 @@ void CodecGlitchEngineImpl::handleCompressed(CodecStage &stage,
       if (!extractPacket(stage, sampleBuffer, keyFrame, nalLengthBytes, format,
                          timing, error)) {
         lock.unlock();
+        recordSampleProcessing(context);
         markDecodeFailure(context);
         return;
       }
@@ -1962,6 +2091,7 @@ void CodecGlitchEngineImpl::handleCompressed(CodecStage &stage,
       if (decision.drop) {
         CFRelease(format);
         lock.unlock();
+        recordSampleProcessing(context);
         statistics_.intentionalDrops.fetch_add(1, std::memory_order_relaxed);
         repeatOrDrop(context, true);
         return;
@@ -1972,8 +2102,10 @@ void CodecGlitchEngineImpl::handleCompressed(CodecStage &stage,
           decodeBytes(stage, context, format, timing, keyFrame, bytes, error);
       CFRelease(format);
       lock.unlock();
-      if (!decoded)
+      if (!decoded) {
+        recordSampleProcessing(context);
         markDecodeFailure(context);
+      }
     }
   } catch (...) {
     failClaimedContext(context);
@@ -1997,6 +2129,17 @@ static void compressionOutputCallback(void *outputCallbackRefCon,
   }
 }
 
+CVReturn CodecGlitchEngineImpl::allocatePixelBuffer(
+    CVPixelBufferPoolRef pool, CVPixelBufferRef *output) noexcept {
+  statistics_.pixelBufferPoolRequests.fetch_add(1, std::memory_order_relaxed);
+  const CVReturn status =
+      CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, output);
+  if (status != kCVReturnSuccess || output == nullptr || *output == nullptr)
+    statistics_.pixelBufferPoolFailures.fetch_add(1,
+                                                  std::memory_order_relaxed);
+  return status;
+}
+
 CVPixelBufferRef CodecGlitchEngineImpl::renderScaled(CVPixelBufferRef input,
                                                      CVPixelBufferPoolRef pool,
                                                      int width, int height,
@@ -2004,8 +2147,7 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderScaled(CVPixelBufferRef input,
   if (input == nullptr || pool == nullptr || ciContext_ == nil)
     return nullptr;
   CVPixelBufferRef output = nullptr;
-  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &output) !=
-          kCVReturnSuccess ||
+  if (allocatePixelBuffer(pool, &output) != kCVReturnSuccess ||
       output == nullptr)
     return nullptr;
 
@@ -2046,8 +2188,7 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderFeedback(CVPixelBufferRef input,
       ciContext_ == nil)
     return nullptr;
   CVPixelBufferRef output = nullptr;
-  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
-                                         &output) != kCVReturnSuccess ||
+  if (allocatePixelBuffer(fullSizePool_, &output) != kCVReturnSuccess ||
       output == nullptr)
     return nullptr;
 
@@ -2083,8 +2224,7 @@ CodecGlitchEngineImpl::renderSliceDropout(CVPixelBufferRef input,
       ciContext_ == nil)
     return nullptr;
   CVPixelBufferRef output = nullptr;
-  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
-                                         &output) != kCVReturnSuccess ||
+  if (allocatePixelBuffer(fullSizePool_, &output) != kCVReturnSuccess ||
       output == nullptr)
     return nullptr;
 
@@ -2140,8 +2280,7 @@ CodecGlitchEngineImpl::renderSliceTransplant(CVPixelBufferRef input,
       ciContext_ == nil)
     return nullptr;
   CVPixelBufferRef output = nullptr;
-  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
-                                         &output) != kCVReturnSuccess ||
+  if (allocatePixelBuffer(fullSizePool_, &output) != kCVReturnSuccess ||
       output == nullptr)
     return nullptr;
 
@@ -2193,8 +2332,7 @@ CodecGlitchEngineImpl::renderPayloadXor(CVPixelBufferRef input,
   if (input == nullptr || fullSizePool_ == nullptr || ciContext_ == nil)
     return nullptr;
   CVPixelBufferRef output = nullptr;
-  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
-                                         &output) != kCVReturnSuccess ||
+  if (allocatePixelBuffer(fullSizePool_, &output) != kCVReturnSuccess ||
       output == nullptr)
     return nullptr;
 
@@ -2287,8 +2425,7 @@ CodecGlitchEngineImpl::renderCompressionArtifacts(CVPixelBufferRef input,
   if (input == nullptr || fullSizePool_ == nullptr || ciContext_ == nil)
     return nullptr;
   CVPixelBufferRef output = nullptr;
-  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
-                                         &output) != kCVReturnSuccess ||
+  if (allocatePixelBuffer(fullSizePool_, &output) != kCVReturnSuccess ||
       output == nullptr)
     return nullptr;
 
@@ -2361,8 +2498,7 @@ CodecGlitchEngineImpl::renderChromaEcho(CVPixelBufferRef input,
       ciContext_ == nil)
     return nullptr;
   CVPixelBufferRef output = nullptr;
-  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
-                                         &output) != kCVReturnSuccess ||
+  if (allocatePixelBuffer(fullSizePool_, &output) != kCVReturnSuccess ||
       output == nullptr)
     return nullptr;
 
@@ -2437,8 +2573,7 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderTemporalPolyphony(
       fullSizePool_ == nullptr || ciContext_ == nil)
     return nullptr;
   CVPixelBufferRef output = nullptr;
-  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
-                                         &output) != kCVReturnSuccess ||
+  if (allocatePixelBuffer(fullSizePool_, &output) != kCVReturnSuccess ||
       output == nullptr)
     return nullptr;
 
@@ -2486,8 +2621,7 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderIntraCannibalism(
   if (input == nullptr || fullSizePool_ == nullptr || ciContext_ == nil)
     return nullptr;
   CVPixelBufferRef output = nullptr;
-  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
-                                         &output) != kCVReturnSuccess ||
+  if (allocatePixelBuffer(fullSizePool_, &output) != kCVReturnSuccess ||
       output == nullptr)
     return nullptr;
 
@@ -2553,8 +2687,7 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderResidualRift(
       ciContext_ == nil)
     return nullptr;
   CVPixelBufferRef output = nullptr;
-  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
-                                         &output) != kCVReturnSuccess ||
+  if (allocatePixelBuffer(fullSizePool_, &output) != kCVReturnSuccess ||
       output == nullptr)
     return nullptr;
 
@@ -2624,8 +2757,7 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderCodecGrainSynth(
   if (input == nullptr || fullSizePool_ == nullptr || ciContext_ == nil)
     return nullptr;
   CVPixelBufferRef output = nullptr;
-  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
-                                         &output) != kCVReturnSuccess ||
+  if (allocatePixelBuffer(fullSizePool_, &output) != kCVReturnSuccess ||
       output == nullptr)
     return nullptr;
 
@@ -2695,8 +2827,7 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderRecursiveCodecSkin(
       ciContext_ == nil)
     return nullptr;
   CVPixelBufferRef output = nullptr;
-  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
-                                         &output) != kCVReturnSuccess ||
+  if (allocatePixelBuffer(fullSizePool_, &output) != kCVReturnSuccess ||
       output == nullptr)
     return nullptr;
 
@@ -2750,8 +2881,7 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderConcealmentChoreography(
       fullSizePool_ == nullptr || ciContext_ == nil)
     return nullptr;
   CVPixelBufferRef output = nullptr;
-  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
-                                         &output) != kCVReturnSuccess ||
+  if (allocatePixelBuffer(fullSizePool_, &output) != kCVReturnSuccess ||
       output == nullptr)
     return nullptr;
 
@@ -2912,8 +3042,7 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderAdvancedRealtime(
       fullSizePool_ == nullptr || ciContext_ == nil)
     return nullptr;
   CVPixelBufferRef output = nullptr;
-  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, fullSizePool_,
-                                         &output) != kCVReturnSuccess ||
+  if (allocatePixelBuffer(fullSizePool_, &output) != kCVReturnSuccess ||
       output == nullptr)
     return nullptr;
 
@@ -3267,6 +3396,10 @@ void CodecGlitchEngineImpl::handleDecoded(CodecStage &stage,
   }
   try {
     disarmDecodeDeadline(*context);
+    statistics_.totalDecodeMicroseconds.fetch_add(
+        elapsedMicroseconds(context->decodeSubmittedAt),
+        std::memory_order_relaxed);
+    statistics_.decodeSamples.fetch_add(1, std::memory_order_relaxed);
     if (status != noErr || imageBuffer == nullptr ||
         (infoFlags & kVTDecodeInfo_FrameDropped) != 0) {
       markDecodeFailure(*context);
@@ -3300,6 +3433,7 @@ void CodecGlitchEngineImpl::finishDecodedFrame(CodecStage &stage,
     return;
   }
 
+  const auto postProcessStartedAt = std::chrono::steady_clock::now();
   CVPixelBufferRef processed = nullptr;
   bool requiredPostProcessing = false;
   if (stage.lowResolution ||
@@ -3452,11 +3586,17 @@ void CodecGlitchEngineImpl::finishDecodedFrame(CodecStage &stage,
   }
 
   if (requiredPostProcessing && processed == nullptr) {
+    statistics_.totalPostProcessMicroseconds.fetch_add(
+        elapsedMicroseconds(postProcessStartedAt), std::memory_order_relaxed);
+    statistics_.postProcessSamples.fetch_add(1, std::memory_order_relaxed);
     markDecodeFailure(context);
     return;
   }
 
   CVPixelBufferRef output = processed != nullptr ? processed : imageBuffer;
+  statistics_.totalPostProcessMicroseconds.fetch_add(
+      elapsedMicroseconds(postProcessStartedAt), std::memory_order_relaxed);
+  statistics_.postProcessSamples.fetch_add(1, std::memory_order_relaxed);
   emit(context, output, false);
   if (processed != nullptr)
     CFRelease(processed);
@@ -3575,6 +3715,7 @@ void CodecGlitchEngineImpl::emit(FrameContext &context,
   frame.codecWarmupFrame = context.codecWarmup;
   frame.watchdogRecoveryFrame = context.watchdogRecovery;
   frame.latencyMilliseconds = milliseconds;
+  frame.deliveryQueuedAt = std::chrono::steady_clock::now();
 
   statistics_.emitted.fetch_add(1, std::memory_order_relaxed);
   statistics_.totalLatencyMicroseconds.fetch_add(

@@ -125,8 +125,19 @@ struct CodecGlitchStatistics {
   uint64_t codecErrors = 0;
   uint64_t watchdogRecoveries = 0;
   uint64_t pollQueueDrops = 0;
+  uint64_t compressedCopyBytes = 0;
+  uint64_t sampleBufferRebuilds = 0;
+  uint64_t pixelBufferPoolRequests = 0;
+  uint64_t pixelBufferPoolFailures = 0;
+  uint64_t peakInFlightFrames = 0;
   double lastLatencyMilliseconds = 0.0;
   double averageLatencyMilliseconds = 0.0;
+  double averageQueueLatencyMilliseconds = 0.0;
+  double averageEncodeLatencyMilliseconds = 0.0;
+  double averageSampleProcessingMilliseconds = 0.0;
+  double averageDecodeLatencyMilliseconds = 0.0;
+  double averagePostProcessLatencyMilliseconds = 0.0;
+  double averageDeliveryQueueLatencyMilliseconds = 0.0;
   bool hardwareEncoder = false;
   bool hardwareDecoder = false;
   bool baseFrameQpSupported = false;
@@ -161,6 +172,9 @@ public:
   bool codecWarmupFrame = false;
   bool watchdogRecoveryFrame = false;
   double latencyMilliseconds = 0.0;
+  // Internal delivery instrumentation. Hosts should use latencyMilliseconds;
+  // this timestamp only measures time spent in the private callback ring.
+  std::chrono::steady_clock::time_point deliveryQueuedAt;
 
 private:
   CVPixelBufferRef pixelBuffer_ = nullptr;
