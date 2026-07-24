@@ -296,8 +296,9 @@ decode生存率をまとめてrankingします。詳細は
 
 motion/residual/reference、semantic/depth/audio、実multi-decoder合成、異種codec直列処理、
 token-free自動探索は[Codec Lab](docs/CODEC_LAB.md)へ分離しています。
-さらにMPEG-2の圧縮motion vectorと量子化DCT係数を直接変更する8 effectは、
-独立したFFglitch transplication経路です。
+さらにMPEG-2の圧縮motion vector、量子化DCT係数、quantizer scaleを直接変更する
+12 effectと、MPEG-4 Part 2の圧縮MVを直接変更する4 variantは、独立した
+FFglitch transplication経路です。
 
 ```bash
 FFEDIT="$(python3 scripts/install_ffglitch_reference.py --print-ffedit)"
@@ -307,6 +308,12 @@ python3 scripts/process_native_syntax_glitch.py input.mov direct.mp4 \
 
 H.264/HEVCのentropy field直接編集は未実装でfail-closedします。詳細と証跡契約は
 [Native Compressed Syntax Glitch](docs/NATIVE_SYNTAX_GLITCH.md)を参照してください。
+全16 variantの実動画差分と非類似性rankingは次で自動生成できます。
+
+```bash
+python3 scripts/evaluate_native_syntax_glitches.py input.mov \
+  --output-dir search-runs/native-syntax --codec all --resume
+```
 
 ### グリッチ差分QA
 
@@ -917,11 +924,13 @@ Motion/residual/reference reconstruction, semantic/depth/audio processing,
 true multi-decoder blending, cross-codec chains, and token-free evolutionary
 search are documented in [Codec Lab](docs/CODEC_LAB.md).
 
-Eight additional effects directly mutate MPEG-2 encoded motion vectors or
-quantized DCT coefficients through FFglitch transplication. This is a separate
-offline process with retained syntax JSON and before/after bitstreams; it is
-not a decoded reconstruction proxy. H.264/HEVC entropy-field editing is not
-implemented and fails closed. See
+Twelve effects directly mutate MPEG-2 encoded motion vectors, quantized DCT
+coefficients, or quantizer scales through FFglitch transplication. Four
+additional codec-effect variants apply the MV family to MPEG-4 Part 2. This is
+a separate offline process with retained syntax JSON and before/after
+bitstreams; it is not a decoded reconstruction proxy. A token-free batch tool
+ranks actual-video difference and diversity across all 16 variants.
+H.264/HEVC entropy-field editing is not implemented and fails closed. See
 [Native Compressed Syntax Glitch](docs/NATIVE_SYNTAX_GLITCH.md).
 
 ### Glitch difference QA

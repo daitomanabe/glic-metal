@@ -200,14 +200,17 @@ subprocessとして起動し、`resources/offline-codec-effects.json`で対応co
 異なるframe数のpreview比較には`scripts/evaluate_offline_packet_glitches.py`を使います。
 詳細は`docs/OFFLINE_PACKET_GLITCH.md`を参照してください。
 
-Syntax/解析系21 workflow、MPEG-2圧縮syntax直接編集8 effect、
+Syntax/解析系21 workflow、MPEG-2/MPEG-4 Part 2圧縮syntax直接編集
+12 effect・16 codec-effect variant、
 structured/transport/metadata系11 operationも
 リアルタイムC ABIへ混在させません。
 `scripts/process_codec_lab.py`、`scripts/process_native_syntax_glitch.py`、
+`scripts/evaluate_native_syntax_glitches.py`、
 `scripts/evolutionary_codec_search.py`をfile単位で実行し、
 `implementation_level`を必ず確認します。decoded reconstruction proxyを
 native codec syntax hookとして表示してはいけません。FFglitch laneは
-MPEG-2だけで、H.264/HEVC指定はfail-closedします。正規一覧は
+catalogにあるMPEG-2/MPEG-4 Part 2対応だけを許可し、H.264/HEVC指定は
+fail-closedします。正規一覧は
 `resources/codec-lab-effects.json`、詳細は`docs/CODEC_LAB.md`です。
 
 ### リソースパス
@@ -317,10 +320,13 @@ counts. See `docs/OFFLINE_PACKET_GLITCH.md`.
 Syntax reconstruction and analysis/search are separate offline workflows too.
 Read `codec-lab-effects.json`; launch `process_codec_lab.py`,
 `process_native_syntax_glitch.py`,
+`evaluate_native_syntax_glitches.py`,
 `process_structured_codec_glitch.py`, `process_transport_glitch.py`,
 `process_metadata_glitch.py`, or `evolutionary_codec_search.py` out of
 process; and retain the declared
 `implementation_level`. Never present a decoded reconstruction proxy as a
 native bitstream syntax hook. See `docs/CODEC_LAB.md`.
-The direct compressed-syntax lane is limited to MPEG-2 `mv`/`q_dct`
-transplication through external FFglitch; H.264/HEVC requests must fail closed.
+The direct compressed-syntax lane is limited to catalogued MPEG-2
+`mv`/`q_dct`/`qscale` and MPEG-4 Part 2 `mv` transplication through external
+FFglitch; H.264/HEVC requests must fail closed. Use the token-free evaluator
+for actual-video difference and diversity ranking across all 16 variants.

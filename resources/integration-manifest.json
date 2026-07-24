@@ -169,9 +169,12 @@
       "sdk_helper": "Tools/native_syntax_glitch.py",
       "installer": "scripts/install_ffglitch_reference.py",
       "sdk_installer": "Tools/install_ffglitch_reference.py",
+      "ranking_entrypoint": "scripts/evaluate_native_syntax_glitches.py",
+      "sdk_ranking_entrypoint": "Tools/evaluate_native_syntax_glitches.py",
       "catalog": "resources/codec-lab-effects.json",
-      "effect_count": 8,
-      "codec": "mpeg2",
+      "effect_count": 12,
+      "codec_effect_variant_count": 16,
+      "codecs": ["mpeg2", "mpeg4_part2"],
       "container": "avi",
       "dependency": "external_FFglitch_ffedit_0.10.2_GPL-2.0-or-later",
       "persistent_evidence": [
@@ -183,8 +186,10 @@
         "ffedit_logs",
         "sha256",
         "codec_probe",
-        "json_report"
+        "json_report",
+        "actual_video_difference_ranking"
       ],
+      "token_free_ranking": true,
       "h264_hevc_direct_support": "not_implemented_fail_closed",
       "realtime_claim": false
     },

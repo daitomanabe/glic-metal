@@ -54,6 +54,12 @@ def main() -> int:
         catalog["native_compressed_syntax_lab"]["implementation_levels"]
         == native_syntax.IMPLEMENTATION_LEVEL
     )
+    assert set(
+        catalog["native_compressed_syntax_lab"]["codec_support"][
+            "mpeg4_part2"
+        ]
+    ) == set(native_syntax.MOTION_EFFECTS)
+    assert catalog["native_compressed_syntax_lab"]["token_free_ranking"] is True
     assert (
         set(catalog["analysis_and_search"]["effect_names"])
         == set(lab.ANALYSIS_EFFECTS) | {"evolutionary_codec_search"}

@@ -11,8 +11,8 @@
 Python image-analysis workflows additionally use the packages in
 `requirements-qa.txt`.
 
-Direct MPEG-2 motion-vector/qDCT editing additionally requires the external
-FFglitch 0.10.2 `ffedit` executable. On Apple Silicon, install the
+Direct MPEG-2 MV/qDCT/qscale and MPEG-4 Part 2 MV editing additionally requires
+the external FFglitch 0.10.2 `ffedit` executable. On Apple Silicon, install the
 checksum-pinned official build into the ignored cache:
 
 ```bash

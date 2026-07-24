@@ -58,6 +58,7 @@ REQUIRED_PATHS = (
     "scripts/process_codec_lab.py",
     "scripts/process_native_syntax_glitch.py",
     "scripts/native_syntax_glitch.py",
+    "scripts/evaluate_native_syntax_glitches.py",
     "scripts/install_ffglitch_reference.py",
     "scripts/process_structured_codec_glitch.py",
     "scripts/structured_bitstream.py",

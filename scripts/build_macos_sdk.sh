@@ -93,6 +93,7 @@ for tool in \
   process_codec_lab.py \
   process_native_syntax_glitch.py \
   native_syntax_glitch.py \
+  evaluate_native_syntax_glitches.py \
   process_structured_codec_glitch.py \
   structured_bitstream.py \
   process_transport_glitch.py \

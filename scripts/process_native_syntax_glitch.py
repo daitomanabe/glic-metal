@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Direct MPEG-2 motion-vector and quantized-DCT bitstream editing."""
+"""Direct MPEG-2/MPEG-4 Part 2 compressed-syntax editing."""
 
 from __future__ import annotations
 
@@ -143,8 +143,8 @@ def normalized_encode_command(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Directly mutate entropy-coded MPEG-2 motion vectors or quantized "
-            "DCT coefficients through FFglitch transplication."
+            "Directly mutate catalogued MPEG-2 or MPEG-4 Part 2 encoded "
+            "fields through FFglitch transplication."
         )
     )
     parser.add_argument("input", type=Path)

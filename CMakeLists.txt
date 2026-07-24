@@ -375,6 +375,10 @@ if(BUILD_TESTING)
         add_test(NAME glic_native_syntax_glitch_helpers
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_native_syntax_glitch.py")
+        add_test(NAME glic_native_syntax_ranking_selftest
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${PROJECT_SOURCE_DIR}/scripts/evaluate_native_syntax_glitches.py"
+                         --selftest)
         add_test(NAME glic_transport_glitch_helpers
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_transport_glitch.py")
@@ -599,6 +603,7 @@ install(PROGRAMS scripts/process_multicodec_glitch.py
                  scripts/process_codec_lab.py
                  scripts/process_native_syntax_glitch.py
                  scripts/native_syntax_glitch.py
+                 scripts/evaluate_native_syntax_glitches.py
                  scripts/process_structured_codec_glitch.py
                  scripts/structured_bitstream.py
                  scripts/process_transport_glitch.py

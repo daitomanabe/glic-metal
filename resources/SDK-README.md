@@ -31,8 +31,10 @@ isolated process, and follow `Documentation/OFFLINE_PACKET_GLITCH.md`.
 `Tools/process_codec_lab.py` and `Tools/evolutionary_codec_search.py` provide
 the separate syntax/analysis workflows. Their exit status and JSON report are
 the completion contract; do not call them from a capture or render callback.
-`Tools/process_native_syntax_glitch.py` provides true MPEG-2 motion-vector and
-qDCT transplication through a separately installed FFglitch `ffedit`.
+`Tools/process_native_syntax_glitch.py` provides true MPEG-2 MV/qDCT/qscale
+and MPEG-4 Part 2 MV transplication through a separately installed FFglitch
+`ffedit`. `Tools/evaluate_native_syntax_glitches.py` renders and
+diversity-ranks all supported variants using actual-video metrics.
 `Tools/install_ffglitch_reference.py` installs the checksum-pinned Apple
 Silicon reference build into a cache; FFglitch is not bundled with this SDK.
 H.264/HEVC direct entropy editing is not implemented and fails closed.

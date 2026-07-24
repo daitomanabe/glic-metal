@@ -65,6 +65,7 @@ foreach(tool IN ITEMS
     process_codec_lab.py
     process_native_syntax_glitch.py
     native_syntax_glitch.py
+    evaluate_native_syntax_glitches.py
     install_ffglitch_reference.py
     evolutionary_codec_search.py
     evaluate_effect_difference.py)
@@ -89,6 +90,17 @@ if(NOT search_selftest_status EQUAL 0)
   message(FATAL_ERROR
           "installed search selftest failed:\n"
           "${search_selftest_output}\n${search_selftest_error}")
+endif()
+execute_process(
+  COMMAND "${consumer_python}"
+          "${install_dir}/bin/evaluate_native_syntax_glitches.py" --selftest
+  RESULT_VARIABLE native_ranking_selftest_status
+  OUTPUT_VARIABLE native_ranking_selftest_output
+  ERROR_VARIABLE native_ranking_selftest_error)
+if(NOT native_ranking_selftest_status EQUAL 0)
+  message(FATAL_ERROR
+          "installed native syntax ranking selftest failed:\n"
+          "${native_ranking_selftest_output}\n${native_ranking_selftest_error}")
 endif()
 execute_process(
   COMMAND "${consumer_python}"
