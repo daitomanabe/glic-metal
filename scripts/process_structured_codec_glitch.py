@@ -125,6 +125,24 @@ def encode_raw(
         if codec == "av1"
         else encoder_options(codec, fps, threads)
     )
+    if codec == "hevc" and effect in {
+        "temporal_layer_dropout",
+        "temporal_layer_reorder",
+    }:
+        gop = max(8, fps)
+        options = [
+            "-c:v",
+            "libx265",
+            "-preset",
+            "fast",
+            "-crf",
+            "24",
+            "-x265-params",
+            (
+                f"log-level=error:keyint={gop}:min-keyint={gop}:"
+                "scenecut=0:bframes=3:b-adapt=0:temporal-layers=3"
+            ),
+        ]
     command = [
         ffmpeg,
         "-nostdin",
