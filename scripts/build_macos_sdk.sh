@@ -93,6 +93,8 @@ for tool in \
   process_codec_lab.py \
   process_structured_codec_glitch.py \
   structured_bitstream.py \
+  process_transport_glitch.py \
+  transport_glitch.py \
   evolutionary_codec_search.py \
   probe_multicodec_capabilities.py \
   build_av2_reference.py \
