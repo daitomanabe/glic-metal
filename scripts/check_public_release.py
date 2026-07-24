@@ -50,6 +50,7 @@ REQUIRED_PATHS = (
     "presets.upstream.sha256",
     "scripts/check_public_release.py",
     "scripts/build_macos_sdk.sh",
+    "scripts/build_vvc_reference.py",
     "scripts/evaluate_offline_packet_glitches.py",
     "scripts/evolutionary_codec_search.py",
     "scripts/process_codec_lab.py",

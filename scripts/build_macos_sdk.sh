@@ -99,6 +99,7 @@ for tool in \
   evolutionary_codec_search.py \
   probe_multicodec_capabilities.py \
   build_av2_reference.py \
+  build_vvc_reference.py \
   evaluate_effect_difference.py; do
   run cmake -E copy_if_different \
     "${install_dir}/bin/${tool}" \

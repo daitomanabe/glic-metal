@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Actual encode/decode glitch loops for AV1, AV2, HEVC, VP9, and ProRes."""
+"""Actual encode/decode glitch loops for native and research video codecs."""
 
 from __future__ import annotations
 
@@ -14,7 +14,16 @@ import sys
 import time
 from pathlib import Path
 
-CODECS = ("av1", "av2", "hevc", "vp9", "prores")
+CODECS = (
+    "av1",
+    "av2",
+    "hevc",
+    "vp9",
+    "prores",
+    "vvc",
+    "theora",
+    "dirac",
+)
 SOFTWARE_EFFECTS = (
     "generation_cascade",
     "temporal_echo",
@@ -29,6 +38,8 @@ NATIVE_EFFECT_MAP = {
 }
 AVM_VERSION = "1.0.0"
 AVM_COMMIT = "966a7d7cd6fcf60360caf5dc413b2aeeb65e144d"
+VVENC_VERSION = "1.14.0"
+VVENC_COMMIT = "9428ea8636ae7f443ecde89999d16b2dfc421524"
 
 
 def require_tool(value: str) -> str:
@@ -135,6 +146,10 @@ def quality_for(codec: str, amount: float, generation: int) -> int:
     damage = min(1.0, amount * (0.62 + generation * 0.18))
     if codec == "av2":
         return round(36 + damage * 180)
+    if codec == "theora":
+        return round(8 - damage * 7)
+    if codec == "dirac":
+        return round(15_000_000 - damage * 13_000_000)
     return round(20 + damage * 38)
 
 
@@ -175,7 +190,37 @@ def ffmpeg_encoder(codec: str, quality: int, fps: int, threads: int) -> list[str
             "-g",
             str(fps * 2),
         ]
+    if codec == "theora":
+        return [
+            "-c:v",
+            "libtheora",
+            "-q:v",
+            str(max(0, min(10, quality))),
+            "-g",
+            str(fps * 2),
+        ]
+    if codec == "dirac":
+        return [
+            "-c:v",
+            "vc2",
+            "-b:v",
+            str(max(250_000, quality)),
+            "-g",
+            "1",
+        ]
     raise RuntimeError(f"FFmpeg encoder is not defined for {codec}")
+
+
+def ffmpeg_container(codec: str) -> tuple[str, str]:
+    if codec == "av1":
+        return ".webm", "libdav1d"
+    if codec == "vp9":
+        return ".webm", "libvpx-vp9"
+    if codec == "theora":
+        return ".ogv", "theora"
+    if codec == "dirac":
+        return ".mkv", "dirac"
+    raise RuntimeError(f"FFmpeg container is not defined for {codec}")
 
 
 def process_native(args: argparse.Namespace, root: Path, report: Path) -> dict:
@@ -275,7 +320,10 @@ def process_ffmpeg_codec(
     )
     stages: list[dict] = []
     for generation in range(1, args.generations + 1):
-        bitstream = work / f"{args.codec}-generation-{generation:02d}.webm"
+        extension, decoder = ffmpeg_container(args.codec)
+        bitstream = work / (
+            f"{args.codec}-generation-{generation:02d}{extension}"
+        )
         decoded = work / f"{args.codec}-decoded-{generation:02d}.mkv"
         quality = quality_for(args.codec, args.amount, generation)
         encode_command = [
@@ -294,7 +342,6 @@ def process_ffmpeg_codec(
             str(bitstream),
         ]
         encode_seconds = run(encode_command)
-        decoder = "libdav1d" if args.codec == "av1" else "libvpx-vp9"
         decode_command = [
             ffmpeg,
             "-nostdin",
@@ -329,6 +376,113 @@ def process_ffmpeg_codec(
                 "encode_seconds": round(encode_seconds, 6),
                 "decode_seconds": round(decode_seconds, 6),
                 "probe": stream_probe,
+            }
+        )
+        current = decoded
+    return current, stages
+
+
+def process_vvc(
+    args: argparse.Namespace,
+    ffmpeg: str,
+    ffprobe: str,
+    vvencapp: str,
+    work: Path,
+) -> tuple[Path, list[dict]]:
+    current = work / "normalized.mkv"
+    normalize_input(
+        ffmpeg,
+        args.input,
+        current,
+        args.width,
+        args.height,
+        args.fps,
+        args.max_frames,
+    )
+    version = subprocess.run(
+        [vvencapp, "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    version_text = (version.stdout + version.stderr).strip()
+    stages: list[dict] = []
+    for generation in range(1, args.generations + 1):
+        y4m_input = work / f"vvc-input-{generation:02d}.y4m"
+        bitstream = work / f"vvc-generation-{generation:02d}.266"
+        decoded = work / f"vvc-decoded-{generation:02d}.mkv"
+        run(
+            [
+                ffmpeg,
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(current),
+                "-an",
+                "-vf",
+                effect_filter(args.effect, args.amount, generation),
+                "-pix_fmt",
+                "yuv420p",
+                "-f",
+                "yuv4mpegpipe",
+                str(y4m_input),
+            ]
+        )
+        quality = min(63, quality_for("vvc", args.amount, generation))
+        encode_command = [
+            vvencapp,
+            "--preset",
+            "faster",
+            "-i",
+            str(y4m_input),
+            "--fps",
+            f"{args.fps}/1",
+            "-q",
+            str(quality),
+            "-t",
+            str(args.threads),
+            "--sdr",
+            "sdr_709",
+            "-o",
+            str(bitstream),
+        ]
+        encode_seconds = run(encode_command)
+        decode_seconds = run(
+            [
+                ffmpeg,
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-c:v",
+                "vvc",
+                "-i",
+                str(bitstream),
+                "-an",
+                "-c:v",
+                "ffv1",
+                str(decoded),
+            ]
+        )
+        stages.append(
+            {
+                "generation": generation,
+                "bitstream": str(bitstream),
+                "bitstream_bytes": bitstream.stat().st_size,
+                "bitstream_sha256": sha256(bitstream),
+                "quality_qp": quality,
+                "encoder": "Fraunhofer VVenC vvencapp",
+                "decoder": "FFmpeg vvc",
+                "vvenc_version": VVENC_VERSION,
+                "vvenc_commit": VVENC_COMMIT,
+                "vvenc_version_output": version_text,
+                "encode_seconds": round(encode_seconds, 6),
+                "decode_seconds": round(decode_seconds, 6),
+                "probe": probe_video(ffprobe, bitstream, count_frames=True),
             }
         )
         current = decoded
@@ -473,8 +627,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Run real codec encode/decode glitch generations. HEVC and ProRes "
-            "use the native VideoToolbox lane; AV1/VP9 use FFmpeg; AV2 uses "
-            "the official AVM v1.0.0 reference tools."
+            "use VideoToolbox; AV1/VP9/Theora/Dirac use FFmpeg; AV2 uses AVM; "
+            "VVC uses the official Fraunhofer VVenC tool."
         )
     )
     parser.add_argument("input", type=Path)
@@ -499,6 +653,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--avmdec", default=str(root / ".cache" / "avm-v1.0.0" / "build" / "avmdec")
+    )
+    parser.add_argument(
+        "--vvencapp",
+        default=str(
+            root
+            / ".cache"
+            / "vvenc-v1.14.0"
+            / "bin"
+            / "release-static"
+            / "vvencapp"
+        ),
     )
     args = parser.parse_args()
     args.input = args.input.expanduser().resolve()
@@ -551,9 +716,20 @@ def main() -> int:
             args, ffmpeg, ffprobe, avmenc, avmdec, work
         )
         backend = "AOMedia AVM reference v1.0.0"
+    elif args.codec == "vvc":
+        vvencapp = require_tool(args.vvencapp)
+        current, stages = process_vvc(
+            args, ffmpeg, ffprobe, vvencapp, work
+        )
+        backend = "Fraunhofer VVenC reference v1.14.0 + FFmpeg vvc decoder"
     else:
         current, stages = process_ffmpeg_codec(args, ffmpeg, ffprobe, work)
-        backend = "FFmpeg libaom/libdav1d" if args.codec == "av1" else "FFmpeg libvpx"
+        backend = {
+            "av1": "FFmpeg libaom/libdav1d",
+            "vp9": "FFmpeg libvpx",
+            "theora": "FFmpeg libtheora/theora",
+            "dirac": "FFmpeg VC-2/Dirac",
+        }[args.codec]
     preview_codec, preview_seconds = create_preview(args, ffmpeg, current)
     output_probe = probe_video(ffprobe, args.output, count_frames=True)
     frames = frame_count(output_probe)

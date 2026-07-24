@@ -62,6 +62,17 @@ def main() -> int:
         "--avmdec",
         default=str(root / ".cache" / "avm-v1.0.0" / "build" / "avmdec"),
     )
+    parser.add_argument(
+        "--vvencapp",
+        default=str(
+            root
+            / ".cache"
+            / "vvenc-v1.14.0"
+            / "bin"
+            / "release-static"
+            / "vvencapp"
+        ),
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
@@ -72,6 +83,7 @@ def main() -> int:
     native = executable(args.native_filter)
     avmenc = executable(args.avmenc)
     avmdec = executable(args.avmdec)
+    vvencapp = executable(args.vvencapp)
     catalog_path = root / "resources" / "offline-codec-effects.json"
     offline_catalog = json.loads(catalog_path.read_text())
     offline_codec_available = {
@@ -151,6 +163,22 @@ def main() -> int:
                 **native_probe(native, "prores_422"),
                 "backend": "VideoToolbox",
                 "realtime_claim": "measured_per_report",
+            },
+            "vvc": {
+                "available": vvencapp is not None and " vvc " in decoders,
+                "backend": "Fraunhofer VVenC v1.14.0 + FFmpeg vvc decoder",
+                "realtime_claim": False,
+                "vvencapp": vvencapp,
+            },
+            "theora": {
+                "available": "libtheora" in encoders and " theora " in decoders,
+                "backend": "FFmpeg libtheora/theora",
+                "realtime_claim": False,
+            },
+            "dirac": {
+                "available": " vc2 " in encoders and " dirac " in decoders,
+                "backend": "FFmpeg VC-2/Dirac",
+                "realtime_claim": False,
             },
         },
         "offline_packet_lab": {

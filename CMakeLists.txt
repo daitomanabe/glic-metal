@@ -602,6 +602,7 @@ install(PROGRAMS scripts/process_multicodec_glitch.py
                  scripts/evolutionary_codec_search.py
                  scripts/probe_multicodec_capabilities.py
                  scripts/build_av2_reference.py
+                 scripts/build_vvc_reference.py
                  tools/evaluate_effect_difference.py
         DESTINATION bin)
 install(DIRECTORY presets/
