@@ -8,6 +8,12 @@ semantic versioning for tagged releases.
 
 ### Added
 
+- A bilingual VideoToolbox Fast Path integration contract covering Phase 0–6,
+  honest zero-copy boundaries, the three public pixel paths, runtime evidence,
+  asynchronous ordering, SDK setup, and the reproducible 216-run matrix.
+- The generated macOS SDK now includes the realtime codec filter, its adjacent
+  metallib, the complete Fast Path validator, and the existing visual-diversity
+  evaluator under `Tools/`.
 - A single fused Metal reconstruction kernel now covers all 36 realtime codec
   effects directly from decoded NV12 planes, samples retained BGRA history
   through IOSurface textures, and writes the compatibility BGRA output in one
@@ -139,6 +145,10 @@ semantic versioning for tagged releases.
 
 ### Changed
 
+- The machine-readable integration and codec-lab catalogs now describe 420v
+  direct input, BGRA Metal conversion, NV12 plane mapping, fused dispatch,
+  ordered asynchronous delivery, compatibility fallback, and the complete
+  validation matrix.
 - The fused QP, IDR-starvation, chroma-echo, plane-split, recursive-skin,
   concealment, and GOP-accordion reconstructions now use distinct spatial,
   temporal, and color signatures. The Phase 6 visual evaluator no longer finds

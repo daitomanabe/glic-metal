@@ -47,7 +47,8 @@ run cmake -S "$repo_root" -B "$build_dir" \
   -DCMAKE_OSX_ARCHITECTURES="$architectures" \
   -DGLIC_BUILD_STANDALONE=OFF \
   -DGLIC_INSTALL=ON
-run cmake --build "$build_dir" --target glic_core --parallel
+run cmake --build "$build_dir" --target glic_core glic_codec_glitch_filter \
+  --parallel
 run cmake --install "$build_dir" --prefix "$install_dir"
 
 run /bin/mkdir -p "$sdk_dir"
@@ -86,6 +87,12 @@ run cmake -E copy_if_different \
   "${install_dir}/share/doc/glic-metal/AI_INTEGRATION.md" \
   "${sdk_dir}/AI_INTEGRATION.md"
 run /bin/mkdir -p "$tools_dir" "$documentation_dir"
+run cmake -E copy_if_different \
+  "${install_dir}/bin/glic_codec_glitch_filter" \
+  "${tools_dir}/glic_codec_glitch_filter"
+run cmake -E copy_if_different \
+  "${install_dir}/lib/glic/glic_realtime.metallib" \
+  "${tools_dir}/glic_realtime.metallib"
 for tool in \
   process_multicodec_glitch.py \
   process_offline_packet_glitch.py \
@@ -104,6 +111,8 @@ for tool in \
   build_av2_reference.py \
   build_vvc_reference.py \
   install_ffglitch_reference.py \
+  validate_videotoolbox_fast_path.py \
+  evaluate_codec_glitch_videos.py \
   evaluate_effect_difference.py; do
   run cmake -E copy_if_different \
     "${install_dir}/bin/${tool}" \
@@ -117,6 +126,7 @@ for document in \
   EMBEDDING.md \
   AI_INTEGRATION.md \
   CODEC_GLITCH.md \
+  VIDEOTOOLBOX_FAST_PATH.md \
   MULTICODEC_GLITCH.md \
   OFFLINE_PACKET_GLITCH.md \
   CODEC_LAB.md \

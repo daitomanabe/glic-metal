@@ -53,6 +53,17 @@ neither mutates or reuses a compressed payload.
 Query `glic_codec_glitch_effect_implementation_level()` instead of inferring
 native compressed-field access from an effect name.
 
+Set `glic_codec_glitch_config.pixel_path` before prepare. `AUTO` prefers the
+NV12/IOSurface/Metal path and permits BGRA compatibility fallback;
+`NV12_METAL` requires the fast path and fails closed; `BGRA_COMPATIBILITY`
+selects the previous path. Full-size video-range NV12 (`420v`) input reaches
+the encoder without BGRA staging. 32BGRA input is converted by Metal. Decoder
+planes are mapped through `CVMetalTextureCache`, one fused Metal dispatch
+creates the stable 32BGRA output, and completion is asynchronous but delivered
+in accepted-submission order. With `AUTO`, inspect the five path flags in
+`glic_codec_glitch_stats`; prepare success alone is not fast-path evidence.
+Read `Documentation/VIDEOTOOLBOX_FAST_PATH.md` before integration.
+
 Preparation creates pools and validates the normal hardware encoder.
 Specialized QP/cascade/downscale encoders and the decoder are created on first
 use. VideoToolbox `RealTime` and low-latency rate control are enabled by
@@ -73,6 +84,9 @@ extraction, decode, and timeout errors. Certification through the raw-video
 filter requires at least 960x540, at least 120 frames, preserved frame count,
 hardware encode/decode, 20 fps with p95 at or below 50 ms, and zero fallback,
 codec errors, watchdog recovery, backpressure, or output-queue drops.
+`Tools/validate_videotoolbox_fast_path.py` reproduces the 36-effect ×
+three-codec × two-resolution matrix. `Tools/evaluate_codec_glitch_videos.py`
+uses its normalized reports for actual-video difference and diversity ranking.
 
 Resolve the runtime files from `GlicMetalResources.bundle` and pass their paths
 through `glic_metal_config.preset_directory` and

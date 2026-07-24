@@ -39,6 +39,7 @@ REQUIRED_PATHS = (
     "docs/OFFLINE_PACKET_GLITCH.md",
     "docs/ORIGINAL_PRESET_REALTIME.md",
     "docs/PUBLIC_RELEASE.md",
+    "docs/VIDEOTOOLBOX_FAST_PATH.md",
     "external/stb/LICENSE",
     "external/stb/stb_image.h",
     "include/glic_metal/glic_metal.h",
@@ -53,6 +54,7 @@ REQUIRED_PATHS = (
     "scripts/check_public_release.py",
     "scripts/build_macos_sdk.sh",
     "scripts/build_vvc_reference.py",
+    "scripts/evaluate_codec_glitch_videos.py",
     "scripts/evaluate_offline_packet_glitches.py",
     "scripts/evolutionary_codec_search.py",
     "scripts/process_codec_lab.py",
@@ -69,6 +71,7 @@ REQUIRED_PATHS = (
     "scripts/process_offline_packet_glitch.py",
     "scripts/probe_multicodec_capabilities.py",
     "scripts/select_novel_moderate_presets.py",
+    "scripts/validate_videotoolbox_fast_path.py",
     "resources/SDK-README.md",
     "resources/integration-manifest.json",
     "resources/codec-lab-effects.json",
@@ -186,6 +189,7 @@ def verify_markdown_links(source: Path, errors: list[str]) -> int:
         source / "docs" / "EMBEDDING.md",
         source / "docs" / "PUBLIC_RELEASE.md",
         source / "docs" / "NATIVE_SYNTAX_GLITCH.md",
+        source / "docs" / "VIDEOTOOLBOX_FAST_PATH.md",
     ]
     checked = 0
     for document in documents:

@@ -60,6 +60,10 @@ GlicMetalSDK/
 ├── AI_INTEGRATION.md
 ├── Documentation/
 ├── Tools/
+│   ├── glic_codec_glitch_filter
+│   ├── glic_realtime.metallib
+│   ├── validate_videotoolbox_fast_path.py
+│   ├── evaluate_codec_glitch_videos.py
 │   └── requirements.txt
 └── SHA256SUMS
 ```

@@ -23,7 +23,8 @@ scripts/build_macos_sdk.sh build/GlicMetalSDK
 
 Xcode targetへXCFrameworkとresource bundleを追加し、`README.md`に列挙されたApple
 frameworkをlinkします。最初に`AI_INTEGRATION.md`、次に
-`Documentation/EMBEDDING.md`を読みます。
+`Documentation/EMBEDDING.md`を読みます。Codecを使う場合は
+`Documentation/VIDEOTOOLBOX_FAST_PATH.md`のpixel pathとruntime flagも確認します。
 
 ### 2. CMake packageを使う
 
@@ -59,6 +60,9 @@ python3 GlicMetalSDK/Tools/process_native_syntax_glitch.py input.mov direct.mp4 
 
 python3 GlicMetalSDK/Tools/evaluate_native_syntax_glitches.py input.mov \
   --output-dir search-runs/native-syntax --codec all --ffedit "$FFEDIT"
+
+python3 GlicMetalSDK/Tools/validate_videotoolbox_fast_path.py input.mov \
+  --output-dir validation/videotoolbox-fast-path
 ```
 
 CMake install:
@@ -76,6 +80,8 @@ Theora / Dirac処理はホストのcapture/render callbackから
 - Original / Spatial / Codecをpublic C ABIだけで処理できる
 - resource pathをbundleまたはCMake変数から解決している
 - Codec出力のownership、backpressure、終了時flushを処理している
+- 必須NV12/Metalなら`NV12_METAL`でfail closedし、`AUTO`なら5つのruntime
+  evidence flagを記録している
 - host全体で960×540・20fps以上、p95 50ms以下を再測定している
 - offline Toolsを別processで起動し、exit statusとJSONを検証している
 
@@ -93,7 +99,8 @@ scripts/build_macos_sdk.sh build/GlicMetalSDK
 Add `GlicMetal.xcframework` and `GlicMetalResources.bundle` to the Xcode target.
 Read `AI_INTEGRATION.md` first, then `Documentation/EMBEDDING.md`. Include only
 the public `<glic_metal/*.h>` headers and enumerate adopted preset names through
-the public C API.
+the public C API. Read `Documentation/VIDEOTOOLBOX_FAST_PATH.md` before
+integrating the codec lane.
 
 For CMake consumers:
 
@@ -119,6 +126,9 @@ python3 GlicMetalSDK/Tools/process_native_syntax_glitch.py input.mov direct.mp4 
 
 python3 GlicMetalSDK/Tools/evaluate_native_syntax_glitches.py input.mov \
   --output-dir search-runs/native-syntax --codec all --ffedit "$FFEDIT"
+
+python3 GlicMetalSDK/Tools/validate_videotoolbox_fast_path.py input.mov \
+  --output-dir validation/videotoolbox-fast-path
 ```
 
 Installed CMake packages expose `GLIC_METAL_TOOLS_DIR` and

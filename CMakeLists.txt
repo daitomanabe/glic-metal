@@ -279,6 +279,13 @@ if(APPLE)
     endif()
 endif()
 
+if(APPLE)
+add_executable(glic_codec_glitch_filter tools/codec_glitch_filter.mm)
+set_source_files_properties(tools/codec_glitch_filter.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_link_libraries(glic_codec_glitch_filter PRIVATE glic_core)
+endif()
+
 if(GLIC_BUILD_STANDALONE)
 add_executable(glic src/main.cpp)
 target_link_libraries(glic PRIVATE glic_core)
@@ -295,13 +302,6 @@ target_link_libraries(glic_realtime_filter PRIVATE glic_core)
 
 add_executable(glic_original_visual_filter tools/original_visual_filter.cpp)
 target_link_libraries(glic_original_visual_filter PRIVATE glic_core)
-
-if(APPLE)
-add_executable(glic_codec_glitch_filter tools/codec_glitch_filter.mm)
-set_source_files_properties(tools/codec_glitch_filter.mm
-    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-target_link_libraries(glic_codec_glitch_filter PRIVATE glic_core)
-endif()
 
 add_executable(glic_realtime_search tools/realtime_search.cpp)
 target_link_libraries(glic_realtime_search PRIVATE glic_core)
@@ -597,6 +597,9 @@ install(PROGRAMS scripts/run_search_supervisor.sh scripts/build_search_catalog.p
         scripts/build_fast_match_allowlist.py
         DESTINATION bin)
 endif()
+if(APPLE AND NOT GLIC_BUILD_STANDALONE)
+    install(TARGETS glic_codec_glitch_filter RUNTIME DESTINATION bin)
+endif()
 install(PROGRAMS scripts/process_multicodec_glitch.py
                  scripts/process_offline_packet_glitch.py
                  scripts/evaluate_offline_packet_glitches.py
@@ -614,6 +617,8 @@ install(PROGRAMS scripts/process_multicodec_glitch.py
                  scripts/build_av2_reference.py
                  scripts/build_vvc_reference.py
                  scripts/install_ffglitch_reference.py
+                 scripts/validate_videotoolbox_fast_path.py
+                 scripts/evaluate_codec_glitch_videos.py
                  tools/evaluate_effect_difference.py
         DESTINATION bin)
 install(DIRECTORY presets/
@@ -629,6 +634,7 @@ install(FILES resources/selected-presets.json
 install(FILES README.md LICENSE THIRD_PARTY_NOTICES.md
               docs/BUILDING.md docs/EMBEDDING.md docs/AI_INTEGRATION.md
               docs/CODEC_GLITCH.md docs/MULTICODEC_GLITCH.md
+              docs/VIDEOTOOLBOX_FAST_PATH.md
               docs/OFFLINE_PACKET_GLITCH.md docs/CODEC_LAB.md
               docs/NATIVE_SYNTAX_GLITCH.md
               docs/GLITCH_EXPANSION.md

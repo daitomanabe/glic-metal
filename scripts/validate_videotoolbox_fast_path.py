@@ -61,6 +61,12 @@ EFFECTS = (
 )
 CODECS = ("h264", "hevc", "prores_422")
 RESOLUTIONS = ("960x540", "1920x1080")
+SCRIPT_DIRECTORY = Path(__file__).resolve().parent
+DEFAULT_FILTER_BIN = (
+    SCRIPT_DIRECTORY / "glic_codec_glitch_filter"
+    if (SCRIPT_DIRECTORY / "glic_codec_glitch_filter").is_file()
+    else SCRIPT_DIRECTORY.parent / "build" / "glic_codec_glitch_filter"
+)
 
 
 class ValidationError(RuntimeError):
@@ -91,7 +97,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         description="Render and validate all realtime VideoToolbox fast paths."
     )
     parser.add_argument("input", type=Path)
-    parser.add_argument("--filter-bin", type=Path, default=Path("build/glic_codec_glitch_filter"))
+    parser.add_argument("--filter-bin", type=Path, default=DEFAULT_FILTER_BIN)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("--ffprobe", default="ffprobe")
