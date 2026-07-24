@@ -51,6 +51,11 @@ python3 -m pip install -r GlicMetalSDK/Tools/requirements.txt
 
 python3 GlicMetalSDK/Tools/process_codec_lab.py input.mov output.mp4 \
   --effect motion_vector_vortex --codec hevc
+
+FFEDIT="$(python3 GlicMetalSDK/Tools/install_ffglitch_reference.py \
+  --print-ffedit)"
+python3 GlicMetalSDK/Tools/process_native_syntax_glitch.py input.mov direct.mp4 \
+  --effect compressed_motion_vector_vortex --ffedit "$FFEDIT"
 ```
 
 CMake install:
@@ -103,6 +108,11 @@ The generated SDK also contains a self-contained `Tools/` directory:
 python3 -m pip install -r GlicMetalSDK/Tools/requirements.txt
 python3 GlicMetalSDK/Tools/process_codec_lab.py input.mov output.mp4 \
   --effect motion_vector_vortex --codec hevc
+
+FFEDIT="$(python3 GlicMetalSDK/Tools/install_ffglitch_reference.py \
+  --print-ffedit)"
+python3 GlicMetalSDK/Tools/process_native_syntax_glitch.py input.mov direct.mp4 \
+  --effect compressed_coefficient_sign_flip --amount 1.0 --ffedit "$FFEDIT"
 ```
 
 Installed CMake packages expose `GLIC_METAL_TOOLS_DIR` and
@@ -110,6 +120,10 @@ Installed CMake packages expose `GLIC_METAL_TOOLS_DIR` and
 metadata, all offline codec generations, and evolutionary workflows as child
 processes; never invoke them from a capture or render callback. Treat their
 exit status and JSON report as the completion contract.
+
+The direct compressed-syntax tool supports MPEG-2 only and invokes the
+separately installed GPL FFglitch executable. H.264/HEVC direct requests fail
+closed.
 
 `AI_INTEGRATION.md` and `integration-manifest.json` remain the normative
 human-readable and machine-readable contracts. See

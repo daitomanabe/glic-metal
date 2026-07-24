@@ -124,6 +124,7 @@ def main() -> int:
         == expected_codec_effects[-8:]
     )
     workflow_catalog_sections = {
+        "native_compressed_syntax_lab": "native_compressed_syntax_lab",
         "structured_bitstream_lab": "structured_bitstream_lab",
         "transport_glitch_lab": "transport_lab",
         "metadata_glitch_lab": "metadata_lab",
@@ -139,6 +140,15 @@ def main() -> int:
     assert manifest["offline_workflows"]["transport_glitch_lab"][
         "network_capture"
     ] is False
+    direct = manifest["offline_workflows"]["native_compressed_syntax_lab"]
+    assert direct["codec"] == "mpeg2"
+    assert direct["h264_hevc_direct_support"] == "not_implemented_fail_closed"
+    assert (
+        codec_lab_catalog["native_compressed_syntax_lab"][
+            "decoded_pixels_modified_before_transplication"
+        ]
+        is False
+    )
     for workflow in manifest["offline_workflows"].values():
         assert workflow["sdk_entrypoint"].startswith("Tools/")
 

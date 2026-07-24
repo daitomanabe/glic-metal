@@ -63,6 +63,9 @@ foreach(tool IN ITEMS
     process_offline_packet_glitch.py
     evaluate_offline_packet_glitches.py
     process_codec_lab.py
+    process_native_syntax_glitch.py
+    native_syntax_glitch.py
+    install_ffglitch_reference.py
     evolutionary_codec_search.py
     evaluate_effect_difference.py)
   if(NOT EXISTS "${install_dir}/bin/${tool}")

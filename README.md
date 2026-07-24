@@ -296,6 +296,17 @@ decode生存率をまとめてrankingします。詳細は
 
 motion/residual/reference、semantic/depth/audio、実multi-decoder合成、異種codec直列処理、
 token-free自動探索は[Codec Lab](docs/CODEC_LAB.md)へ分離しています。
+さらにMPEG-2の圧縮motion vectorと量子化DCT係数を直接変更する8 effectは、
+独立したFFglitch transplication経路です。
+
+```bash
+FFEDIT="$(python3 scripts/install_ffglitch_reference.py --print-ffedit)"
+python3 scripts/process_native_syntax_glitch.py input.mov direct.mp4 \
+  --effect compressed_motion_vector_vortex --ffedit "$FFEDIT"
+```
+
+H.264/HEVCのentropy field直接編集は未実装でfail-closedします。詳細と証跡契約は
+[Native Compressed Syntax Glitch](docs/NATIVE_SYNTAX_GLITCH.md)を参照してください。
 
 ### グリッチ差分QA
 
@@ -905,6 +916,13 @@ frame counts. See
 Motion/residual/reference reconstruction, semantic/depth/audio processing,
 true multi-decoder blending, cross-codec chains, and token-free evolutionary
 search are documented in [Codec Lab](docs/CODEC_LAB.md).
+
+Eight additional effects directly mutate MPEG-2 encoded motion vectors or
+quantized DCT coefficients through FFglitch transplication. This is a separate
+offline process with retained syntax JSON and before/after bitstreams; it is
+not a decoded reconstruction proxy. H.264/HEVC entropy-field editing is not
+implemented and fails closed. See
+[Native Compressed Syntax Glitch](docs/NATIVE_SYNTAX_GLITCH.md).
 
 ### Glitch difference QA
 

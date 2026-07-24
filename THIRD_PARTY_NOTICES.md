@@ -76,3 +76,18 @@ SOFTWARE.
 
 The submodule also retains its complete upstream notice in
 `external/stb/LICENSE`.
+
+## FFglitch
+
+The optional Native Compressed Syntax Glitch workflow invokes
+[FFglitch](https://ffglitch.org/) `ffedit` 0.10.2 as a separate executable.
+FFglitch is not included in this repository, the GLIC Metal library, or its
+resource bundle. The reference installer downloads the official archive
+directly from the FFglitch project and verifies its pinned SHA-256 checksum.
+
+FFglitch Copyright (c) 2017-2024 Ramiro Polla and FFmpeg contributors.
+
+The official binary reports GNU General Public License version 2 or, at the
+user's option, any later version. Its archive includes the complete upstream
+notice, and source is available from the
+[official FFglitch download page](https://ffglitch.org/download/).

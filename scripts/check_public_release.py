@@ -35,6 +35,7 @@ REQUIRED_PATHS = (
     "docs/EMBEDDING.md",
     "docs/GLITCH_EXPANSION.md",
     "docs/MULTICODEC_GLITCH.md",
+    "docs/NATIVE_SYNTAX_GLITCH.md",
     "docs/OFFLINE_PACKET_GLITCH.md",
     "docs/ORIGINAL_PRESET_REALTIME.md",
     "docs/PUBLIC_RELEASE.md",
@@ -55,6 +56,9 @@ REQUIRED_PATHS = (
     "scripts/evaluate_offline_packet_glitches.py",
     "scripts/evolutionary_codec_search.py",
     "scripts/process_codec_lab.py",
+    "scripts/process_native_syntax_glitch.py",
+    "scripts/native_syntax_glitch.py",
+    "scripts/install_ffglitch_reference.py",
     "scripts/process_structured_codec_glitch.py",
     "scripts/structured_bitstream.py",
     "scripts/process_transport_glitch.py",
@@ -77,6 +81,7 @@ REQUIRED_PATHS = (
     "tests/embed_metal_api_tests.mm",
     "tests/test_integration_manifest.py",
     "tests/test_codec_lab.py",
+    "tests/test_native_syntax_glitch.py",
     "tests/test_structured_bitstream.py",
     "tests/test_structured_codec_glitch.py",
     "tests/test_transport_glitch.py",
@@ -179,6 +184,7 @@ def verify_markdown_links(source: Path, errors: list[str]) -> int:
         source / "docs" / "AI_INTEGRATION.md",
         source / "docs" / "EMBEDDING.md",
         source / "docs" / "PUBLIC_RELEASE.md",
+        source / "docs" / "NATIVE_SYNTAX_GLITCH.md",
     ]
     checked = 0
     for document in documents:

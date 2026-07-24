@@ -93,6 +93,43 @@
       "av2_optical_flow_wound": "official_avm_cycle_plus_flow_reconstruction"
     }
   },
+  "native_compressed_syntax_lab": {
+    "entrypoint": "scripts/process_native_syntax_glitch.py",
+    "execution_class": "offline_external_transplication",
+    "realtime_certified": false,
+    "codec": "mpeg2",
+    "container": "avi",
+    "dependency": {
+      "name": "FFglitch ffedit",
+      "version": "0.10.2",
+      "license": "GPL-2.0-or-later",
+      "bundled": false,
+      "installer": "scripts/install_ffglitch_reference.py"
+    },
+    "may_produce_invalid_bitstream": false,
+    "decoded_pixels_modified_before_transplication": false,
+    "h264_hevc_direct_support": "not_implemented_fail_closed",
+    "effect_names": [
+      "compressed_motion_vector_vortex",
+      "compressed_motion_vector_mirror",
+      "compressed_motion_vector_quantizer",
+      "compressed_motion_vector_freeze",
+      "compressed_coefficient_sign_flip",
+      "compressed_coefficient_band_gate",
+      "compressed_coefficient_transplant",
+      "compressed_coefficient_scan_fold"
+    ],
+    "implementation_levels": {
+      "compressed_motion_vector_vortex": "native_mpeg2_ffglitch_motion_vector_entropy_transplication",
+      "compressed_motion_vector_mirror": "native_mpeg2_ffglitch_motion_vector_entropy_transplication",
+      "compressed_motion_vector_quantizer": "native_mpeg2_ffglitch_motion_vector_entropy_transplication",
+      "compressed_motion_vector_freeze": "native_mpeg2_ffglitch_motion_vector_entropy_transplication",
+      "compressed_coefficient_sign_flip": "native_mpeg2_ffglitch_quantized_dct_entropy_transplication",
+      "compressed_coefficient_band_gate": "native_mpeg2_ffglitch_quantized_dct_entropy_transplication",
+      "compressed_coefficient_transplant": "native_mpeg2_ffglitch_quantized_dct_entropy_transplication",
+      "compressed_coefficient_scan_fold": "native_mpeg2_ffglitch_quantized_dct_entropy_transplication"
+    }
+  },
   "structured_bitstream_lab": {
     "entrypoint": "scripts/process_structured_codec_glitch.py",
     "execution_class": "offline_isolated_process",

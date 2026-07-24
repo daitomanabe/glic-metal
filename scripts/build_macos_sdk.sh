@@ -91,6 +91,8 @@ for tool in \
   process_offline_packet_glitch.py \
   evaluate_offline_packet_glitches.py \
   process_codec_lab.py \
+  process_native_syntax_glitch.py \
+  native_syntax_glitch.py \
   process_structured_codec_glitch.py \
   structured_bitstream.py \
   process_transport_glitch.py \
@@ -100,6 +102,7 @@ for tool in \
   probe_multicodec_capabilities.py \
   build_av2_reference.py \
   build_vvc_reference.py \
+  install_ffglitch_reference.py \
   evaluate_effect_difference.py; do
   run cmake -E copy_if_different \
     "${install_dir}/bin/${tool}" \
@@ -116,6 +119,7 @@ for document in \
   MULTICODEC_GLITCH.md \
   OFFLINE_PACKET_GLITCH.md \
   CODEC_LAB.md \
+  NATIVE_SYNTAX_GLITCH.md \
   GLITCH_EXPANSION.md; do
   run cmake -E copy_if_different \
     "${install_dir}/share/doc/glic-metal/${document}" \

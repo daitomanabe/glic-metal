@@ -11,6 +11,18 @@
 Python image-analysis workflows additionally use the packages in
 `requirements-qa.txt`.
 
+Direct MPEG-2 motion-vector/qDCT editing additionally requires the external
+FFglitch 0.10.2 `ffedit` executable. On Apple Silicon, install the
+checksum-pinned official build into the ignored cache:
+
+```bash
+python3 scripts/install_ffglitch_reference.py
+```
+
+FFglitch is GPL-2.0-or-later and is neither linked into nor bundled with the
+MIT-licensed GLIC Metal library. See
+[NATIVE_SYNTAX_GLITCH.md](NATIVE_SYNTAX_GLITCH.md).
+
 ## Clone and build
 
 ```bash

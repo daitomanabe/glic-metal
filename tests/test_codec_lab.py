@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import process_codec_lab as lab  # noqa: E402
 import evolutionary_codec_search as search  # noqa: E402
+import native_syntax_glitch as native_syntax  # noqa: E402
 
 
 def main() -> int:
@@ -46,6 +47,13 @@ def main() -> int:
         "asymmetric_plane_codec",
     ]
     assert catalog["syntax_lab"]["effect_names"] == list(lab.SYNTAX_EFFECTS)
+    assert catalog["native_compressed_syntax_lab"]["effect_names"] == list(
+        native_syntax.EFFECTS
+    )
+    assert (
+        catalog["native_compressed_syntax_lab"]["implementation_levels"]
+        == native_syntax.IMPLEMENTATION_LEVEL
+    )
     assert (
         set(catalog["analysis_and_search"]["effect_names"])
         == set(lab.ANALYSIS_EFFECTS) | {"evolutionary_codec_search"}

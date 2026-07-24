@@ -134,6 +134,13 @@ search are also offline-only. Launch `scripts/process_codec_lab.py` or
 `resources/codec-lab-effects.json`, and preserve each report's
 `implementation_level`. See [CODEC_LAB.md](CODEC_LAB.md).
 
+Direct MPEG-2 motion-vector/qDCT editing is a third offline lane. Launch
+`scripts/process_native_syntax_glitch.py` with the separately installed
+FFglitch `ffedit` executable and preserve its bitstream/syntax evidence. Do not
+route H.264 or HEVC to this lane; those direct entropy edits are not
+implemented and fail closed. See
+[NATIVE_SYNTAX_GLITCH.md](NATIVE_SYNTAX_GLITCH.md).
+
 The original-style lane still performs input conversion and segmentation on
 the CPU before Metal reconstruction, so its public integration path is a
 preallocated CPU frame buffer. Compatibility mode can operate directly on the

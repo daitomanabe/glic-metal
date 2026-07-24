@@ -8,6 +8,11 @@ semantic versioning for tagged releases.
 
 ### Added
 
+- A true compressed-domain MPEG-2 syntax lane with four motion-vector and four
+  quantized-DCT effects. It uses checksum-pinned external FFglitch 0.10.2
+  transplication, retains before/after syntax and bitstream evidence, supports
+  preserved MPEG-2/AVI input, and fails closed for unimplemented H.264/HEVC
+  entropy editing.
 - Eight decoded-history/CoreImage-Metal realtime effects with an implementation
   level API and 960x540 actual-video performance/difference/technical-QA
   evidence.

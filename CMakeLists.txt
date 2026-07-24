@@ -372,6 +372,9 @@ if(BUILD_TESTING)
         add_test(NAME glic_structured_codec_glitch_helpers
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_structured_codec_glitch.py")
+        add_test(NAME glic_native_syntax_glitch_helpers
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${PROJECT_SOURCE_DIR}/tests/test_native_syntax_glitch.py")
         add_test(NAME glic_transport_glitch_helpers
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_transport_glitch.py")
@@ -594,6 +597,8 @@ install(PROGRAMS scripts/process_multicodec_glitch.py
                  scripts/process_offline_packet_glitch.py
                  scripts/evaluate_offline_packet_glitches.py
                  scripts/process_codec_lab.py
+                 scripts/process_native_syntax_glitch.py
+                 scripts/native_syntax_glitch.py
                  scripts/process_structured_codec_glitch.py
                  scripts/structured_bitstream.py
                  scripts/process_transport_glitch.py
@@ -603,6 +608,7 @@ install(PROGRAMS scripts/process_multicodec_glitch.py
                  scripts/probe_multicodec_capabilities.py
                  scripts/build_av2_reference.py
                  scripts/build_vvc_reference.py
+                 scripts/install_ffglitch_reference.py
                  tools/evaluate_effect_difference.py
         DESTINATION bin)
 install(DIRECTORY presets/
@@ -619,6 +625,7 @@ install(FILES README.md LICENSE THIRD_PARTY_NOTICES.md
               docs/BUILDING.md docs/EMBEDDING.md docs/AI_INTEGRATION.md
               docs/CODEC_GLITCH.md docs/MULTICODEC_GLITCH.md
               docs/OFFLINE_PACKET_GLITCH.md docs/CODEC_LAB.md
+              docs/NATIVE_SYNTAX_GLITCH.md
               docs/GLITCH_EXPANSION.md
               docs/DOWNSTREAM_QUICKSTART.md
         DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/glic-metal)

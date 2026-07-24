@@ -161,6 +161,33 @@
       "codecs": ["h264", "hevc", "av1", "vp9", "prores", "av2"],
       "realtime_claim": false
     },
+    "native_compressed_syntax_lab": {
+      "execution": "offline_external_transplication",
+      "entrypoint": "scripts/process_native_syntax_glitch.py",
+      "sdk_entrypoint": "Tools/process_native_syntax_glitch.py",
+      "helper": "scripts/native_syntax_glitch.py",
+      "sdk_helper": "Tools/native_syntax_glitch.py",
+      "installer": "scripts/install_ffglitch_reference.py",
+      "sdk_installer": "Tools/install_ffglitch_reference.py",
+      "catalog": "resources/codec-lab-effects.json",
+      "effect_count": 8,
+      "codec": "mpeg2",
+      "container": "avi",
+      "dependency": "external_FFglitch_ffedit_0.10.2_GPL-2.0-or-later",
+      "persistent_evidence": [
+        "source_bitstream",
+        "exported_syntax_json",
+        "mutated_syntax_json",
+        "damaged_bitstream",
+        "salvaged_intermediate",
+        "ffedit_logs",
+        "sha256",
+        "codec_probe",
+        "json_report"
+      ],
+      "h264_hevc_direct_support": "not_implemented_fail_closed",
+      "realtime_claim": false
+    },
     "analysis_and_evolutionary_lab": {
       "execution": "offline_process",
       "entrypoint": "scripts/process_codec_lab.py",
@@ -243,6 +270,7 @@
     "do_not_run_offline_packet_glitches_inside_realtime_callbacks",
     "do_not_decode_damaged_bitstreams_in_the_host_process",
     "do_not_claim_decoded_reconstruction_proxies_are_native_codec_syntax_hooks",
+    "do_not_route_direct_h264_or_hevc_entropy_edits_to_the_mpeg2_ffglitch_lane",
     "do_not_substitute_av1_for_av2_when_avm_is_unavailable",
     "do_not_claim_pixel_exact_equivalence_with_processing_glic"
   ],
@@ -259,6 +287,7 @@
     "multicodec": "docs/MULTICODEC_GLITCH.md",
     "offline_packet_glitch": "docs/OFFLINE_PACKET_GLITCH.md",
     "codec_lab": "docs/CODEC_LAB.md",
+    "native_compressed_syntax": "docs/NATIVE_SYNTAX_GLITCH.md",
     "glitch_expansion": "docs/GLITCH_EXPANSION.md"
   }
 }
