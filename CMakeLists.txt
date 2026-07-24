@@ -619,6 +619,7 @@ install(FILES README.md LICENSE THIRD_PARTY_NOTICES.md
               docs/BUILDING.md docs/EMBEDDING.md docs/AI_INTEGRATION.md
               docs/CODEC_GLITCH.md docs/MULTICODEC_GLITCH.md
               docs/OFFLINE_PACKET_GLITCH.md docs/CODEC_LAB.md
+              docs/GLITCH_EXPANSION.md
               docs/DOWNSTREAM_QUICKSTART.md
         DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/glic-metal)
 if(APPLE)

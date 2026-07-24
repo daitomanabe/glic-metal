@@ -20,6 +20,7 @@ search-runs/
 *.glic
 examples/output/
 test-videos/
+assets/*.mp4
 
 # Cache
 .cache/

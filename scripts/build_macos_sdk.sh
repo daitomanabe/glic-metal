@@ -115,7 +115,8 @@ for document in \
   CODEC_GLITCH.md \
   MULTICODEC_GLITCH.md \
   OFFLINE_PACKET_GLITCH.md \
-  CODEC_LAB.md; do
+  CODEC_LAB.md \
+  GLITCH_EXPANSION.md; do
   run cmake -E copy_if_different \
     "${install_dir}/share/doc/glic-metal/${document}" \
     "${documentation_dir}/${document}"

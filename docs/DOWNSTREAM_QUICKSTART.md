@@ -58,7 +58,8 @@ CMake install:
 - `${GLIC_METAL_TOOLS_DIR}` — installed Python entrypoints
 - `${GLIC_METAL_PYTHON_REQUIREMENTS}` — NumPy / OpenCV requirements
 
-Packet Lab、Syntax Lab、AV1 / AV2 / VP9処理はホストのcapture/render callbackから
+Packet、Syntax、structured、transport、metadata、AV1 / AV2 / VP9 / VVC /
+Theora / Dirac処理はホストのcapture/render callbackから
 呼びません。別processとして実行し、JSON reportを完了通知として扱います。
 `codec-lab-effects.json`と`offline-codec-effects.json`にない名前はfail-closedします。
 
@@ -71,6 +72,7 @@ Packet Lab、Syntax Lab、AV1 / AV2 / VP9処理はホストのcapture/render cal
 - offline Toolsを別processで起動し、exit statusとJSONを検証している
 
 完全な制約は`AI_INTEGRATION.md`と`integration-manifest.json`が正規仕様です。
+全追加系統と実動画評価は`Documentation/GLITCH_EXPANSION.md`にあります。
 
 ## English
 
@@ -104,10 +106,12 @@ python3 GlicMetalSDK/Tools/process_codec_lab.py input.mov output.mp4 \
 ```
 
 Installed CMake packages expose `GLIC_METAL_TOOLS_DIR` and
-`GLIC_METAL_PYTHON_REQUIREMENTS`. Run packet, syntax, AV1/AV2/VP9, and
-evolutionary workflows as child processes; never invoke them from a capture or
-render callback. Treat their exit status and JSON report as the completion
-contract.
+`GLIC_METAL_PYTHON_REQUIREMENTS`. Run packet, syntax, structured, transport,
+metadata, all offline codec generations, and evolutionary workflows as child
+processes; never invoke them from a capture or render callback. Treat their
+exit status and JSON report as the completion contract.
 
 `AI_INTEGRATION.md` and `integration-manifest.json` remain the normative
-human-readable and machine-readable contracts.
+human-readable and machine-readable contracts. See
+`Documentation/GLITCH_EXPANSION.md` for all added families and actual-video
+validation.

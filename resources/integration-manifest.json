@@ -258,6 +258,7 @@
     "codec": "docs/CODEC_GLITCH.md",
     "multicodec": "docs/MULTICODEC_GLITCH.md",
     "offline_packet_glitch": "docs/OFFLINE_PACKET_GLITCH.md",
-    "codec_lab": "docs/CODEC_LAB.md"
+    "codec_lab": "docs/CODEC_LAB.md",
+    "glitch_expansion": "docs/GLITCH_EXPANSION.md"
   }
 }

@@ -12,6 +12,7 @@ Canonical repository: <https://github.com/daitomanabe/glic-metal>
 [Embedding guide](docs/EMBEDDING.md) ·
 [AI integration contract](docs/AI_INTEGRATION.md) ·
 [Codec Glitch](docs/CODEC_GLITCH.md) ·
+[Glitch expansion catalog](docs/GLITCH_EXPANSION.md) ·
 [Original-preset fidelity](docs/ORIGINAL_PRESET_REALTIME.md) ·
 [Preset catalog](docs/original-preset-catalog.md) ·
 [Repository structure](FILE-STRUCTURE.md) ·
@@ -37,7 +38,7 @@ C++20とMetal ComputeによるGLIC (GLitch Image Codec) のリアルタイム映
 ### 特徴
 
 - C++20によるファイルcodecと、CPU / Metalリアルタイム処理
-- VideoToolbox hardware H.264 / HEVC / ProResとMetal-backed post pathによる28種類のCodec Glitch
+- VideoToolbox hardware H.264 / HEVC / ProResとMetal-backed post pathによる36種類のCodec Glitch
 - C / C++ / Objective-C / Swiftから利用できる安定C ABIとCMake package
 - モダンC++機能を活用（`std::ranges`, `std::span`, `std::bit_cast`, `[[likely]]`属性など）
 - CPU経路はmacOS / LinuxをCI対象とし、Windowsは設計対象・未認証
@@ -199,7 +200,7 @@ python3 scripts/process_video.py input.mov output-original.mp4 \
 
 入力・出力動画をローカルに保持する場合は、Git対象外の `test-videos/` を使用できます。
 
-### Codec Glitch（H.264 / HEVC / ProRes + AV1 / AV2 / VP9）
+### Codec Glitch（H.264 / HEVC / ProRes + offline 8 codec）
 
 `codec_glitch`は、VideoToolbox hardware encoder/decoderとMetal互換
 `CVPixelBuffer`/post pathを使うmacOS専用の非同期動画レーンです。`.glic`ファイル
@@ -217,7 +218,7 @@ python3 scripts/process_video.py input.mov output-codec.mp4 \
   --report output-codec.json --overwrite
 ```
 
-28 effectは`qp_pump`、`bitrate_crush`、`slice_dropout`、
+36 effectは`qp_pump`、`bitrate_crush`、`slice_dropout`、
 `slice_transplant`、`pframe_loss`、`idr_starvation`、`payload_xor`、
 `reference_timewarp`、`codec_feedback`、`generation_cascade`、
 `resolution_hop`、`chroma_codec_echo`、`temporal_polyphony`、
@@ -225,7 +226,10 @@ python3 scripts/process_video.py input.mov output-codec.mp4 \
 `recursive_codec_skin`、`concealment_choreography`と、Realtime Crossbreedの
 `dual_codec_crossbreed`、`codec_pingpong`、`gop_accordion`、`bframe_braid`、
 `plane_split_codec`、`roi_quality_islands`、`codec_phase_mosaic`、
-`encoder_hot_swap`、`pts_rubberband`、`bitrate_raster`です。全effectが圧縮H.264の
+`encoder_hot_swap`、`pts_rubberband`、`bitrate_raster`と、追加8種の
+`plane_time_split`、`reference_atlas`、`flow_lattice`、`scan_order_fold`、
+`regional_gop_clock`、`entropy_feedback`、`rolling_time_shutter`、
+`asymmetric_plane_codec`です。全effectが圧縮H.264の
 VCL byteを変更せず、
 VideoToolboxでclean decodeします。`slice_dropout`と`slice_transplant`はdecode履歴の
 水平row／帯を合成し、`payload_xor`はposterize、RGB組み替え、位置をずらした
@@ -260,10 +264,12 @@ p95 50ms以下が必要です。
 `scripts/evaluate_codec_glitch_videos.py`を使います。
 詳細とC APIは[Codec Glitch](docs/CODEC_GLITCH.md)と
 [Multi-codec guide](docs/MULTICODEC_GLITCH.md)、
+[Glitch expansion catalog](docs/GLITCH_EXPANSION.md)、
 [Embedding guide](docs/EMBEDDING.md#codec-glitch-c-api-macos-only)を参照してください。
 
-AV1 / VP9はFFmpeg、AV2は公式AVM v1.0.0 reference implementationで、実際の
-encode/decode世代を作ります。これらをVideoToolbox realtimeとは主張しません。
+AV1 / VP9 / Theora / DiracはFFmpeg、AV2は公式AVM v1.0.0、VVCは公式
+Fraunhofer VVenC v1.14.0で、実際のencode/decode世代を作ります。これらを
+VideoToolbox realtimeとは主張しません。
 各世代のbitstreamとSHA-256を残す共通runnerは次の通りです。
 
 ```bash
@@ -801,7 +807,7 @@ converting the recipe back through a preset name.
 
 Use the Git-ignored `test-videos/` directory for local input and preview files.
 
-### Codec Glitch (H.264 / HEVC / ProRes + AV1 / AV2 / VP9)
+### Codec Glitch (H.264 / HEVC / ProRes + eight offline codecs)
 
 `codec_glitch` is a macOS-only asynchronous video lane built from the
 VideoToolbox hardware encoder/decoder and Metal-compatible `CVPixelBuffer`/post
@@ -820,13 +826,15 @@ python3 scripts/process_video.py input.mov output-codec.mp4 \
   --report output-codec.json --overwrite
 ```
 
-The 28 effects include `qp_pump`, `bitrate_crush`, `slice_dropout`,
+The 36 effects include `qp_pump`, `bitrate_crush`, `slice_dropout`,
 `slice_transplant`, `pframe_loss`, `idr_starvation`, `payload_xor`,
 `reference_timewarp`, `codec_feedback`, `generation_cascade`,
 `resolution_hop`, `chroma_codec_echo`, `temporal_polyphony`,
 `intra_cannibalism`, `residual_rift`, `codec_grain_synth`,
-`recursive_codec_skin`, `concealment_choreography`, and ten Realtime
-Crossbreed effects from `dual_codec_crossbreed` through `bitrate_raster`.
+`recursive_codec_skin`, `concealment_choreography`, ten Realtime Crossbreed
+effects from `dual_codec_crossbreed` through `bitrate_raster`, and the eight
+decoded-history/Metal effects from `plane_time_split` through
+`asymmetric_plane_codec`.
 Every effect sends
 unchanged H.264 VCL bytes through a clean VideoToolbox decode. `slice_dropout` and
 `slice_transplant` composite horizontal rows/bands from decoded history;
@@ -864,14 +872,15 @@ frame count, hardware encode/decode, processing and stream rates of at least
 20 fps, and p95 at or below 50 ms. See
 [Codec Glitch](docs/CODEC_GLITCH.md) and the
 [multi-codec guide](docs/MULTICODEC_GLITCH.md), plus the
+[glitch expansion catalog](docs/GLITCH_EXPANSION.md) and
 [embedding guide](docs/EMBEDDING.md#codec-glitch-c-api-macos-only).
 Use `scripts/evaluate_codec_glitch_videos.py` for dry/wet analysis and
 diversity ranking across rendered effects.
 
-AV1 and VP9 use explicit FFmpeg encoders/decoders. AV2 uses the pinned official
-AVM v1.0.0 reference tools and fails closed when they are missing. The common
-offline runner retains every compressed generation and does not make a
-realtime claim:
+AV1, VP9, Theora, and Dirac use explicit FFmpeg encoders/decoders. AV2 uses
+the pinned official AVM v1.0.0 tools and VVC uses pinned official Fraunhofer
+VVenC v1.14.0. Missing reference tools fail closed. The common offline runner
+retains every compressed generation and makes no realtime claim:
 
 ```bash
 python3 scripts/process_multicodec_glitch.py input.mov output-av1.mp4 \

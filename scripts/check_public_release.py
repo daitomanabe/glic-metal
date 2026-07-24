@@ -33,6 +33,7 @@ REQUIRED_PATHS = (
     "docs/CODEC_LAB.md",
     "docs/DOWNSTREAM_QUICKSTART.md",
     "docs/EMBEDDING.md",
+    "docs/GLITCH_EXPANSION.md",
     "docs/MULTICODEC_GLITCH.md",
     "docs/OFFLINE_PACKET_GLITCH.md",
     "docs/ORIGINAL_PRESET_REALTIME.md",

@@ -31,15 +31,20 @@ isolated process, and follow `Documentation/OFFLINE_PACKET_GLITCH.md`.
 `Tools/process_codec_lab.py` and `Tools/evolutionary_codec_search.py` provide
 the separate syntax/analysis workflows. Their exit status and JSON report are
 the completion contract; do not call them from a capture or render callback.
+Structured NAL/OBU, transport, and metadata workflows have dedicated Tools
+entrypoints. See `Documentation/GLITCH_EXPANSION.md` for the complete catalog,
+implementation-level labels, and actual-video validation.
 The asynchronous hardware-codec lane is exposed separately through
 `<glic_metal/codec_glitch.h>` and accepts opaque `CVPixelBufferRef` values.
 Set `glic_codec_glitch_config.codec` to H.264, HEVC, or ProRes 422 before
-prepare. Its 28 effects use codec-quality control, intentional encoded-frame holds, and
+prepare. Its 36 effects use codec-quality control, intentional encoded-frame holds, and
 safe codec-decoded history/post composites. All compressed sample bytes reach the
 decoder unchanged. `payload_xor` is a Metal-backed digital-damage composite,
 and `reference_timewarp` selects from a configurable history of four to twelve
 decoded pixel buffers;
 neither mutates or reuses a compressed payload.
+Query `glic_codec_glitch_effect_implementation_level()` instead of inferring
+native compressed-field access from an effect name.
 
 Preparation creates pools and validates the normal hardware encoder.
 Specialized QP/cascade/downscale encoders and the decoder are created on first

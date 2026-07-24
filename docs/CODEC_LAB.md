@@ -4,13 +4,14 @@
 
 ## 日本語
 
-GLIC Metalはcodec系グリッチを、次の3つの安全境界へ分けます。
+GLIC Metalはcodec系グリッチを、次の安全境界へ分けます。
 
 | Class | Effect数 | Backend | realtime |
 |---|---:|---|---:|
-| Realtime Codec Glitch | 28 | VideoToolbox clean encode/decode + GPU再構成 | 960×540・20fps gate |
+| Realtime Codec Glitch | 36 | VideoToolbox clean encode/decode + GPU再構成 | 960×540・20fps gate |
 | Offline Packet Lab | 8 | FFmpeg bitstream filter + 隔離救済decode | 非対応 |
-| Offline Syntax / Analysis Lab | 18 | 実codec cycle + 復号再構成・解析・探索 | 非対応 |
+| Offline Syntax / Analysis Lab | 21 | 実codec cycle + 復号再構成・解析・探索 | 非対応 |
+| Structured / Transport / Metadata | 11 | NAL/OBU、TS/HLS/RTP model、VUI/SEI | 非対応 |
 
 ### Realtime Crossbreed
 
@@ -33,6 +34,11 @@ codec品質変化、GPU領域合成を使う低遅延適応です。真の複数
 offlineの`decoder_fingerprint_ensemble`、真の異種codec直列処理は
 `cross_codec_chain`が担当します。
 
+さらに`plane_time_split`から`asymmetric_plane_codec`までの8 effectは、
+VideoToolboxの復号履歴をCoreImage/Metalで再構成します。名称は視覚モデルであり、
+圧縮plane、scan order、entropy fieldを直接変更したという意味ではありません。
+実装境界は`glic_codec_glitch_effect_implementation_level()`で取得できます。
+
 ```bash
 python3 scripts/process_video.py input.mov output.mp4 \
   --processing-mode codec_glitch \
@@ -44,12 +50,12 @@ python3 scripts/process_video.py input.mov output.mp4 \
 
 ### Syntax Lab
 
-`scripts/process_codec_lab.py`は12種類のcodec構造グリッチを提供します。
+`scripts/process_codec_lab.py`は13種類のcodec構造グリッチを提供します。
 
 - motion field: `motion_vector_vortex`、`motion_vector_mirror`、
   `motion_vector_quantizer`、`motion_vector_freeze`
 - residual/transform: `residual_sign_flip`、`residual_band_gate`、
-  `transform_block_transplant`
+  `transform_block_transplant`、`transform_scan_fold`
 - reference/decoder: `reference_graph_swap`、`entropy_state_puncture`、
   `loop_filter_oscillator`
 - modern codec: `av1_film_grain_instrument`、`av2_optical_flow_wound`
@@ -74,6 +80,8 @@ python3 scripts/process_codec_lab.py input.mov vortex.mp4 \
 - `decoder_fingerprint_ensemble` — H.264 / HEVC / ProResの実decode差を合成
 - `cross_codec_chain` — AV1 → VP9 → HEVC → ProResの実世代処理
 - `audio_codec_orchestra` — source audio RMSから領域、noise、変位を制御
+- `decoder_disagreement_amplifier` — H.264 / HEVC / ProResの実pixel差を増幅
+- `audio_packet_resonance` — Opus packet sizeとPTSで映像再構成を駆動
 - `evolutionary_codec_search` — 上記effectと制御値をローカル自動探索
 
 semantic modelやdepth modelを同梱しないため、最初の2 effectは明示された決定的proxy
@@ -98,11 +106,21 @@ python3 scripts/evolutionary_codec_search.py input.mov \
 正規effect名、backend区分、implementation levelは
 `resources/codec-lab-effects.json`が機械可読な基準です。
 
+### Structured / Transport / Metadata
+
+`process_structured_codec_glitch.py`はAV1 field/OBU、HEVC temporal layer、
+cross-stream unitを処理します。`process_transport_glitch.py`はMPEG-TS、HLSと
+offline RFC 6184 packet model、`process_metadata_glitch.py`はH.264/HEVC VUIと
+HEVC mastering-display SEIを処理します。破損decodeは隔離processで実行し、
+どのworkflowもrealtimeを主張しません。全一覧と実動画評価は
+[GLITCH_EXPANSION.md](GLITCH_EXPANSION.md)を参照してください。
+
 ## English
 
-Codec effects are split into three explicit safety classes: 28 clean-decode
-VideoToolbox realtime effects, eight isolated packet operations, and eighteen
-offline syntax/analysis/search workflows.
+Codec effects are split into explicit safety classes: 36 clean-decode
+VideoToolbox realtime effects, eight isolated packet operations, 21
+syntax/analysis/search workflows, and 11 structured/transport/metadata
+operations.
 
 The ten Realtime Crossbreed effects are low-latency adaptations. They use one
 selected hardware codec plus decoded history and GPU reconstruction; they do
@@ -117,4 +135,5 @@ AVM tools and fails closed when unavailable.
 The evolutionary search is deterministic, resumable, and token-free. It
 measures visible change and novelty locally and retains a bounded archive.
 Use `resources/codec-lab-effects.json` as the machine-readable capability
-catalog.
+catalog and [GLITCH_EXPANSION.md](GLITCH_EXPANSION.md) for the consolidated
+implementation-level and actual-video validation record.

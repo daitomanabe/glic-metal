@@ -25,7 +25,8 @@ VideoToolbox処理へ振り分ける。
 6. `include/glic_metal/codec_glitch.h` — Codec非同期API
 7. `docs/EMBEDDING.md` — 人間向けの詳細な組み込み手順
 8. `docs/MULTICODEC_GLITCH.md` — codec別backend、速度claim、offline契約
-9. `docs/OFFLINE_PACKET_GLITCH.md` — 破損bitstreamの隔離実行・評価契約
+9. `docs/GLITCH_EXPANSION.md` — 追加全系統、実装レベル、実動画評価
+10. `docs/OFFLINE_PACKET_GLITCH.md` — 破損bitstreamの隔離実行・評価契約
 
 `src/` 内のヘッダーは公開APIではない。他アプリからincludeしない。
 
@@ -43,7 +44,8 @@ VideoToolbox処理へ振り分ける。
 - 内部C++ API、プリセット値、Metal shaderをホスト側へ複製しない。
 - Processing版GLICとのpixel完全一致を主張しない。
 - H.264 / HEVC / ProResは`glic_codec_glitch_config.codec`でprepare前に選ぶ。
-- AV1 / VP9 / AV2はC ABIへ偽装せず、multi-codec runnerのJSON契約を使う。
+- AV1 / VP9 / AV2 / VVC / Theora / DiracはC ABIへ偽装せず、multi-codec
+  runnerのJSON契約を使う。
 - AV2 toolsが無い場合はAV1へ置換せずfail-closedする。
 - packet glitchはリアルタイムC ABIへ追加せず、隔離subprocessのfile workflowとして実行する。
 - 破損bitstreamをhost processまたはcapture/render callback内でdecodeしない。
@@ -148,8 +150,9 @@ if (status == GLIC_CODEC_GLITCH_OK) {
 
 採用済み19 presetのメニューとは別に、実験用Codec Glitchを全て表示する場合は
 `resources/integration-manifest.json`の`lanes.codec.effect_names`を参照する。
-現在は28 effectで、public enumと`glic_codec_glitch_effect_name()`が実行時の
-正規名です。将来追加されるeffectを取り込むAI実装は、名前を独自に推測せず、
+現在は36 effectで、public enumと`glic_codec_glitch_effect_name()`が実行時の
+正規名です。`glic_codec_glitch_effect_implementation_level()`をUI/ログへ保持し、
+将来追加されるeffectを取り込むAI実装は、名前を独自に推測せず、
 同梱manifestとpublic headerを同じSDK版から読む。
 
 ### 配布方法
@@ -185,18 +188,20 @@ macOSでは次をlinkする:
 - `selected-presets.json` — 確認・交換用
 - `integration-manifest.json` — AI向け機械可読仕様
 - `offline-codec-effects.json` — offline packet effectとcodec対応表
-- `codec-lab-effects.json` — realtime Crossbreed、Syntax、解析・探索の分類
+- `codec-lab-effects.json` — realtime、Syntax、structured、transport、
+  metadata、generation、解析・探索の分類と実装レベル
 
 ### Offline Packet Lab
 
 圧縮packet自体を変化させる8 effectは採用済み19 presetおよびリアルタイムCodec
-Glitch 28 effectとは別です。`scripts/process_offline_packet_glitch.py`を
+Glitch 36 effectとは別です。`scripts/process_offline_packet_glitch.py`を
 subprocessとして起動し、`resources/offline-codec-effects.json`で対応codecを検証します。
 出力JSONの`execution_class`は`offline`、`realtime_certified`は常にfalseです。
 異なるframe数のpreview比較には`scripts/evaluate_offline_packet_glitches.py`を使います。
 詳細は`docs/OFFLINE_PACKET_GLITCH.md`を参照してください。
 
-Syntax/解析系18 workflowもリアルタイムC ABIへ混在させません。
+Syntax/解析系21 workflowとstructured/transport/metadata系11 operationも
+リアルタイムC ABIへ混在させません。
 `scripts/process_codec_lab.py`と`scripts/evolutionary_codec_search.py`をfile単位で
 実行し、`implementation_level`を必ず確認します。decoded reconstruction proxyを
 native codec syntax hookとして表示してはいけません。正規一覧は
@@ -285,10 +290,12 @@ return `NO_FRAME_AVAILABLE`; this is normal. Release every successfully polled
 pixel buffer exactly once with `glic_codec_glitch_pixel_buffer_release()`.
 
 The adopted 19-preset menu is separate from the complete experimental Codec
-Glitch effect list. If the host exposes every effect, read the 28 canonical
+Glitch effect list. If the host exposes every effect, read the 36 canonical
 names from `lanes.codec.effect_names` in the bundled integration manifest;
 the public enum and `glic_codec_glitch_effect_name()` are authoritative at
-runtime. An agent adopting future effects must read the manifest and public
+runtime. Preserve the value from
+`glic_codec_glitch_effect_implementation_level()` in UI and logs. An agent
+adopting future effects must read the manifest and public
 header from the same SDK version instead of inventing names.
 
 Do not import headers from `src/`, duplicate preset constants, modify H.264 VCL
@@ -305,7 +312,9 @@ Validate codec/effect support through `offline-codec-effects.json`, launch
 counts. See `docs/OFFLINE_PACKET_GLITCH.md`.
 
 Syntax reconstruction and analysis/search are separate offline workflows too.
-Read `codec-lab-effects.json`, launch `process_codec_lab.py` or
-`evolutionary_codec_search.py` out of process, and retain the declared
+Read `codec-lab-effects.json`; launch `process_codec_lab.py`,
+`process_structured_codec_glitch.py`, `process_transport_glitch.py`,
+`process_metadata_glitch.py`, or `evolutionary_codec_search.py` out of
+process; and retain the declared
 `implementation_level`. Never present a decoded reconstruction proxy as a
 native bitstream syntax hook. See `docs/CODEC_LAB.md`.
