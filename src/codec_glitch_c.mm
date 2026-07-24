@@ -36,6 +36,11 @@ bool validCodec(glic_codec_glitch_codec codec) {
          codec <= GLIC_CODEC_GLITCH_CODEC_PRORES_422;
 }
 
+bool validPixelPath(glic_codec_glitch_pixel_path path) {
+  return path >= GLIC_CODEC_GLITCH_PIXEL_PATH_AUTO &&
+         path <= GLIC_CODEC_GLITCH_PIXEL_PATH_BGRA_COMPATIBILITY;
+}
+
 glic_codec_glitch_status fail(glic_codec_glitch_context *context,
                               glic_codec_glitch_status status,
                               std::string message) {
@@ -157,6 +162,7 @@ void glic_codec_glitch_config_init(glic_codec_glitch_config *config) {
   config->require_hardware_decoder = 1;
   config->enable_low_latency_rate_control = 1;
   config->codec = GLIC_CODEC_GLITCH_CODEC_H264;
+  config->pixel_path = GLIC_CODEC_GLITCH_PIXEL_PATH_AUTO;
 }
 
 void glic_codec_glitch_controls_init(glic_codec_glitch_controls *controls) {
@@ -245,7 +251,8 @@ glic_codec_glitch_prepare(glic_codec_glitch_context *context,
         config->maximum_slice_bytes < 0 ||
         config->decoded_history_frames <= 0 ||
         config->maximum_in_flight_frames <= 0 ||
-        config->poll_queue_capacity <= 0 || !validCodec(config->codec))
+        config->poll_queue_capacity <= 0 || !validCodec(config->codec) ||
+        !validPixelPath(config->pixel_path))
       return fail(context, GLIC_CODEC_GLITCH_INVALID_ARGUMENT,
                   "codec configuration contains a non-positive value");
 
@@ -267,6 +274,8 @@ glic_codec_glitch_prepare(glic_codec_glitch_context *context,
         config->require_hardware_decoder != 0;
     candidateConfig.enableLowLatencyRateControl =
         config->enable_low_latency_rate_control != 0;
+    candidateConfig.pixelPath =
+        static_cast<glic::CodecGlitchPixelPath>(config->pixel_path);
 
     std::string error;
     auto candidate = glic::createCodecGlitchEngine(candidateConfig, error);
@@ -459,6 +468,8 @@ glic_codec_glitch_get_stats(const glic_codec_glitch_context *context,
     stats->hardware_encoder = source.hardwareEncoder ? 1u : 0u;
     stats->hardware_decoder = source.hardwareDecoder ? 1u : 0u;
     stats->base_frame_qp_supported = source.baseFrameQpSupported ? 1u : 0u;
+    stats->nv12_metal_fast_path = source.nv12MetalFastPath ? 1u : 0u;
+    stats->metal_texture_cache = source.metalTextureCache ? 1u : 0u;
     return GLIC_CODEC_GLITCH_OK;
   });
 }

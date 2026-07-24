@@ -8,6 +8,10 @@ semantic versioning for tagged releases.
 
 ### Added
 
+- An ABI-compatible codec pixel-path selector adds a required or automatic
+  NV12/IOSurface fast path. VideoToolbox can now encode and decode NV12 while
+  `CVMetalTextureCache` maps its planes directly into Metal conversion kernels;
+  public output remains BGRA for existing hosts.
 - A true compressed-domain syntax lane with four motion-vector, four
   quantized-DCT, and four quantizer-scale effects for MPEG-2 plus the four
   motion-vector variants for MPEG-4 Part 2. It uses checksum-pinned external

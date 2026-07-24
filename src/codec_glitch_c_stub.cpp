@@ -111,6 +111,7 @@ void glic_codec_glitch_config_init(glic_codec_glitch_config *config) {
   config->require_hardware_decoder = 1;
   config->enable_low_latency_rate_control = 1;
   config->codec = GLIC_CODEC_GLITCH_CODEC_H264;
+  config->pixel_path = GLIC_CODEC_GLITCH_PIXEL_PATH_AUTO;
 }
 
 void glic_codec_glitch_controls_init(glic_codec_glitch_controls *controls) {

@@ -23,6 +23,13 @@ enum class CodecGlitchCodec : uint32_t {
   Count,
 };
 
+enum class CodecGlitchPixelPath : uint32_t {
+  Auto = 0,
+  Nv12Metal,
+  BgraCompatibility,
+  Count,
+};
+
 const char *codecGlitchCodecName(CodecGlitchCodec codec) noexcept;
 bool codecGlitchCodecFromName(std::string_view name,
                               CodecGlitchCodec &codec) noexcept;
@@ -113,6 +120,7 @@ struct CodecGlitchConfiguration {
   bool requireHardwareEncoder = true;
   bool requireHardwareDecoder = true;
   bool enableLowLatencyRateControl = true;
+  CodecGlitchPixelPath pixelPath = CodecGlitchPixelPath::Auto;
 };
 
 struct CodecGlitchStatistics {
@@ -144,6 +152,8 @@ struct CodecGlitchStatistics {
   bool lowLatencyRateControl = false;
   bool boundedFrameDelay = false;
   bool prioritizesEncodingSpeed = false;
+  bool nv12MetalFastPath = false;
+  bool metalTextureCache = false;
 };
 
 // Owns one retain on its pixel buffer.  Copying a frame retains the buffer;

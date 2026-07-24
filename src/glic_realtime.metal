@@ -1,6 +1,56 @@
 #include <metal_stdlib>
 using namespace metal;
 
+kernel void glicCodecBgraToNv12(
+    texture2d<float, access::read> input [[texture(0)]],
+    texture2d<float, access::write> outputY [[texture(1)]],
+    texture2d<float, access::write> outputCbCr [[texture(2)]],
+    uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= outputY.get_width() || gid.y >= outputY.get_height())
+        return;
+
+    float3 rgb = input.read(gid).rgb;
+    float y = 16.0 / 255.0 +
+              (219.0 / 255.0) *
+                  dot(rgb, float3(0.2126, 0.7152, 0.0722));
+    outputY.write(float4(clamp(y, 0.0, 1.0)), gid);
+
+    if ((gid.x & 1u) != 0u || (gid.y & 1u) != 0u)
+        return;
+    uint2 maximum = uint2(input.get_width() - 1u, input.get_height() - 1u);
+    float3 average = float3(0.0);
+    average += input.read(min(gid, maximum)).rgb;
+    average += input.read(min(gid + uint2(1u, 0u), maximum)).rgb;
+    average += input.read(min(gid + uint2(0u, 1u), maximum)).rgb;
+    average += input.read(min(gid + uint2(1u, 1u), maximum)).rgb;
+    average *= 0.25;
+    float cb = 128.0 / 255.0 +
+               (224.0 / 255.0) *
+                   dot(average, float3(-0.114572, -0.385428, 0.5));
+    float cr = 128.0 / 255.0 +
+               (224.0 / 255.0) *
+                   dot(average, float3(0.5, -0.454153, -0.045847));
+    outputCbCr.write(float4(clamp(float2(cb, cr), 0.0, 1.0), 0.0, 1.0),
+                     gid / 2u);
+}
+
+kernel void glicCodecNv12ToBgra(
+    texture2d<float, access::read> inputY [[texture(0)]],
+    texture2d<float, access::read> inputCbCr [[texture(1)]],
+    texture2d<float, access::write> output [[texture(2)]],
+    uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= output.get_width() || gid.y >= output.get_height())
+        return;
+    float y = (inputY.read(gid).r - 16.0 / 255.0) * (255.0 / 219.0);
+    float2 chroma =
+        (inputCbCr.read(gid / 2u).rg - float2(128.0 / 255.0)) *
+        (255.0 / 224.0);
+    float3 rgb = float3(y + 1.5748 * chroma.y,
+                        y - 0.187324 * chroma.x - 0.468124 * chroma.y,
+                        y + 1.8556 * chroma.x);
+    output.write(float4(clamp(rgb, 0.0, 1.0), 1.0), gid);
+}
+
 struct ChannelUniform {
     uint minBlockSize;
     uint maxBlockSize;

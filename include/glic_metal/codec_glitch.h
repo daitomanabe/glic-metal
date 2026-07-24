@@ -72,6 +72,17 @@ enum {
   GLIC_CODEC_GLITCH_CODEC_PRORES_422 = 2
 };
 
+typedef int32_t glic_codec_glitch_pixel_path;
+enum {
+  /* Prefer NV12/IOSurface/Metal and fall back to the BGRA compatibility path
+   * when the runtime cannot construct the required resources. */
+  GLIC_CODEC_GLITCH_PIXEL_PATH_AUTO = 0,
+  /* Require the NV12/IOSurface/CVMetalTextureCache fast path. */
+  GLIC_CODEC_GLITCH_PIXEL_PATH_NV12_METAL = 1,
+  /* Preserve the original BGRA/Core Image compatibility path. */
+  GLIC_CODEC_GLITCH_PIXEL_PATH_BGRA_COMPATIBILITY = 2
+};
+
 /*
  * Codec Glitch is macOS-only and operates asynchronously on opaque
  * CVPixelBufferRef values. Initialize this struct before changing fields.
@@ -102,7 +113,8 @@ typedef struct glic_codec_glitch_config {
   /* Selects the VideoToolbox encode/decode format. H.264 remains zero so
    * source-compatible zero initialization retains the original behavior. */
   glic_codec_glitch_codec codec;
-  uint32_t reserved[7];
+  glic_codec_glitch_pixel_path pixel_path;
+  uint32_t reserved[6];
 } glic_codec_glitch_config;
 
 typedef struct glic_codec_glitch_controls {
@@ -163,7 +175,10 @@ typedef struct glic_codec_glitch_stats {
   uint32_t hardware_encoder;
   uint32_t hardware_decoder;
   uint32_t base_frame_qp_supported;
-  uint32_t reserved[8];
+  /* Active runtime path, not merely requested configuration. */
+  uint32_t nv12_metal_fast_path;
+  uint32_t metal_texture_cache;
+  uint32_t reserved[6];
 } glic_codec_glitch_stats;
 
 uint32_t glic_codec_glitch_get_abi_version(void);

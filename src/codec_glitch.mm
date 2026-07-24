@@ -1,6 +1,7 @@
 #include "codec_glitch.hpp"
 
 #import <CoreImage/CoreImage.h>
+#import <CoreVideo/CVMetalTextureCache.h>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <VideoToolbox/VideoToolbox.h>
@@ -20,6 +21,10 @@
 #include <optional>
 #include <utility>
 #include <vector>
+
+#ifndef GLIC_METALLIB_PATH
+#define GLIC_METALLIB_PATH "glic_realtime.metallib"
+#endif
 
 namespace glic {
 namespace {
@@ -89,6 +94,39 @@ CodecGlitchControls sanitizedControls(CodecGlitchControls controls) {
 std::string statusError(const char *operation, OSStatus status) {
   return std::string(operation) + " failed with OSStatus " +
          std::to_string(static_cast<long long>(status));
+}
+
+std::string metalErrorString(NSError *error) {
+  if (error == nil)
+    return "unknown Metal error";
+  return std::string(error.localizedDescription.UTF8String
+                         ?: "unknown Metal error");
+}
+
+NSArray<NSString *> *codecMetalLibraryCandidates() {
+  NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+  NSString *environmentPath =
+      NSProcessInfo.processInfo.environment[@"GLIC_METALLIB_PATH"];
+  if (environmentPath.length > 0)
+    [candidates addObject:environmentPath];
+  NSString *bundlePath = [NSBundle.mainBundle pathForResource:@"glic_realtime"
+                                                       ofType:@"metallib"];
+  if (bundlePath.length > 0)
+    [candidates addObject:bundlePath];
+  NSString *executablePath =
+      NSProcessInfo.processInfo.arguments.firstObject.stringByStandardizingPath;
+  NSString *executableDirectory =
+      executablePath.stringByDeletingLastPathComponent;
+  if (executableDirectory.length > 0) {
+    [candidates addObject:[executableDirectory stringByAppendingPathComponent:
+                                                   @"glic_realtime.metallib"]];
+    [candidates addObject:[[executableDirectory
+                              stringByAppendingPathComponent:
+                                  @"../lib/glic/glic_realtime.metallib"]
+                              stringByStandardizingPath]];
+  }
+  [candidates addObject:[NSString stringWithUTF8String:GLIC_METALLIB_PATH]];
+  return candidates;
 }
 
 OSStatus setSessionProperty(VTSessionRef session, CFStringRef key,
@@ -479,6 +517,8 @@ struct AtomicStatistics {
   std::atomic<bool> lowLatencyRateControl{false};
   std::atomic<bool> boundedFrameDelay{false};
   std::atomic<bool> prioritizesEncodingSpeed{false};
+  std::atomic<bool> nv12MetalFastPath{false};
+  std::atomic<bool> metalTextureCache{false};
 };
 
 struct CallbackDeliveryState {
@@ -573,6 +613,7 @@ public:
 
 private:
   bool createResources(std::string &error);
+  bool createMetalFastPath(std::string &error);
   void destroyResources();
   bool createStage(CodecStage &stage, int index, int width, int height,
                    bool qpMode, bool lowResolution, std::string &error);
@@ -652,6 +693,10 @@ private:
       CVPixelBufferRef farHistory, const FrameContext &context);
   CVReturn allocatePixelBuffer(CVPixelBufferPoolRef pool,
                                CVPixelBufferRef *output) noexcept;
+  CVPixelBufferPoolRef nv12PoolForDimensions(int width, int height) noexcept;
+  CVPixelBufferRef convertBgraToNv12(CVPixelBufferRef input,
+                                     CVPixelBufferPoolRef pool);
+  CVPixelBufferRef convertNv12ToBgra(CVPixelBufferRef input);
   void finishDecodedFrame(CodecStage &stage, FrameContext &context,
                           CVPixelBufferRef imageBuffer);
   void emit(FrameContext &context, CVPixelBufferRef imageBuffer,
@@ -702,6 +747,11 @@ private:
   size_t outputHistoryCount_ = 0;
 
   id<MTLDevice> metalDevice_ = nil;
+  id<MTLCommandQueue> metalQueue_ = nil;
+  id<MTLComputePipelineState> bgraToNv12Pipeline_ = nil;
+  id<MTLComputePipelineState> nv12ToBgraPipeline_ = nil;
+  CVMetalTextureCacheRef metalTextureCache_ = nullptr;
+  bool useNv12FastPath_ = false;
   CIContext *ciContext_ = nil;
   CVPixelBufferPoolRef fullSizePool_ = nullptr;
   CVPixelBufferPoolRef quarterSizePool_ = nullptr;
@@ -709,6 +759,12 @@ private:
   CFDictionaryRef fullSizePoolAllocationAttributes_ = nullptr;
   CFDictionaryRef quarterSizePoolAllocationAttributes_ = nullptr;
   CFDictionaryRef halfSizePoolAllocationAttributes_ = nullptr;
+  CVPixelBufferPoolRef fullSizeNv12Pool_ = nullptr;
+  CVPixelBufferPoolRef quarterSizeNv12Pool_ = nullptr;
+  CVPixelBufferPoolRef halfSizeNv12Pool_ = nullptr;
+  CFDictionaryRef fullSizeNv12PoolAllocationAttributes_ = nullptr;
+  CFDictionaryRef quarterSizeNv12PoolAllocationAttributes_ = nullptr;
+  CFDictionaryRef halfSizeNv12PoolAllocationAttributes_ = nullptr;
   std::array<CFNumberRef, 52> qpNumbers_{};
   AtomicStatistics statistics_;
 };
@@ -717,8 +773,9 @@ private:
 
 namespace {
 
-bool createPixelBufferPool(int width, int height, int minimumBuffers,
-                           int maximumBuffers, CVPixelBufferPoolRef &pool,
+bool createPixelBufferPool(int width, int height, OSType pixelFormat,
+                           int minimumBuffers, int maximumBuffers,
+                           CVPixelBufferPoolRef &pool,
                            CFDictionaryRef &allocationAttributes,
                            std::string &error) {
   NSDictionary *poolAttributes = @{
@@ -727,7 +784,7 @@ bool createPixelBufferPool(int width, int height, int minimumBuffers,
   };
   NSDictionary *pixelAttributes = @{
     (__bridge NSString *)
-    kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
+    kCVPixelBufferPixelFormatTypeKey : @(pixelFormat),
     (__bridge NSString *)kCVPixelBufferWidthKey : @(width),
     (__bridge NSString *)kCVPixelBufferHeightKey : @(height),
     (__bridge NSString *)kCVPixelBufferMetalCompatibilityKey : @YES,
@@ -819,6 +876,8 @@ CodecGlitchEngineImpl::~CodecGlitchEngineImpl() {
 bool CodecGlitchEngineImpl::initialize(std::string &error) {
   if (static_cast<uint32_t>(configuration_.codec) >=
           static_cast<uint32_t>(CodecGlitchCodec::Count) ||
+      static_cast<uint32_t>(configuration_.pixelPath) >=
+          static_cast<uint32_t>(CodecGlitchPixelPath::Count) ||
       configuration_.width <= 0 || configuration_.height <= 0 ||
       configuration_.framesPerSecond <= 0 ||
       configuration_.averageBitRate < 16000 ||
@@ -864,6 +923,81 @@ bool CodecGlitchEngineImpl::initialize(std::string &error) {
   return createResources(error);
 }
 
+bool CodecGlitchEngineImpl::createMetalFastPath(std::string &error) {
+  if (metalDevice_ == nil) {
+    error = "NV12 fast path requires a Metal device";
+    return false;
+  }
+  metalQueue_ = [metalDevice_ newCommandQueue];
+  if (metalQueue_ == nil) {
+    error = "Failed to create the codec Metal command queue";
+    return false;
+  }
+
+  id<MTLLibrary> library = nil;
+  NSError *libraryError = nil;
+  for (NSString *candidate in codecMetalLibraryCandidates()) {
+    if (![NSFileManager.defaultManager fileExistsAtPath:candidate])
+      continue;
+    library = [metalDevice_ newLibraryWithURL:[NSURL fileURLWithPath:candidate]
+                                       error:&libraryError];
+    if (library != nil)
+      break;
+  }
+  if (library == nil) {
+    metalQueue_ = nil;
+    error = "Failed to load codec Metal kernels: " +
+            metalErrorString(libraryError);
+    return false;
+  }
+
+  id<MTLFunction> toNv12 =
+      [library newFunctionWithName:@"glicCodecBgraToNv12"];
+  id<MTLFunction> toBgra =
+      [library newFunctionWithName:@"glicCodecNv12ToBgra"];
+  if (toNv12 == nil || toBgra == nil) {
+    metalQueue_ = nil;
+    error = "Metal library is missing codec NV12 conversion kernels";
+    return false;
+  }
+  NSError *pipelineError = nil;
+  bgraToNv12Pipeline_ =
+      [metalDevice_ newComputePipelineStateWithFunction:toNv12
+                                                  error:&pipelineError];
+  if (bgraToNv12Pipeline_ == nil) {
+    metalQueue_ = nil;
+    error = "Failed to create BGRA-to-NV12 pipeline: " +
+            metalErrorString(pipelineError);
+    return false;
+  }
+  pipelineError = nil;
+  nv12ToBgraPipeline_ =
+      [metalDevice_ newComputePipelineStateWithFunction:toBgra
+                                                  error:&pipelineError];
+  if (nv12ToBgraPipeline_ == nil) {
+    bgraToNv12Pipeline_ = nil;
+    metalQueue_ = nil;
+    error = "Failed to create NV12-to-BGRA pipeline: " +
+            metalErrorString(pipelineError);
+    return false;
+  }
+  const CVReturn cacheStatus = CVMetalTextureCacheCreate(
+      kCFAllocatorDefault, nullptr, metalDevice_, nullptr, &metalTextureCache_);
+  if (cacheStatus != kCVReturnSuccess || metalTextureCache_ == nullptr) {
+    nv12ToBgraPipeline_ = nil;
+    bgraToNv12Pipeline_ = nil;
+    metalQueue_ = nil;
+    error = "CVMetalTextureCacheCreate failed with status " +
+            std::to_string(cacheStatus);
+    return false;
+  }
+  useNv12FastPath_ = true;
+  statistics_.nv12MetalFastPath.store(true, std::memory_order_relaxed);
+  statistics_.metalTextureCache.store(true, std::memory_order_relaxed);
+  error.clear();
+  return true;
+}
+
 bool CodecGlitchEngineImpl::createResources(std::string &error) {
   try {
     @autoreleasepool {
@@ -885,6 +1019,21 @@ bool CodecGlitchEngineImpl::createResources(std::string &error) {
         error = "No Metal device is available for codec preprocessing";
         return false;
       }
+      if (configuration_.pixelPath !=
+          CodecGlitchPixelPath::BgraCompatibility) {
+        std::string fastPathError;
+        if (!createMetalFastPath(fastPathError)) {
+          if (configuration_.pixelPath == CodecGlitchPixelPath::Nv12Metal) {
+            error = std::move(fastPathError);
+            return false;
+          }
+          useNv12FastPath_ = false;
+          statistics_.nv12MetalFastPath.store(false,
+                                              std::memory_order_relaxed);
+          statistics_.metalTextureCache.store(false,
+                                              std::memory_order_relaxed);
+        }
+      }
       ciContext_ =
           [CIContext contextWithMTLDevice:metalDevice_
                                   options:@{
@@ -905,17 +1054,41 @@ bool CodecGlitchEngineImpl::createResources(std::string &error) {
       const int reducedPoolMaximum =
           configuration_.maximumInFlightFrames + 3;
       if (!createPixelBufferPool(configuration_.width, configuration_.height,
-                                 warmBuffers, fullPoolMaximum, fullSizePool_,
+                                 kCVPixelFormatType_32BGRA, warmBuffers,
+                                 fullPoolMaximum, fullSizePool_,
                                  fullSizePoolAllocationAttributes_, error) ||
           !createPixelBufferPool(evenDimension(configuration_.width * 0.25),
                                  evenDimension(configuration_.height * 0.25),
-                                 warmBuffers, reducedPoolMaximum,
+                                 kCVPixelFormatType_32BGRA, warmBuffers,
+                                 reducedPoolMaximum,
                                  quarterSizePool_,
                                  quarterSizePoolAllocationAttributes_, error) ||
           !createPixelBufferPool(evenDimension(configuration_.width * 0.5),
                                  evenDimension(configuration_.height * 0.5),
-                                 warmBuffers, reducedPoolMaximum, halfSizePool_,
+                                 kCVPixelFormatType_32BGRA, warmBuffers,
+                                 reducedPoolMaximum, halfSizePool_,
                                  halfSizePoolAllocationAttributes_, error)) {
+        destroyResources();
+        return false;
+      }
+      if (useNv12FastPath_ &&
+          (!createPixelBufferPool(
+               configuration_.width, configuration_.height,
+               kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, warmBuffers,
+               reducedPoolMaximum, fullSizeNv12Pool_,
+               fullSizeNv12PoolAllocationAttributes_, error) ||
+           !createPixelBufferPool(
+               evenDimension(configuration_.width * 0.25),
+               evenDimension(configuration_.height * 0.25),
+               kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, warmBuffers,
+               reducedPoolMaximum, quarterSizeNv12Pool_,
+               quarterSizeNv12PoolAllocationAttributes_, error) ||
+           !createPixelBufferPool(
+               evenDimension(configuration_.width * 0.5),
+               evenDimension(configuration_.height * 0.5),
+               kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, warmBuffers,
+               reducedPoolMaximum, halfSizeNv12Pool_,
+               halfSizeNv12PoolAllocationAttributes_, error))) {
         destroyResources();
         return false;
       }
@@ -997,6 +1170,16 @@ bool CodecGlitchEngineImpl::createResources(std::string &error) {
       // Specialized QP/cascade/downscale sessions are created on first use so a
       // one-effect host does not reserve six hardware encoders at startup.
       if (!ensureStageEncoder(stages_[kStageNormal], error)) {
+        if (configuration_.pixelPath == CodecGlitchPixelPath::Auto &&
+            useNv12FastPath_) {
+          destroyResources();
+          configuration_.pixelPath = CodecGlitchPixelPath::BgraCompatibility;
+          statistics_.nv12MetalFastPath.store(false,
+                                              std::memory_order_relaxed);
+          statistics_.metalTextureCache.store(false,
+                                              std::memory_order_relaxed);
+          return createResources(error);
+        }
         destroyResources();
         return false;
       }
@@ -1051,6 +1234,18 @@ void CodecGlitchEngineImpl::destroyResources() {
     CVPixelBufferPoolRelease(halfSizePool_);
     halfSizePool_ = nullptr;
   }
+  if (fullSizeNv12Pool_ != nullptr) {
+    CVPixelBufferPoolRelease(fullSizeNv12Pool_);
+    fullSizeNv12Pool_ = nullptr;
+  }
+  if (quarterSizeNv12Pool_ != nullptr) {
+    CVPixelBufferPoolRelease(quarterSizeNv12Pool_);
+    quarterSizeNv12Pool_ = nullptr;
+  }
+  if (halfSizeNv12Pool_ != nullptr) {
+    CVPixelBufferPoolRelease(halfSizeNv12Pool_);
+    halfSizeNv12Pool_ = nullptr;
+  }
   if (fullSizePoolAllocationAttributes_ != nullptr) {
     CFRelease(fullSizePoolAllocationAttributes_);
     fullSizePoolAllocationAttributes_ = nullptr;
@@ -1063,6 +1258,18 @@ void CodecGlitchEngineImpl::destroyResources() {
     CFRelease(halfSizePoolAllocationAttributes_);
     halfSizePoolAllocationAttributes_ = nullptr;
   }
+  if (fullSizeNv12PoolAllocationAttributes_ != nullptr) {
+    CFRelease(fullSizeNv12PoolAllocationAttributes_);
+    fullSizeNv12PoolAllocationAttributes_ = nullptr;
+  }
+  if (quarterSizeNv12PoolAllocationAttributes_ != nullptr) {
+    CFRelease(quarterSizeNv12PoolAllocationAttributes_);
+    quarterSizeNv12PoolAllocationAttributes_ = nullptr;
+  }
+  if (halfSizeNv12PoolAllocationAttributes_ != nullptr) {
+    CFRelease(halfSizeNv12PoolAllocationAttributes_);
+    halfSizeNv12PoolAllocationAttributes_ = nullptr;
+  }
   for (CFNumberRef &number : qpNumbers_) {
     if (number != nullptr) {
       CFRelease(number);
@@ -1071,6 +1278,15 @@ void CodecGlitchEngineImpl::destroyResources() {
   }
   contexts_.reset();
   contextCount_ = 0;
+  if (metalTextureCache_ != nullptr) {
+    CVMetalTextureCacheFlush(metalTextureCache_, 0);
+    CFRelease(metalTextureCache_);
+    metalTextureCache_ = nullptr;
+  }
+  nv12ToBgraPipeline_ = nil;
+  bgraToNv12Pipeline_ = nil;
+  metalQueue_ = nil;
+  useNv12FastPath_ = false;
   ciContext_ = nil;
   metalDevice_ = nil;
 }
@@ -1128,7 +1344,10 @@ bool CodecGlitchEngineImpl::ensureStageEncoder(CodecStage &stage,
 
   NSDictionary *sourceAttributes = @{
     (__bridge NSString *)
-    kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
+    kCVPixelBufferPixelFormatTypeKey :
+        @(useNv12FastPath_
+              ? kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+              : kCVPixelFormatType_32BGRA),
     (__bridge NSString *)kCVPixelBufferWidthKey : @(width),
     (__bridge NSString *)kCVPixelBufferHeightKey : @(height),
     (__bridge NSString *)kCVPixelBufferMetalCompatibilityKey : @YES,
@@ -1331,7 +1550,10 @@ bool CodecGlitchEngineImpl::createDecoder(CodecStage &stage,
   }
   NSDictionary *destinationAttributes = @{
     (__bridge NSString *)
-    kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
+    kCVPixelBufferPixelFormatTypeKey :
+        @(useNv12FastPath_
+              ? kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+              : kCVPixelFormatType_32BGRA),
     (__bridge NSString *)kCVPixelBufferWidthKey : @(stage.width),
     (__bridge NSString *)kCVPixelBufferHeightKey : @(stage.height),
     (__bridge NSString *)kCVPixelBufferMetalCompatibilityKey : @YES,
@@ -1749,6 +1971,10 @@ CodecGlitchStatistics CodecGlitchEngineImpl::stats() const noexcept {
       statistics_.boundedFrameDelay.load(std::memory_order_relaxed);
   result.prioritizesEncodingSpeed =
       statistics_.prioritizesEncodingSpeed.load(std::memory_order_relaxed);
+  result.nv12MetalFastPath =
+      statistics_.nv12MetalFastPath.load(std::memory_order_relaxed);
+  result.metalTextureCache =
+      statistics_.metalTextureCache.load(std::memory_order_relaxed);
   return result;
 }
 
@@ -1796,7 +2022,44 @@ void CodecGlitchEngineImpl::encodeInitial(FrameContext &context,
     markDecodeFailure(context);
     return;
   }
+  CVPixelBufferRef nv12Input = nullptr;
+  CVPixelBufferRef stagingInput = nullptr;
+  if (useNv12FastPath_ &&
+      CVPixelBufferGetPixelFormatType(encodeInput) !=
+          kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) {
+    CVPixelBufferPoolRef nv12Pool =
+        nv12PoolForDimensions(stage->width, stage->height);
+    nv12Input = convertBgraToNv12(encodeInput, nv12Pool);
+    if (nv12Input == nullptr &&
+        CVPixelBufferGetPixelFormatType(encodeInput) ==
+            kCVPixelFormatType_32BGRA) {
+      CVPixelBufferPoolRef bgraPool =
+          stage->width == configuration_.width
+              ? fullSizePool_
+              : (stage->width ==
+                         evenDimension(configuration_.width * 0.25)
+                     ? quarterSizePool_
+                     : halfSizePool_);
+      stagingInput =
+          renderScaled(encodeInput, bgraPool, stage->width, stage->height);
+      if (stagingInput != nullptr)
+        nv12Input = convertBgraToNv12(stagingInput, nv12Pool);
+    }
+    if (nv12Input == nullptr) {
+      if (stagingInput != nullptr)
+        CFRelease(stagingInput);
+      if (prepared != nullptr)
+        CFRelease(prepared);
+      markDecodeFailure(context);
+      return;
+    }
+    encodeInput = nv12Input;
+  }
   encodeOnStage(*stage, context, encodeInput);
+  if (nv12Input != nullptr)
+    CFRelease(nv12Input);
+  if (stagingInput != nullptr)
+    CFRelease(stagingInput);
   if (prepared != nullptr)
     CFRelease(prepared);
 }
@@ -2175,6 +2438,12 @@ CVReturn CodecGlitchEngineImpl::allocatePixelBuffer(
     allocationAttributes = quarterSizePoolAllocationAttributes_;
   else if (pool == halfSizePool_)
     allocationAttributes = halfSizePoolAllocationAttributes_;
+  else if (pool == fullSizeNv12Pool_)
+    allocationAttributes = fullSizeNv12PoolAllocationAttributes_;
+  else if (pool == quarterSizeNv12Pool_)
+    allocationAttributes = quarterSizeNv12PoolAllocationAttributes_;
+  else if (pool == halfSizeNv12Pool_)
+    allocationAttributes = halfSizeNv12PoolAllocationAttributes_;
   const CVReturn status = allocationAttributes != nullptr
                               ? CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(
                                     kCFAllocatorDefault, pool,
@@ -2185,6 +2454,175 @@ CVReturn CodecGlitchEngineImpl::allocatePixelBuffer(
     statistics_.pixelBufferPoolFailures.fetch_add(1,
                                                   std::memory_order_relaxed);
   return status;
+}
+
+CVPixelBufferPoolRef CodecGlitchEngineImpl::nv12PoolForDimensions(
+    int width, int height) noexcept {
+  if (!useNv12FastPath_)
+    return nullptr;
+  if (width == configuration_.width && height == configuration_.height)
+    return fullSizeNv12Pool_;
+  if (width == evenDimension(configuration_.width * 0.25) &&
+      height == evenDimension(configuration_.height * 0.25))
+    return quarterSizeNv12Pool_;
+  if (width == evenDimension(configuration_.width * 0.5) &&
+      height == evenDimension(configuration_.height * 0.5))
+    return halfSizeNv12Pool_;
+  return nullptr;
+}
+
+CVPixelBufferRef
+CodecGlitchEngineImpl::convertBgraToNv12(CVPixelBufferRef input,
+                                         CVPixelBufferPoolRef pool) {
+  if (!useNv12FastPath_ || input == nullptr || pool == nullptr ||
+      metalTextureCache_ == nullptr || metalQueue_ == nil ||
+      bgraToNv12Pipeline_ == nil ||
+      CVPixelBufferGetPixelFormatType(input) != kCVPixelFormatType_32BGRA)
+    return nullptr;
+  CVPixelBufferRef output = nullptr;
+  if (allocatePixelBuffer(pool, &output) != kCVReturnSuccess ||
+      output == nullptr)
+    return nullptr;
+
+  CVMetalTextureRef inputTextureRef = nullptr;
+  CVMetalTextureRef outputYTextureRef = nullptr;
+  CVMetalTextureRef outputCbCrTextureRef = nullptr;
+  const size_t width = CVPixelBufferGetWidth(output);
+  const size_t height = CVPixelBufferGetHeight(output);
+  CVReturn status = CVMetalTextureCacheCreateTextureFromImage(
+      kCFAllocatorDefault, metalTextureCache_, input, nullptr,
+      MTLPixelFormatBGRA8Unorm, CVPixelBufferGetWidth(input),
+      CVPixelBufferGetHeight(input), 0, &inputTextureRef);
+  if (status == kCVReturnSuccess)
+    status = CVMetalTextureCacheCreateTextureFromImage(
+        kCFAllocatorDefault, metalTextureCache_, output, nullptr,
+        MTLPixelFormatR8Unorm, width, height, 0, &outputYTextureRef);
+  if (status == kCVReturnSuccess)
+    status = CVMetalTextureCacheCreateTextureFromImage(
+        kCFAllocatorDefault, metalTextureCache_, output, nullptr,
+        MTLPixelFormatRG8Unorm, width / 2, height / 2, 1,
+        &outputCbCrTextureRef);
+  if (status != kCVReturnSuccess || inputTextureRef == nullptr ||
+      outputYTextureRef == nullptr || outputCbCrTextureRef == nullptr) {
+    if (inputTextureRef != nullptr)
+      CFRelease(inputTextureRef);
+    if (outputYTextureRef != nullptr)
+      CFRelease(outputYTextureRef);
+    if (outputCbCrTextureRef != nullptr)
+      CFRelease(outputCbCrTextureRef);
+    CFRelease(output);
+    return nullptr;
+  }
+
+  id<MTLCommandBuffer> command = [metalQueue_ commandBuffer];
+  id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+  if (command == nil || encoder == nil) {
+    CFRelease(inputTextureRef);
+    CFRelease(outputYTextureRef);
+    CFRelease(outputCbCrTextureRef);
+    CFRelease(output);
+    return nullptr;
+  }
+  [encoder setComputePipelineState:bgraToNv12Pipeline_];
+  [encoder setTexture:CVMetalTextureGetTexture(inputTextureRef) atIndex:0];
+  [encoder setTexture:CVMetalTextureGetTexture(outputYTextureRef) atIndex:1];
+  [encoder setTexture:CVMetalTextureGetTexture(outputCbCrTextureRef) atIndex:2];
+  const NSUInteger threadWidth = bgraToNv12Pipeline_.threadExecutionWidth;
+  const NSUInteger threadHeight =
+      std::max<NSUInteger>(1, bgraToNv12Pipeline_.maxTotalThreadsPerThreadgroup /
+                                  threadWidth);
+  [encoder dispatchThreads:MTLSizeMake(width, height, 1)
+      threadsPerThreadgroup:MTLSizeMake(threadWidth, threadHeight, 1)];
+  [encoder endEncoding];
+  [command commit];
+  [command waitUntilCompleted];
+  const bool succeeded = command.status == MTLCommandBufferStatusCompleted;
+  CFRelease(inputTextureRef);
+  CFRelease(outputYTextureRef);
+  CFRelease(outputCbCrTextureRef);
+  if (!succeeded) {
+    CFRelease(output);
+    return nullptr;
+  }
+  CVBufferPropagateAttachments(input, output);
+  return output;
+}
+
+CVPixelBufferRef
+CodecGlitchEngineImpl::convertNv12ToBgra(CVPixelBufferRef input) {
+  const OSType inputFormat =
+      input != nullptr ? CVPixelBufferGetPixelFormatType(input) : 0;
+  if (!useNv12FastPath_ || input == nullptr || metalTextureCache_ == nullptr ||
+      metalQueue_ == nil || nv12ToBgraPipeline_ == nil ||
+      (inputFormat != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange &&
+       inputFormat != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange))
+    return nullptr;
+  CVPixelBufferRef output = nullptr;
+  if (allocatePixelBuffer(fullSizePool_, &output) != kCVReturnSuccess ||
+      output == nullptr)
+    return nullptr;
+
+  CVMetalTextureRef inputYTextureRef = nullptr;
+  CVMetalTextureRef inputCbCrTextureRef = nullptr;
+  CVMetalTextureRef outputTextureRef = nullptr;
+  const size_t width = CVPixelBufferGetWidth(input);
+  const size_t height = CVPixelBufferGetHeight(input);
+  CVReturn status = CVMetalTextureCacheCreateTextureFromImage(
+      kCFAllocatorDefault, metalTextureCache_, input, nullptr,
+      MTLPixelFormatR8Unorm, width, height, 0, &inputYTextureRef);
+  if (status == kCVReturnSuccess)
+    status = CVMetalTextureCacheCreateTextureFromImage(
+        kCFAllocatorDefault, metalTextureCache_, input, nullptr,
+        MTLPixelFormatRG8Unorm, width / 2, height / 2, 1,
+        &inputCbCrTextureRef);
+  if (status == kCVReturnSuccess)
+    status = CVMetalTextureCacheCreateTextureFromImage(
+        kCFAllocatorDefault, metalTextureCache_, output, nullptr,
+        MTLPixelFormatBGRA8Unorm, width, height, 0, &outputTextureRef);
+  if (status != kCVReturnSuccess || inputYTextureRef == nullptr ||
+      inputCbCrTextureRef == nullptr || outputTextureRef == nullptr) {
+    if (inputYTextureRef != nullptr)
+      CFRelease(inputYTextureRef);
+    if (inputCbCrTextureRef != nullptr)
+      CFRelease(inputCbCrTextureRef);
+    if (outputTextureRef != nullptr)
+      CFRelease(outputTextureRef);
+    CFRelease(output);
+    return nullptr;
+  }
+
+  id<MTLCommandBuffer> command = [metalQueue_ commandBuffer];
+  id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+  if (command == nil || encoder == nil) {
+    CFRelease(inputYTextureRef);
+    CFRelease(inputCbCrTextureRef);
+    CFRelease(outputTextureRef);
+    CFRelease(output);
+    return nullptr;
+  }
+  [encoder setComputePipelineState:nv12ToBgraPipeline_];
+  [encoder setTexture:CVMetalTextureGetTexture(inputYTextureRef) atIndex:0];
+  [encoder setTexture:CVMetalTextureGetTexture(inputCbCrTextureRef) atIndex:1];
+  [encoder setTexture:CVMetalTextureGetTexture(outputTextureRef) atIndex:2];
+  const NSUInteger threadWidth = nv12ToBgraPipeline_.threadExecutionWidth;
+  const NSUInteger threadHeight =
+      std::max<NSUInteger>(1, nv12ToBgraPipeline_.maxTotalThreadsPerThreadgroup /
+                                  threadWidth);
+  [encoder dispatchThreads:MTLSizeMake(width, height, 1)
+      threadsPerThreadgroup:MTLSizeMake(threadWidth, threadHeight, 1)];
+  [encoder endEncoding];
+  [command commit];
+  [command waitUntilCompleted];
+  const bool succeeded = command.status == MTLCommandBufferStatusCompleted;
+  CFRelease(inputYTextureRef);
+  CFRelease(inputCbCrTextureRef);
+  CFRelease(outputTextureRef);
+  if (!succeeded) {
+    CFRelease(output);
+    return nullptr;
+  }
+  CVBufferPropagateAttachments(input, output);
+  return output;
 }
 
 CVPixelBufferRef CodecGlitchEngineImpl::renderScaled(CVPixelBufferRef input,
@@ -3632,6 +4070,20 @@ void CodecGlitchEngineImpl::finishDecodedFrame(CodecStage &stage,
       CFRelease(farHistory);
   }
 
+  if (requiredPostProcessing && processed == nullptr) {
+    statistics_.totalPostProcessMicroseconds.fetch_add(
+        elapsedMicroseconds(postProcessStartedAt), std::memory_order_relaxed);
+    statistics_.postProcessSamples.fetch_add(1, std::memory_order_relaxed);
+    markDecodeFailure(context);
+    return;
+  }
+
+  if (processed == nullptr && useNv12FastPath_ &&
+      CVPixelBufferGetPixelFormatType(imageBuffer) !=
+          kCVPixelFormatType_32BGRA) {
+    processed = convertNv12ToBgra(imageBuffer);
+    requiredPostProcessing = true;
+  }
   if (requiredPostProcessing && processed == nullptr) {
     statistics_.totalPostProcessMicroseconds.fetch_add(
         elapsedMicroseconds(postProcessStartedAt), std::memory_order_relaxed);

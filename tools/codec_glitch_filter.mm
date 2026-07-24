@@ -35,6 +35,7 @@ struct Options {
   int height = 540;
   int framesPerSecond = 30;
   glic::CodecGlitchCodec codec = glic::CodecGlitchCodec::H264;
+  glic::CodecGlitchPixelPath pixelPath = glic::CodecGlitchPixelPath::Auto;
   glic::CodecGlitchControls controls;
   std::string statsPath;
   bool checkOnly = false;
@@ -100,8 +101,17 @@ Options parseOptions(int argc, const char *argv[]) {
       const char *name = value("--codec");
       if (!glic::codecGlitchCodecFromName(name, options.codec))
         failUsage(std::string("unknown native codec: ") + name);
-    }
-    else if (argument == "--effect") {
+    } else if (argument == "--pixel-path") {
+      const std::string_view name(value("--pixel-path"));
+      if (name == "auto")
+        options.pixelPath = glic::CodecGlitchPixelPath::Auto;
+      else if (name == "nv12" || name == "nv12_metal")
+        options.pixelPath = glic::CodecGlitchPixelPath::Nv12Metal;
+      else if (name == "bgra" || name == "bgra_compatibility")
+        options.pixelPath = glic::CodecGlitchPixelPath::BgraCompatibility;
+      else
+        failUsage("unknown pixel path: " + std::string(name));
+    } else if (argument == "--effect") {
       const char *name = value("--effect");
       if (!glic::codecGlitchEffectFromName(name, options.controls.effect))
         failUsage(std::string("unknown codec effect: ") + name);
@@ -137,6 +147,7 @@ Options parseOptions(int argc, const char *argv[]) {
       std::cout << "Usage: glic_codec_glitch_filter [options] < BGRA > BGRA\n"
                 << "  --width N --height N --fps N\n"
                 << "  --codec h264|hevc|prores_422\n"
+                << "  --pixel-path auto|nv12|bgra\n"
                 << "  --effect NAME --amount 0..1 --rate 0..1 --feedback 0..1\n"
                 << "  --seed N --stats-json PATH --check\n";
       std::exit(0);
@@ -285,6 +296,10 @@ void writeStats(const Options &options,
          << "  \"codec\": \"" << glic::codecGlitchCodecName(options.codec)
          << "\",\n"
          << "  \"codec_backend\": \"videotoolbox\",\n"
+         << "  \"pixel_path\": \""
+         << (statistics.nv12MetalFastPath ? "nv12_metal"
+                                          : "bgra_compatibility")
+         << "\",\n"
          << "  \"preset\": \""
          << glic::codecGlitchEffectName(options.controls.effect) << "\",\n"
          << "  \"effect_family\": \""
@@ -359,6 +374,10 @@ void writeStats(const Options &options,
          << jsonBool(statistics.boundedFrameDelay) << ",\n"
          << "  \"prioritizes_encoding_speed\": "
          << jsonBool(statistics.prioritizesEncodingSpeed) << ",\n"
+         << "  \"nv12_metal_fast_path\": "
+         << jsonBool(statistics.nv12MetalFastPath) << ",\n"
+         << "  \"metal_texture_cache\": "
+         << jsonBool(statistics.metalTextureCache) << ",\n"
          << "  \"kernel_realtime_20fps_passed\": " << jsonBool(kernelPassed20)
          << ",\n"
          << "  \"kernel_realtime_30fps_passed\": " << jsonBool(kernelPassed30)
@@ -376,6 +395,7 @@ int main(int argc, const char *argv[]) {
       const Options options = parseOptions(argc, argv);
       glic::CodecGlitchConfiguration configuration;
       configuration.codec = options.codec;
+      configuration.pixelPath = options.pixelPath;
       configuration.width = options.width;
       configuration.height = options.height;
       configuration.framesPerSecond = options.framesPerSecond;
