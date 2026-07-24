@@ -18,7 +18,6 @@
 #include <limits>
 #include <mutex>
 #include <optional>
-#include <span>
 #include <utility>
 #include <vector>
 
@@ -92,18 +91,34 @@ std::string statusError(const char *operation, OSStatus status) {
          std::to_string(static_cast<long long>(status));
 }
 
-void setSessionProperty(VTSessionRef session, CFStringRef key,
-                        CFTypeRef value) {
-  if (session != nullptr && key != nullptr && value != nullptr)
-    (void)VTSessionSetProperty(session, key, value);
+OSStatus setSessionProperty(VTSessionRef session, CFStringRef key,
+                            CFTypeRef value) {
+  if (session == nullptr || key == nullptr || value == nullptr)
+    return paramErr;
+  return VTSessionSetProperty(session, key, value);
 }
 
-void setSessionInt(VTSessionRef session, CFStringRef key, int value) {
+OSStatus setSessionInt(VTSessionRef session, CFStringRef key, int value) {
   int32_t narrowed = static_cast<int32_t>(value);
   CFNumberRef number =
       CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &narrowed);
-  setSessionProperty(session, key, number);
+  const OSStatus status = setSessionProperty(session, key, number);
   CFRelease(number);
+  return status;
+}
+
+bool sessionSupportsProperty(VTSessionRef session, CFStringRef key) {
+  if (session == nullptr || key == nullptr)
+    return false;
+  CFDictionaryRef supported = nullptr;
+  const OSStatus status =
+      VTSessionCopySupportedPropertyDictionary(session, &supported);
+  const bool result =
+      status == noErr && supported != nullptr &&
+      CFDictionaryContainsKey(supported, static_cast<const void *>(key));
+  if (supported != nullptr)
+    CFRelease(supported);
+  return result;
 }
 
 bool copySessionBool(VTSessionRef session, CFStringRef key) {
@@ -143,44 +158,6 @@ void updateAtomicPeak(std::atomic<uint64_t> &peak, uint64_t value) noexcept {
          !peak.compare_exchange_weak(observed, value, std::memory_order_relaxed,
                                      std::memory_order_relaxed)) {
   }
-}
-
-struct NalSpan {
-  size_t lengthOffset = 0;
-  size_t payloadOffset = 0;
-  size_t payloadSize = 0;
-  uint8_t type = 0;
-
-  bool isVideoSlice() const noexcept { return type == 1 || type == 5; }
-};
-
-uint32_t readNalLength(const uint8_t *bytes, int lengthBytes) noexcept {
-  uint32_t value = 0;
-  for (int index = 0; index < lengthBytes; ++index)
-    value = (value << 8U) | bytes[index];
-  return value;
-}
-
-bool parseNals(std::span<const uint8_t> bytes, int lengthBytes,
-               std::vector<NalSpan> &nals) {
-  nals.clear();
-  if (lengthBytes < 1 || lengthBytes > 4)
-    return false;
-  size_t offset = 0;
-  while (offset < bytes.size()) {
-    if (bytes.size() - offset < static_cast<size_t>(lengthBytes))
-      return false;
-    const size_t lengthOffset = offset;
-    const uint32_t payloadLength =
-        readNalLength(bytes.data() + offset, lengthBytes);
-    offset += static_cast<size_t>(lengthBytes);
-    if (payloadLength == 0 || payloadLength > bytes.size() - offset)
-      return false;
-    nals.push_back({lengthOffset, offset, payloadLength,
-                    static_cast<uint8_t>(bytes[offset] & 0x1fU)});
-    offset += payloadLength;
-  }
-  return offset == bytes.size() && !nals.empty();
 }
 
 struct FrameContext {
@@ -459,12 +436,13 @@ struct CodecStage {
   bool hardwareEncoder = false;
   bool hardwareDecoder = false;
   bool baseQpSupported = false;
+  bool lowLatencyRateControl = false;
+  bool boundedFrameDelay = false;
+  bool prioritizesEncodingSpeed = false;
   std::atomic<bool> decoderHasOutput{false};
   int currentBitRate = 0;
   std::mutex packetMutex;
   uint64_t packetCount = 0;
-  std::vector<uint8_t> packetScratch;
-  std::vector<NalSpan> nals;
 };
 
 struct AtomicStatistics {
@@ -497,6 +475,9 @@ struct AtomicStatistics {
   std::atomic<bool> hardwareEncoder{false};
   std::atomic<bool> hardwareDecoder{false};
   std::atomic<bool> baseQpSupported{false};
+  std::atomic<bool> lowLatencyRateControl{false};
+  std::atomic<bool> boundedFrameDelay{false};
+  std::atomic<bool> prioritizesEncodingSpeed{false};
 };
 
 struct CallbackDeliveryState {
@@ -617,16 +598,14 @@ private:
                              CFMutableDictionaryRef options,
                              std::string &error);
   void recordSampleProcessing(FrameContext &context) noexcept;
-  bool extractPacket(CodecStage &stage, CMSampleBufferRef sampleBuffer,
-                     bool &keyFrame, int &nalLengthBytes,
+  bool inspectSample(CMSampleBufferRef sampleBuffer, bool &keyFrame,
                      CMVideoFormatDescriptionRef &format,
-                     CMSampleTimingInfo &timing, std::string &error);
+                     std::string &error);
   PacketDecision decidePacketDrop(CodecStage &stage, FrameContext &context,
                                   bool keyFrame);
-  bool decodeBytes(CodecStage &stage, FrameContext &context,
-                   CMVideoFormatDescriptionRef format,
-                   const CMSampleTimingInfo &timing, bool keyFrame,
-                   std::span<const uint8_t> bytes, std::string &error);
+  bool decodeSample(CodecStage &stage, FrameContext &context,
+                    CMVideoFormatDescriptionRef format,
+                    CMSampleBufferRef sampleBuffer, std::string &error);
   CVPixelBufferRef renderScaled(CVPixelBufferRef input,
                                 CVPixelBufferPoolRef pool, int width,
                                 int height, float pixelScale = 0.0f);
@@ -1017,12 +996,6 @@ bool CodecGlitchEngineImpl::createStage(CodecStage &stage, int index, int width,
   stage.currentBitRate = configuration_.averageBitRate;
   stage.packetCount = 0;
   stage.decoderHasOutput.store(false, std::memory_order_relaxed);
-  const size_t packetReserve = std::max<size_t>(
-      65536, static_cast<size_t>(width) * static_cast<size_t>(height) / 3);
-  stage.packetScratch.clear();
-  stage.packetScratch.reserve(packetReserve * 2);
-  stage.nals.clear();
-  stage.nals.reserve(96);
   error.clear();
   return true;
 }
@@ -1049,12 +1022,15 @@ bool CodecGlitchEngineImpl::ensureStageEncoder(CodecStage &stage,
              kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder] =
             @YES;
   }
+  bool requestedLowLatency = false;
   if (@available(macOS 11.3, *)) {
-    if (configuration_.enableLowLatencyRateControl) {
+    if (configuration_.enableLowLatencyRateControl &&
+        configuration_.codec != CodecGlitchCodec::ProRes422) {
       encoderSpecification[(
           __bridge NSString
               *)kVTVideoEncoderSpecification_EnableLowLatencyRateControl] =
           @YES;
+      requestedLowLatency = true;
     }
   }
 
@@ -1071,17 +1047,33 @@ bool CodecGlitchEngineImpl::ensureStageEncoder(CodecStage &stage,
     codecType = kCMVideoCodecType_HEVC;
   else if (configuration_.codec == CodecGlitchCodec::ProRes422)
     codecType = kCMVideoCodecType_AppleProRes422;
-  const OSStatus status = VTCompressionSessionCreate(
-      kCFAllocatorDefault, width, height, codecType,
-      configuration_.codec == CodecGlitchCodec::ProRes422
-          ? nullptr
-          : (__bridge CFDictionaryRef)encoderSpecification,
-      (__bridge CFDictionaryRef)sourceAttributes, kCFAllocatorDefault,
-      compressionOutputCallback, &stage, &stage.encoder);
+  const auto createEncoder = [&]() {
+    return VTCompressionSessionCreate(
+        kCFAllocatorDefault, width, height, codecType,
+        configuration_.codec == CodecGlitchCodec::ProRes422
+            ? nullptr
+            : (__bridge CFDictionaryRef)encoderSpecification,
+        (__bridge CFDictionaryRef)sourceAttributes, kCFAllocatorDefault,
+        compressionOutputCallback, &stage, &stage.encoder);
+  };
+  OSStatus status = createEncoder();
+  if ((status != noErr || stage.encoder == nullptr) && requestedLowLatency) {
+    if (stage.encoder != nullptr) {
+      VTCompressionSessionInvalidate(stage.encoder);
+      CFRelease(stage.encoder);
+      stage.encoder = nullptr;
+    }
+    [encoderSpecification
+        removeObjectForKey:(__bridge NSString *)
+                               kVTVideoEncoderSpecification_EnableLowLatencyRateControl];
+    requestedLowLatency = false;
+    status = createEncoder();
+  }
   if (status != noErr || stage.encoder == nullptr) {
     error = statusError("VTCompressionSessionCreate", status);
     return false;
   }
+  stage.lowLatencyRateControl = requestedLowLatency;
 
   setSessionProperty(stage.encoder, kVTCompressionPropertyKey_RealTime,
                      kCFBooleanTrue);
@@ -1095,13 +1087,33 @@ bool CodecGlitchEngineImpl::ensureStageEncoder(CodecStage &stage,
                      temporalCodec ? kCFBooleanTrue : kCFBooleanFalse);
   if (configuration_.codec == CodecGlitchCodec::H264) {
     setSessionProperty(stage.encoder, kVTCompressionPropertyKey_ProfileLevel,
-                       kVTProfileLevel_H264_Main_AutoLevel);
+                       stage.lowLatencyRateControl
+                           ? kVTProfileLevel_H264_High_AutoLevel
+                           : kVTProfileLevel_H264_Main_AutoLevel);
   } else if (configuration_.codec == CodecGlitchCodec::HEVC) {
     setSessionProperty(stage.encoder, kVTCompressionPropertyKey_ProfileLevel,
                        kVTProfileLevel_HEVC_Main_AutoLevel);
   }
   setSessionInt(stage.encoder, kVTCompressionPropertyKey_ExpectedFrameRate,
                 configuration_.framesPerSecond);
+  if (sessionSupportsProperty(stage.encoder,
+                              kVTCompressionPropertyKey_MaxFrameDelayCount)) {
+    stage.boundedFrameDelay =
+        setSessionInt(stage.encoder, kVTCompressionPropertyKey_MaxFrameDelayCount,
+                      1) == noErr;
+  }
+  if (@available(macOS 11.0, *)) {
+    if (stage.lowLatencyRateControl &&
+        sessionSupportsProperty(
+            stage.encoder,
+            kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality)) {
+      stage.prioritizesEncodingSpeed =
+          setSessionProperty(
+              stage.encoder,
+              kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
+              kCFBooleanTrue) == noErr;
+    }
+  }
   setSessionInt(stage.encoder, kVTCompressionPropertyKey_MaxKeyFrameInterval,
                 configuration_.keyFrameInterval);
   setSessionInt(stage.encoder,
@@ -1143,6 +1155,18 @@ bool CodecGlitchEngineImpl::ensureStageEncoder(CodecStage &stage,
   if (qpMode)
     statistics_.baseQpSupported.store(stage.baseQpSupported,
                                       std::memory_order_relaxed);
+  statistics_.lowLatencyRateControl.store(
+      statistics_.lowLatencyRateControl.load(std::memory_order_relaxed) ||
+          stage.lowLatencyRateControl,
+      std::memory_order_relaxed);
+  statistics_.boundedFrameDelay.store(
+      statistics_.boundedFrameDelay.load(std::memory_order_relaxed) ||
+          stage.boundedFrameDelay,
+      std::memory_order_relaxed);
+  statistics_.prioritizesEncodingSpeed.store(
+      statistics_.prioritizesEncodingSpeed.load(std::memory_order_relaxed) ||
+          stage.prioritizesEncodingSpeed,
+      std::memory_order_relaxed);
   error.clear();
   return true;
 }
@@ -1167,6 +1191,12 @@ void CodecGlitchEngineImpl::destroyStage(CodecStage &stage) {
     stage.decoderFormat = nullptr;
   }
   stage.packetCount = 0;
+  stage.hardwareEncoder = false;
+  stage.hardwareDecoder = false;
+  stage.baseQpSupported = false;
+  stage.lowLatencyRateControl = false;
+  stage.boundedFrameDelay = false;
+  stage.prioritizesEncodingSpeed = false;
   stage.decoderHasOutput.store(false, std::memory_order_release);
 }
 
@@ -1176,6 +1206,13 @@ bool CodecGlitchEngineImpl::createDecoder(CodecStage &stage,
   if (stage.decoder != nullptr && stage.decoderFormat != nullptr &&
       CMFormatDescriptionEqual(stage.decoderFormat, format))
     return true;
+  if (stage.decoder != nullptr && stage.decoderFormat != nullptr &&
+      VTDecompressionSessionCanAcceptFormatDescription(stage.decoder, format)) {
+    CFRelease(stage.decoderFormat);
+    stage.decoderFormat =
+        static_cast<CMVideoFormatDescriptionRef>(CFRetain(format));
+    return true;
+  }
 
   if (stage.decoder != nullptr) {
     VTDecompressionSessionInvalidate(stage.decoder);
@@ -1614,6 +1651,12 @@ CodecGlitchStatistics CodecGlitchEngineImpl::stats() const noexcept {
       statistics_.hardwareDecoder.load(std::memory_order_relaxed);
   result.baseFrameQpSupported =
       statistics_.baseQpSupported.load(std::memory_order_relaxed);
+  result.lowLatencyRateControl =
+      statistics_.lowLatencyRateControl.load(std::memory_order_relaxed);
+  result.boundedFrameDelay =
+      statistics_.boundedFrameDelay.load(std::memory_order_relaxed);
+  result.prioritizesEncodingSpeed =
+      statistics_.prioritizesEncodingSpeed.load(std::memory_order_relaxed);
   return result;
 }
 
@@ -1828,12 +1871,9 @@ void CodecGlitchEngineImpl::recordSampleProcessing(
   context.sampleProcessingStartedAt = {};
 }
 
-bool CodecGlitchEngineImpl::extractPacket(CodecStage &stage,
-                                          CMSampleBufferRef sampleBuffer,
-                                          bool &keyFrame, int &nalLengthBytes,
-                                          CMVideoFormatDescriptionRef &format,
-                                          CMSampleTimingInfo &timing,
-                                          std::string &error) {
+bool CodecGlitchEngineImpl::inspectSample(
+    CMSampleBufferRef sampleBuffer, bool &keyFrame,
+    CMVideoFormatDescriptionRef &format, std::string &error) {
   if (sampleBuffer == nullptr || !CMSampleBufferDataIsReady(sampleBuffer)) {
     error = "VideoToolbox returned an encoded sample with no ready data";
     return false;
@@ -1845,7 +1885,6 @@ bool CodecGlitchEngineImpl::extractPacket(CodecStage &stage,
     error = "Encoded sample is missing data or format description";
     return false;
   }
-
   const size_t dataLength = CMBlockBufferGetDataLength(block);
   if (dataLength == 0 ||
       dataLength > static_cast<size_t>(configuration_.width) *
@@ -1853,48 +1892,6 @@ bool CodecGlitchEngineImpl::extractPacket(CodecStage &stage,
     error = "Encoded sample has an invalid data length";
     return false;
   }
-  stage.packetScratch.resize(dataLength);
-  const OSStatus copyStatus = CMBlockBufferCopyDataBytes(
-      block, 0, dataLength, stage.packetScratch.data());
-  if (copyStatus != kCMBlockBufferNoErr) {
-    error = statusError("CMBlockBufferCopyDataBytes", copyStatus);
-    return false;
-  }
-  statistics_.compressedCopyBytes.fetch_add(dataLength,
-                                            std::memory_order_relaxed);
-
-  nalLengthBytes = 0;
-  if (configuration_.codec != CodecGlitchCodec::ProRes422) {
-    const uint8_t *parameterSet = nullptr;
-    size_t parameterSetSize = 0;
-    size_t parameterSetCount = 0;
-    int lengthHeader = 0;
-    OSStatus formatStatus = noErr;
-    const char *operation = nullptr;
-    if (configuration_.codec == CodecGlitchCodec::H264) {
-      operation = "CMVideoFormatDescriptionGetH264ParameterSetAtIndex";
-      formatStatus = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
-          format, 0, &parameterSet, &parameterSetSize, &parameterSetCount,
-          &lengthHeader);
-    } else {
-      operation = "CMVideoFormatDescriptionGetHEVCParameterSetAtIndex";
-      formatStatus = CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
-          format, 0, &parameterSet, &parameterSetSize, &parameterSetCount,
-          &lengthHeader);
-    }
-    if (formatStatus != noErr || lengthHeader < 1 || lengthHeader > 4) {
-      error = statusError(operation, formatStatus);
-      return false;
-    }
-    nalLengthBytes = lengthHeader;
-    if (!parseNals(stage.packetScratch, nalLengthBytes, stage.nals)) {
-      error = std::string("Encoded ") +
-              codecGlitchCodecName(configuration_.codec) +
-              " sample has malformed length-prefixed NAL units";
-      return false;
-    }
-  }
-
   keyFrame = true;
   CFArrayRef attachments =
       CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, false);
@@ -1906,12 +1903,6 @@ bool CodecGlitchEngineImpl::extractPacket(CodecStage &stage,
           CFDictionaryGetValue(attachment, kCMSampleAttachmentKey_NotSync);
       keyFrame = notSync != kCFBooleanTrue;
     }
-  }
-  if (CMSampleBufferGetSampleTimingInfo(sampleBuffer, 0, &timing) != noErr) {
-    timing.duration = CMTimeMake(1, configuration_.framesPerSecond);
-    timing.presentationTimeStamp =
-        CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
-    timing.decodeTimeStamp = kCMTimeInvalid;
   }
   CFRetain(format);
   error.clear();
@@ -1946,10 +1937,10 @@ PacketDecision CodecGlitchEngineImpl::decidePacketDrop(CodecStage &stage,
   return result;
 }
 
-bool CodecGlitchEngineImpl::decodeBytes(
+bool CodecGlitchEngineImpl::decodeSample(
     CodecStage &stage, FrameContext &context,
-    CMVideoFormatDescriptionRef format, const CMSampleTimingInfo &timing,
-    bool keyFrame, std::span<const uint8_t> bytes, std::string &error) {
+    CMVideoFormatDescriptionRef format, CMSampleBufferRef sampleBuffer,
+    std::string &error) {
   const bool decoderWarmup =
       stage.decoder == nullptr || stage.decoderFormat == nullptr ||
       !CMFormatDescriptionEqual(stage.decoderFormat, format) ||
@@ -1958,43 +1949,6 @@ bool CodecGlitchEngineImpl::decodeBytes(
     return false;
   if (decoderWarmup)
     context.codecWarmup = true;
-
-  CMBlockBufferRef block = nullptr;
-  OSStatus status = CMBlockBufferCreateWithMemoryBlock(
-      kCFAllocatorDefault, nullptr, bytes.size(), kCFAllocatorDefault, nullptr,
-      0, bytes.size(), 0, &block);
-  if (status != kCMBlockBufferNoErr || block == nullptr) {
-    error = statusError("CMBlockBufferCreateWithMemoryBlock", status);
-    return false;
-  }
-  status = CMBlockBufferReplaceDataBytes(bytes.data(), block, 0, bytes.size());
-  if (status != kCMBlockBufferNoErr) {
-    CFRelease(block);
-    error = statusError("CMBlockBufferReplaceDataBytes", status);
-    return false;
-  }
-
-  CMSampleBufferRef sample = nullptr;
-  const size_t sampleSize = bytes.size();
-  CMSampleTimingInfo adjustedTiming = timing;
-  adjustedTiming.presentationTimeStamp = context.presentationTimeStamp;
-  adjustedTiming.decodeTimeStamp = kCMTimeInvalid;
-  status = CMSampleBufferCreateReady(kCFAllocatorDefault, block, format, 1, 1,
-                                     &adjustedTiming, 1, &sampleSize, &sample);
-  CFRelease(block);
-  if (status != noErr || sample == nullptr) {
-    error = statusError("CMSampleBufferCreateReady", status);
-    return false;
-  }
-  statistics_.sampleBufferRebuilds.fetch_add(1, std::memory_order_relaxed);
-  CFArrayRef attachments =
-      CMSampleBufferGetSampleAttachmentsArray(sample, true);
-  if (!keyFrame && attachments != nullptr && CFArrayGetCount(attachments) > 0) {
-    CFMutableDictionaryRef attachment = static_cast<CFMutableDictionaryRef>(
-        const_cast<void *>(CFArrayGetValueAtIndex(attachments, 0)));
-    CFDictionarySetValue(attachment, kCMSampleAttachmentKey_NotSync,
-                         kCFBooleanTrue);
-  }
 
   const VTDecodeFrameFlags flags =
       kVTDecodeFrame_EnableAsynchronousDecompression |
@@ -2008,9 +1962,8 @@ bool CodecGlitchEngineImpl::decodeBytes(
       reinterpret_cast<void *>(static_cast<uintptr_t>(decodeToken));
   recordSampleProcessing(context);
   context.decodeSubmittedAt = std::chrono::steady_clock::now();
-  status = VTDecompressionSessionDecodeFrame(stage.decoder, sample, flags,
-                                             callbackToken, nullptr);
-  CFRelease(sample);
+  const OSStatus status = VTDecompressionSessionDecodeFrame(
+      stage.decoder, sampleBuffer, flags, callbackToken, nullptr);
   if (status != noErr) {
     uint64_t expectedToken = decodeToken;
     if (!context.decodeToken.compare_exchange_strong(
@@ -2070,14 +2023,11 @@ void CodecGlitchEngineImpl::handleCompressed(CodecStage &stage,
       context.sampleProcessingStartedAt = std::chrono::steady_clock::now();
 
       bool keyFrame = false;
-      int nalLengthBytes = 4;
       CMVideoFormatDescriptionRef format = nullptr;
-      CMSampleTimingInfo timing{};
       std::string error;
 
       std::unique_lock lock(stage.packetMutex);
-      if (!extractPacket(stage, sampleBuffer, keyFrame, nalLengthBytes, format,
-                         timing, error)) {
+      if (!inspectSample(sampleBuffer, keyFrame, format, error)) {
         lock.unlock();
         recordSampleProcessing(context);
         markDecodeFailure(context);
@@ -2097,9 +2047,8 @@ void CodecGlitchEngineImpl::handleCompressed(CodecStage &stage,
         return;
       }
 
-      const std::span<const uint8_t> bytes(stage.packetScratch);
       const bool decoded =
-          decodeBytes(stage, context, format, timing, keyFrame, bytes, error);
+          decodeSample(stage, context, format, sampleBuffer, error);
       CFRelease(format);
       lock.unlock();
       if (!decoded) {

@@ -327,17 +327,24 @@ int runCppApiTest() {
   if (statistics.submittedFrames != frameIndex ||
       statistics.emittedFrames < frameIndex ||
       statistics.backpressureDrops != 0 || statistics.codecErrors != 0 ||
-      statistics.watchdogRecoveries != 0 || statistics.pollQueueDrops != 0) {
+      statistics.watchdogRecoveries != 0 || statistics.pollQueueDrops != 0 ||
+      statistics.compressedCopyBytes != 0 ||
+      statistics.sampleBufferRebuilds != 0 ||
+      statistics.peakInFlightFrames == 0) {
     std::fprintf(
         stderr,
         "FAIL statistics submitted=%llu emitted=%llu backpressure=%llu "
-        "errors=%llu recoveries=%llu poll=%llu\n",
+        "errors=%llu recoveries=%llu poll=%llu copy_bytes=%llu rebuilds=%llu "
+        "peak_in_flight=%llu\n",
         static_cast<unsigned long long>(statistics.submittedFrames),
         static_cast<unsigned long long>(statistics.emittedFrames),
         static_cast<unsigned long long>(statistics.backpressureDrops),
         static_cast<unsigned long long>(statistics.codecErrors),
         static_cast<unsigned long long>(statistics.watchdogRecoveries),
-        static_cast<unsigned long long>(statistics.pollQueueDrops));
+        static_cast<unsigned long long>(statistics.pollQueueDrops),
+        static_cast<unsigned long long>(statistics.compressedCopyBytes),
+        static_cast<unsigned long long>(statistics.sampleBufferRebuilds),
+        static_cast<unsigned long long>(statistics.peakInFlightFrames));
     return 12;
   }
   std::printf("PASS C++ codec glitch effects=%u frames=%llu hw_encoder=1 "

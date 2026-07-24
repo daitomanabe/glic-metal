@@ -353,6 +353,12 @@ void writeStats(const Options &options,
          << ",\n"
          << "  \"base_frame_qp_supported\": "
          << jsonBool(statistics.baseFrameQpSupported) << ",\n"
+         << "  \"low_latency_rate_control\": "
+         << jsonBool(statistics.lowLatencyRateControl) << ",\n"
+         << "  \"bounded_frame_delay\": "
+         << jsonBool(statistics.boundedFrameDelay) << ",\n"
+         << "  \"prioritizes_encoding_speed\": "
+         << jsonBool(statistics.prioritizesEncodingSpeed) << ",\n"
          << "  \"kernel_realtime_20fps_passed\": " << jsonBool(kernelPassed20)
          << ",\n"
          << "  \"kernel_realtime_30fps_passed\": " << jsonBool(kernelPassed30)

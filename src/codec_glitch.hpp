@@ -141,6 +141,9 @@ struct CodecGlitchStatistics {
   bool hardwareEncoder = false;
   bool hardwareDecoder = false;
   bool baseFrameQpSupported = false;
+  bool lowLatencyRateControl = false;
+  bool boundedFrameDelay = false;
+  bool prioritizesEncodingSpeed = false;
 };
 
 // Owns one retain on its pixel buffer.  Copying a frame retains the buffer;
