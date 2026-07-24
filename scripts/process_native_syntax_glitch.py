@@ -12,9 +12,11 @@ import shutil
 import subprocess
 
 from native_syntax_glitch import (
+    COEFFICIENT_EFFECTS,
     EFFECTS,
     FEATURE_FOR_EFFECT,
-    IMPLEMENTATION_LEVEL,
+    MOTION_EFFECTS,
+    QUANTIZER_EFFECTS,
     mutate_json_file,
 )
 from process_offline_packet_glitch import (
@@ -28,8 +30,13 @@ from process_offline_packet_glitch import (
 )
 
 
-CODECS = ("mpeg2", "h264", "hevc")
-SUPPORTED_CODEC = "mpeg2"
+CODECS = ("mpeg2", "mpeg4_part2", "h264", "hevc")
+SUPPORTED_CODECS_BY_EFFECT = {
+    **{effect: {"mpeg2", "mpeg4_part2"} for effect in MOTION_EFFECTS},
+    **{effect: {"mpeg2"} for effect in COEFFICIENT_EFFECTS},
+    **{effect: {"mpeg2"} for effect in QUANTIZER_EFFECTS},
+}
+DEFAULT_CODEC = "mpeg2"
 FFGLITCH_VERSION = "0.10.2"
 FFGLITCH_DOWNLOAD = "https://ffglitch.org/download/"
 
@@ -72,12 +79,14 @@ def source_contract(ffprobe: str, source: Path) -> dict:
     return json.loads(result.stdout)
 
 
-def validate_preserved_source(probe: dict) -> None:
+def validate_preserved_source(probe: dict, codec: str) -> None:
     streams = probe.get("streams", [])
     format_names = set(probe.get("format", {}).get("format_name", "").split(","))
-    if not streams or streams[0].get("codec_name") != "mpeg2video":
+    expected_codec = "mpeg2video" if codec == "mpeg2" else "mpeg4"
+    if not streams or streams[0].get("codec_name") != expected_codec:
         raise RuntimeError(
-            "--source-mode preserve requires an MPEG-2 video stream"
+            f"--source-mode preserve with {codec} requires a "
+            f"{expected_codec} video stream"
         )
     if "avi" not in format_names:
         raise RuntimeError(
@@ -95,8 +104,10 @@ def normalized_encode_command(
     fps: int,
     max_frames: int,
     threads: int,
+    codec: str,
 ) -> list[str]:
     gop = max(8, fps)
+    encoder = "mpeg2video" if codec == "mpeg2" else "mpeg4"
     return [
         ffmpeg,
         "-nostdin",
@@ -116,7 +127,7 @@ def normalized_encode_command(
         "-threads",
         str(threads),
         "-c:v",
-        "mpeg2video",
+        encoder,
         "-q:v",
         "6",
         "-g",
@@ -139,7 +150,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--effect", choices=EFFECTS, required=True)
-    parser.add_argument("--codec", choices=CODECS, default=SUPPORTED_CODEC)
+    parser.add_argument("--codec", choices=CODECS, default=DEFAULT_CODEC)
     parser.add_argument(
         "--source-mode",
         choices=("normalize", "preserve"),
@@ -172,10 +183,11 @@ def parse_args() -> argparse.Namespace:
     args.output = args.output.expanduser().resolve()
     if not args.input.is_file():
         parser.error(f"input does not exist: {args.input}")
-    if args.codec != SUPPORTED_CODEC:
+    if args.codec not in SUPPORTED_CODECS_BY_EFFECT[args.effect]:
+        supported = ", ".join(sorted(SUPPORTED_CODECS_BY_EFFECT[args.effect]))
         parser.error(
-            "direct motion-vector/coefficient mutation currently supports "
-            "MPEG-2 only; H.264/HEVC entropy syntax is fail-closed"
+            f"{args.effect} supports: {supported}; "
+            "H.264/HEVC entropy syntax is fail-closed"
         )
     if not 0.0 <= args.amount <= 1.0:
         parser.error("--amount must be between 0 and 1")
@@ -219,10 +231,10 @@ def main() -> int:
         )
 
     source_probe_before = source_contract(ffprobe, args.input)
-    encoded = work / "source-mpeg2.avi"
+    encoded = work / f"source-{args.codec}.avi"
     encode_result = None
     if args.source_mode == "preserve":
-        validate_preserved_source(source_probe_before)
+        validate_preserved_source(source_probe_before, args.codec)
         shutil.copy2(args.input, encoded)
     else:
         encode_result = run_isolated(
@@ -235,6 +247,7 @@ def main() -> int:
                 fps=args.fps,
                 max_frames=args.max_frames,
                 threads=args.threads,
+                codec=args.codec,
             ),
             log=work / "01-normalize-mpeg2.log",
             timeout_seconds=args.timeout,
@@ -265,6 +278,11 @@ def main() -> int:
             ffedit,
             "-hide_banner",
             "-y",
+            *(
+                ["-threads", "1"]
+                if feature == "qscale"
+                else ["-threads", str(args.threads)]
+            ),
             "-i",
             str(encoded),
             "-f",
@@ -295,12 +313,17 @@ def main() -> int:
             "source with inter prediction / non-zero AC coefficients"
         )
 
-    damaged = work / f"damaged-{args.effect}-mpeg2.avi"
+    damaged = work / f"damaged-{args.effect}-{args.codec}.avi"
     apply_result = run_isolated(
         [
             ffedit,
             "-hide_banner",
             "-y",
+            *(
+                ["-threads", "1"]
+                if feature == "qscale"
+                else ["-threads", str(args.threads)]
+            ),
             "-i",
             str(encoded),
             "-f",
@@ -410,7 +433,7 @@ def main() -> int:
         "effect": args.effect,
         "codec": args.codec,
         "feature": feature,
-        "implementation_level": IMPLEMENTATION_LEVEL[args.effect],
+        "implementation_level": mutation_evidence["implementation_level"],
         "input": str(args.input),
         "output": str(args.output),
         "source_mode": args.source_mode,

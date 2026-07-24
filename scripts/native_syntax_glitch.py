@@ -23,18 +23,34 @@ COEFFICIENT_EFFECTS = (
     "compressed_coefficient_transplant",
     "compressed_coefficient_scan_fold",
 )
-EFFECTS = MOTION_EFFECTS + COEFFICIENT_EFFECTS
+QUANTIZER_EFFECTS = (
+    "compressed_quantizer_checkerboard",
+    "compressed_quantizer_wave",
+    "compressed_quantizer_raster",
+    "compressed_quantizer_pulse",
+)
+EFFECTS = MOTION_EFFECTS + COEFFICIENT_EFFECTS + QUANTIZER_EFFECTS
 FEATURE_FOR_EFFECT = {
     **{effect: "mv" for effect in MOTION_EFFECTS},
     **{effect: "q_dct" for effect in COEFFICIENT_EFFECTS},
+    **{effect: "qscale" for effect in QUANTIZER_EFFECTS},
 }
 IMPLEMENTATION_LEVEL = {
     effect: (
         "native_mpeg2_ffglitch_motion_vector_entropy_transplication"
         if effect in MOTION_EFFECTS
-        else "native_mpeg2_ffglitch_quantized_dct_entropy_transplication"
+        else (
+            "native_mpeg2_ffglitch_quantized_dct_entropy_transplication"
+            if effect in COEFFICIENT_EFFECTS
+            else "native_mpeg2_ffglitch_quantizer_scale_entropy_transplication"
+        )
     )
     for effect in EFFECTS
+}
+STREAM_CODECS_BY_FEATURE = {
+    "mv": {"mpeg2video", "mpeg4"},
+    "q_dct": {"mpeg2video"},
+    "qscale": {"mpeg2video"},
 }
 
 
@@ -110,10 +126,15 @@ def _validate_document(document: object, feature: str) -> dict:
     streams = document.get("streams")
     if not isinstance(streams, list) or not streams:
         raise SyntaxMutationError("FFglitch export has no streams")
+    supported_codecs = STREAM_CODECS_BY_FEATURE[feature]
     for stream in streams:
-        if not isinstance(stream, dict) or stream.get("codec") != "mpeg2video":
+        if (
+            not isinstance(stream, dict)
+            or stream.get("codec") not in supported_codecs
+        ):
             raise SyntaxMutationError(
-                "direct compressed syntax mutation supports MPEG-2 video only"
+                f"direct {feature} mutation supports stream codecs: "
+                f"{', '.join(sorted(supported_codecs))}"
             )
         if not isinstance(stream.get("frames"), list):
             raise SyntaxMutationError("FFglitch stream has no frame list")
@@ -351,6 +372,119 @@ def _mutate_coefficients(
     }
 
 
+def _qscale_value(
+    effect: str,
+    *,
+    frame_index: int,
+    slice_index: int,
+    slice_count: int,
+    macroblock_offset: int,
+    amount: float,
+    seed: int,
+) -> int:
+    low = max(1, round(7 - amount * 5))
+    high = min(31, round(10 + amount * 21))
+    if effect == "compressed_quantizer_checkerboard":
+        return high if (frame_index + slice_index + macroblock_offset) & 1 else low
+    if effect == "compressed_quantizer_wave":
+        phase = frame_index * 0.61 + slice_index * 0.83
+        normalized = 0.5 + 0.5 * math.sin(phase)
+        return max(1, min(31, round(low + normalized * (high - low))))
+    if effect == "compressed_quantizer_raster":
+        denominator = max(slice_count - 1, 1)
+        normalized = (
+            slice_index / denominator + frame_index * (0.04 + amount * 0.08)
+        ) % 1.0
+        return max(1, min(31, round(low + normalized * (high - low))))
+    if effect == "compressed_quantizer_pulse":
+        period = max(2, round(10 - amount * 7))
+        pulse = (frame_index + slice_index // 2) % period == 0
+        jitter = _mix64(seed ^ frame_index ^ (slice_index << 16)) & 3
+        return max(1, min(31, (high if pulse else low) - int(jitter)))
+    raise SyntaxMutationError(f"unknown qscale effect: {effect}")
+
+
+def _mutate_qscale(
+    document: dict, effect: str, amount: float, seed: int
+) -> dict:
+    total = 0
+    selected = 0
+    changed_values = 0
+    frames_with_changes: set[int] = set()
+    minimum = 31
+    maximum = 1
+
+    for stream_index, stream in enumerate(document["streams"]):
+        for frame_index, frame in enumerate(stream["frames"]):
+            qscale = frame.get("qscale")
+            slices = qscale.get("slice") if isinstance(qscale, dict) else None
+            if not isinstance(slices, list):
+                continue
+            for slice_index, values in enumerate(slices):
+                if not isinstance(values, dict):
+                    continue
+                for value_index, key in enumerate(sorted(values)):
+                    value = values[key]
+                    if (
+                        not isinstance(value, int)
+                        or isinstance(value, bool)
+                    ):
+                        raise SyntaxMutationError(
+                            "qscale values must be integers"
+                        )
+                    total += 1
+                    if not _selected(
+                        amount,
+                        seed,
+                        stream_index,
+                        frame_index,
+                        slice_index,
+                        value_index,
+                    ):
+                        minimum = min(minimum, value)
+                        maximum = max(maximum, value)
+                        continue
+                    selected += 1
+                    try:
+                        macroblock_offset = int(key)
+                    except ValueError:
+                        macroblock_offset = value_index
+                    after = _qscale_value(
+                        effect,
+                        frame_index=frame_index,
+                        slice_index=slice_index,
+                        slice_count=len(slices),
+                        macroblock_offset=macroblock_offset,
+                        amount=amount,
+                        seed=seed,
+                    )
+                    values[key] = after
+                    minimum = min(minimum, after)
+                    maximum = max(maximum, after)
+                    if after != value:
+                        changed_values += 1
+                        frames_with_changes.add(frame_index)
+
+    return {
+        "feature": "qscale",
+        "total_quantizer_values": total,
+        "selected_quantizer_values": selected,
+        "changed_values": changed_values,
+        "frames_with_changes": len(frames_with_changes),
+        "minimum_quantizer_scale": minimum if total else None,
+        "maximum_quantizer_scale": maximum if total else None,
+        "legal_quantizer_range": [1, 31],
+    }
+
+
+def implementation_level(effect: str, stream_codec: str = "mpeg2video") -> str:
+    if effect not in EFFECTS:
+        raise SyntaxMutationError(f"unknown effect: {effect}")
+    if effect in MOTION_EFFECTS and stream_codec == "mpeg4":
+        return "native_mpeg4_part2_ffglitch_motion_vector_entropy_transplication"
+    return IMPLEMENTATION_LEVEL[effect]
+
+
 def mutate_document(
     document: object, effect: str, amount: float, seed: int
 ) -> tuple[dict, dict]:
@@ -364,14 +498,22 @@ def mutate_document(
     evidence = (
         _mutate_motion(validated, effect, amount, seed)
         if feature == "mv"
-        else _mutate_coefficients(validated, effect, amount, seed)
+        else (
+            _mutate_coefficients(validated, effect, amount, seed)
+            if feature == "q_dct"
+            else _mutate_qscale(validated, effect, amount, seed)
+        )
     )
+    stream_codec = validated["streams"][0]["codec"]
     evidence.update(
         {
             "effect": effect,
             "seed": seed,
             "amount": amount,
-            "implementation_level": IMPLEMENTATION_LEVEL[effect],
+            "implementation_level": implementation_level(
+                effect, stream_codec
+            ),
+            "stream_codec": stream_codec,
         }
     )
     return validated, evidence

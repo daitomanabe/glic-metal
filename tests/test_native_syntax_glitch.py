@@ -83,8 +83,42 @@ def coefficient_document() -> dict:
     }
 
 
+def qscale_document() -> dict:
+    return {
+        "ffedit_version": "ffglitch-0.10.2",
+        "filename": "fixture.avi",
+        "sha1sum": "fixture",
+        "features": ["qscale"],
+        "streams": [
+            {
+                "codec": "mpeg2video",
+                "frames": [
+                    {
+                        "qscale": {
+                            "slice": [
+                                {"0": 6},
+                                {"0": 6, "8": 8},
+                                {"0": 7},
+                            ]
+                        }
+                    },
+                    {
+                        "qscale": {
+                            "slice": [
+                                {"0": 6},
+                                {"0": 7},
+                                {"0": 8},
+                            ]
+                        }
+                    },
+                ],
+            }
+        ],
+    }
+
+
 def main() -> int:
-    assert len(MODULE.EFFECTS) == 8
+    assert len(MODULE.EFFECTS) == 12
     for effect in MODULE.MOTION_EFFECTS:
         source = motion_document()
         baseline = copy.deepcopy(source)
@@ -102,6 +136,19 @@ def main() -> int:
         )
         assert duplicate == mutated
         assert duplicate_evidence == evidence
+
+    mpeg4 = motion_document()
+    mpeg4["streams"][0]["codec"] = "mpeg4"
+    _, mpeg4_evidence = MODULE.mutate_document(
+        mpeg4,
+        "compressed_motion_vector_mirror",
+        1.0,
+        0x474C4943,
+    )
+    assert (
+        mpeg4_evidence["implementation_level"]
+        == "native_mpeg4_part2_ffglitch_motion_vector_entropy_transplication"
+    )
 
     for effect in MODULE.COEFFICIENT_EFFECTS:
         source = coefficient_document()
@@ -127,6 +174,22 @@ def main() -> int:
         assert evidence["changed_values"] > 0
         assert evidence["dc_coefficients_preserved"] is True
 
+    for effect in MODULE.QUANTIZER_EFFECTS:
+        source = qscale_document()
+        mutated, evidence = MODULE.mutate_document(
+            source, effect, 1.0, 0x474C4943
+        )
+        assert evidence["feature"] == "qscale"
+        assert evidence["changed_values"] > 0
+        assert evidence["minimum_quantizer_scale"] >= 1
+        assert evidence["maximum_quantizer_scale"] <= 31
+        assert all(
+            1 <= value <= 31
+            for frame in mutated["streams"][0]["frames"]
+            for values in frame["qscale"]["slice"]
+            for value in values.values()
+        )
+
     unsupported = motion_document()
     unsupported["streams"][0]["codec"] = "h264"
     try:
@@ -137,7 +200,8 @@ def main() -> int:
             1,
         )
     except MODULE.SyntaxMutationError as error:
-        assert "MPEG-2 video only" in str(error)
+        assert "mpeg2video" in str(error)
+        assert "mpeg4" in str(error)
     else:
         raise AssertionError("H.264 compressed-syntax mutation did not fail")
 
