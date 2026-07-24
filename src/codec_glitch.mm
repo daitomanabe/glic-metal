@@ -2257,8 +2257,12 @@ void CodecGlitchEngineImpl::encodeInitial(FrameContext &context,
     }
   }
 
-  if (prepared == nullptr &&
-      CVPixelBufferGetPixelFormatType(input) != kCVPixelFormatType_32BGRA) {
+  const OSType inputFormat = CVPixelBufferGetPixelFormatType(input);
+  const bool directVideoRangeNv12 =
+      useNv12FastPath_ &&
+      inputFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+  if (prepared == nullptr && inputFormat != kCVPixelFormatType_32BGRA &&
+      !directVideoRangeNv12) {
     prepared = renderScaled(input, fullSizePool_, configuration_.width,
                             configuration_.height);
   }

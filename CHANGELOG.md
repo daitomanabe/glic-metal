@@ -139,6 +139,9 @@ semantic versioning for tagged releases.
 
 ### Changed
 
+- Video-range NV12 (`420v`) host inputs now enter the required NV12/Metal path
+  without a Core Image BGRA staging conversion. BGRA inputs remain supported
+  through the Metal BGRA-to-NV12 conversion kernel.
 - HEVC `pframe_loss` now uses a fused-Metal temporal hold instead of dropping
   reference pictures that can poison the hardware decoder until the next
   random-access point. H.264 retains the encoded-sample hold experiment.

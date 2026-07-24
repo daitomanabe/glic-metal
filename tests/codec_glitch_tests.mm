@@ -59,6 +59,34 @@ void fillMovingFixture(CVPixelBufferRef pixelBuffer, uint64_t frameIndex) {
   CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
 }
 
+void fillMovingNv12Fixture(CVPixelBufferRef pixelBuffer, uint64_t frameIndex) {
+  CVPixelBufferLockBaseAddress(pixelBuffer, 0);
+  auto *luma =
+      static_cast<uint8_t *>(CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0));
+  auto *chroma =
+      static_cast<uint8_t *>(CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 1));
+  const std::size_t lumaStride =
+      CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0);
+  const std::size_t chromaStride =
+      CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 1);
+  for (int y = 0; y < kHeight; ++y) {
+    uint8_t *row = luma + static_cast<std::size_t>(y) * lumaStride;
+    for (int x = 0; x < kWidth; ++x) {
+      const int movingX = (x + static_cast<int>(frameIndex * 13u)) % kWidth;
+      row[x] = static_cast<uint8_t>(16 + ((movingX + y * 2) % 220));
+    }
+  }
+  for (int y = 0; y < kHeight / 2; ++y) {
+    uint8_t *row = chroma + static_cast<std::size_t>(y) * chromaStride;
+    for (int x = 0; x < kWidth / 2; ++x) {
+      row[x * 2] = static_cast<uint8_t>(64 + ((x + frameIndex * 3u) % 128));
+      row[x * 2 + 1] =
+          static_cast<uint8_t>(64 + ((y * 2 + frameIndex * 5u) % 128));
+    }
+  }
+  CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
+}
+
 double sampledDifference(CVPixelBufferRef left, CVPixelBufferRef right) {
   CVPixelBufferLockBaseAddress(left, kCVPixelBufferLock_ReadOnly);
   CVPixelBufferLockBaseAddress(right, kCVPixelBufferLock_ReadOnly);
@@ -418,6 +446,80 @@ int runCppApiTest() {
   return 0;
 }
 
+int runDirectNv12InputTest() {
+  glic::CodecGlitchConfiguration configuration;
+  configuration.width = kWidth;
+  configuration.height = kHeight;
+  configuration.framesPerSecond = 30;
+  configuration.maximumInFlightFrames = 2;
+  configuration.pixelPath = glic::CodecGlitchPixelPath::Nv12Metal;
+
+  std::string error;
+  auto engine = glic::createCodecGlitchEngine(configuration, error);
+  if (!engine) {
+    std::fprintf(stderr, "FAIL direct NV12 initialization: %s\n",
+                 error.c_str());
+    return 13;
+  }
+  NSDictionary *attributes = @{
+    (id)kCVPixelBufferMetalCompatibilityKey : @YES,
+    (id)kCVPixelBufferIOSurfacePropertiesKey : @{},
+  };
+  CVPixelBufferRef input = nullptr;
+  if (CVPixelBufferCreate(
+          kCFAllocatorDefault, kWidth, kHeight,
+          kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+          (__bridge CFDictionaryRef)attributes, &input) != kCVReturnSuccess ||
+      input == nullptr) {
+    std::fprintf(stderr, "FAIL direct NV12 input allocation\n");
+    return 14;
+  }
+  fillMovingNv12Fixture(input, 0);
+  const auto before = engine->stats();
+  if (!engine->submit(input, 0, CMTimeMake(0, 30), error)) {
+    std::fprintf(stderr, "FAIL direct NV12 submit: %s\n", error.c_str());
+    CFRelease(input);
+    return 15;
+  }
+  CFRelease(input);
+
+  glic::CodecGlitchFrame output;
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (!output && std::chrono::steady_clock::now() < deadline) {
+    if (!engine->poll(output))
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  if (!output ||
+      CVPixelBufferGetPixelFormatType(output.pixelBuffer()) !=
+          kCVPixelFormatType_32BGRA) {
+    std::fprintf(stderr, "FAIL direct NV12 output contract\n");
+    return 16;
+  }
+  if (!engine->flush(std::chrono::seconds(3), error)) {
+    std::fprintf(stderr, "FAIL direct NV12 flush: %s\n", error.c_str());
+    return 17;
+  }
+  const auto after = engine->stats();
+  const uint64_t ownedPoolRequests =
+      after.pixelBufferPoolRequests - before.pixelBufferPoolRequests;
+  if (!after.nv12MetalFastPath || !after.fusedMetalEffects ||
+      after.codecErrors != 0 || after.gpuTimeouts != 0 ||
+      ownedPoolRequests != 1) {
+    std::fprintf(stderr,
+                 "FAIL direct NV12 path fast=%d fused=%d errors=%llu "
+                 "gpu_timeouts=%llu owned_pool_requests=%llu\n",
+                 after.nv12MetalFastPath ? 1 : 0,
+                 after.fusedMetalEffects ? 1 : 0,
+                 static_cast<unsigned long long>(after.codecErrors),
+                 static_cast<unsigned long long>(after.gpuTimeouts),
+                 static_cast<unsigned long long>(ownedPoolRequests));
+    return 18;
+  }
+  std::printf("PASS direct 420v input without BGRA staging\n");
+  return 0;
+}
+
 int runCApiTest() {
   if (glic_codec_glitch_get_abi_version() != GLIC_CODEC_GLITCH_ABI_VERSION ||
       std::strcmp(
@@ -542,6 +644,9 @@ int runCApiTest() {
 int main() {
   @autoreleasepool {
     const int cppStatus = runCppApiTest();
-    return cppStatus == 0 ? runCApiTest() : cppStatus;
+    if (cppStatus != 0)
+      return cppStatus;
+    const int directNv12Status = runDirectNv12InputTest();
+    return directNv12Status == 0 ? runCApiTest() : directNv12Status;
   }
 }
