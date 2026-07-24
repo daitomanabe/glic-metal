@@ -2915,15 +2915,22 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderAdvancedRealtime(
           [farFrame imageByApplyingFilter:@"CIColorControls"
                       withInputParameters:@{
                         kCIInputSaturationKey :
-                            @(1.15 + context.controls.amount * 1.35),
+                            @(0.95 + context.controls.amount * 0.65),
                         kCIInputContrastKey :
-                            @(0.92 + context.controls.feedback * 0.20)
+                            @(0.90 + context.controls.feedback * 0.10)
                       }];
       result = [historyColor
           imageByApplyingFilter:@"CIColorBlendMode"
             withInputParameters:@{
               kCIInputBackgroundImageKey : currentLuma
             }];
+      result =
+          [result imageByApplyingFilter:@"CIColorControls"
+                    withInputParameters:@{
+                      kCIInputSaturationKey : @0.86,
+                      kCIInputContrastKey : @0.92,
+                      kCIInputBrightnessKey : @(-0.015)
+                    }];
       break;
     }
     case CodecGlitchEffect::ReferenceAtlas: {
@@ -3105,13 +3112,14 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderAdvancedRealtime(
                                         x, y, cellWidth + 0.5,
                                         cellHeight + 0.5)];
           const CGFloat contrast =
-              0.72 + density * (0.85 + context.controls.amount);
+              0.85 +
+              density * (0.25 + context.controls.amount * 0.35);
           cellImage =
               [cellImage imageByApplyingFilter:@"CIColorControls"
                            withInputParameters:@{
                              kCIInputContrastKey : @(contrast),
                              kCIInputSaturationKey :
-                                 @(0.65 + temporal * 1.15)
+                                 @(0.80 + temporal * 0.65)
                            }];
           const CGFloat shift =
               (hashUnit(spatial ^ context.frameIndex) - 0.5) *
@@ -3171,7 +3179,7 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderAdvancedRealtime(
                      withInputParameters:@{
                        kCIInputSaturationKey : @0.0,
                        kCIInputContrastKey :
-                           @(0.88 + context.controls.amount * 0.30)
+                           @(0.90 + context.controls.amount * 0.15)
                      }];
       CIFilter *pixelate = [CIFilter filterWithName:@"CIPixellate"];
       [pixelate setValue:farFrame forKey:kCIInputImageKey];
@@ -3183,9 +3191,9 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderAdvancedRealtime(
           [historyChroma imageByApplyingFilter:@"CIColorControls"
                            withInputParameters:@{
                              kCIInputSaturationKey :
-                                 @(1.8 + context.controls.feedback * 2.1),
+                                 @(1.10 + context.controls.feedback * 0.80),
                              kCIInputBrightnessKey :
-                                 @(-0.08 + context.controls.rate * 0.14)
+                                 @(-0.05 + context.controls.rate * 0.05)
                            }];
       const CGFloat phase =
           std::sin(context.frameIndex *
@@ -3199,6 +3207,13 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderAdvancedRealtime(
             withInputParameters:@{
               kCIInputBackgroundImageKey : currentLuma
             }];
+      result =
+          [result imageByApplyingFilter:@"CIColorControls"
+                    withInputParameters:@{
+                      kCIInputSaturationKey : @0.88,
+                      kCIInputContrastKey : @0.93,
+                      kCIInputBrightnessKey : @(-0.01)
+                    }];
       break;
     }
     default:
