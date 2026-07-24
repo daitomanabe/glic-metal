@@ -143,7 +143,41 @@ def completed_cell(video: Path, stats: Path, expected_frames: int) -> bool:
         and report.get("fused_metal_effects") is True
         and report.get("asynchronous_metal_delivery") is True
         and report.get("ordered_delivery") is True
+        and report.get("frame_count_preserved") is True
     )
+
+
+def normalize_filter_report(stats_path: Path, expected_frames: int, fps: int) -> None:
+    """Add process-video compatibility fields without hiding filter evidence."""
+    report = load_json(stats_path)
+    reported_frames = int(report.get("frames", 0))
+    preserved = reported_frames == expected_frames
+    kernel_20 = report.get("kernel_realtime_20fps_passed") is True
+    stream_20 = report.get("realtime_20fps_passed") is True
+    report.update(
+        {
+            "processed_frames": reported_frames,
+            "output_frame_count": reported_frames,
+            "frame_count_preserved": preserved,
+            "output_fps": float(fps),
+            "end_to_end_observed_fps": report.get("stream_observed_fps", 0.0),
+            "end_to_end_average_20fps_passed": stream_20,
+            "codec_realtime_20fps_passed": kernel_20,
+            "filter_stream_realtime_20fps_passed": stream_20,
+            "codec_latency_p95_milliseconds": report.get("latency_p95_ms", 0.0),
+            "codec_fallback_frames": report.get("fallback_frames", 0),
+            "codec_intentional_repeat_frames": report.get(
+                "intentional_repeat_frames", 0
+            ),
+            "codec_processing_errors": report.get("codec_errors", 0),
+            "codec_watchdog_recoveries": report.get("watchdog_recoveries", 0),
+        }
+    )
+    temporary = stats_path.with_suffix(stats_path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        json.dump(report, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    temporary.replace(stats_path)
 
 
 def render_control(
@@ -178,8 +212,10 @@ def render_cell(
     video_path = output_dir / "videos" / f"{cell.stem}.mp4"
     stats_path = output_dir / "reports" / f"{cell.stem}.json"
     log_path = output_dir / "logs" / f"{cell.stem}.log"
-    if not force and completed_cell(video_path, stats_path, frames):
-        return cell, video_path, stats_path, True
+    if not force and video_path.is_file() and stats_path.is_file():
+        normalize_filter_report(stats_path, frames, fps)
+        if completed_cell(video_path, stats_path, frames):
+            return cell, video_path, stats_path, True
     video_path.parent.mkdir(parents=True, exist_ok=True)
     stats_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -224,6 +260,7 @@ def render_cell(
             f"{cell.stem} failed: decode={decode_status} "
             f"filter={glitch_status} encode={encode_status}; see {log_path}"
         )
+    normalize_filter_report(stats_path, frames, fps)
     if not completed_cell(video_path, stats_path, frames):
         raise ValidationError(f"{cell.stem} did not produce complete evidence")
     return cell, video_path, stats_path, False

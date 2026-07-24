@@ -143,6 +143,10 @@ semantic versioning for tagged releases.
   concealment, and GOP-accordion reconstructions now use distinct spatial,
   temporal, and color signatures. The Phase 6 visual evaluator no longer finds
   exact or near-exact duplicates in the 36-effect realtime bank.
+- Phase 6 filter reports now include the normalized frame-count, output-fps,
+  latency, fallback, error, and realtime fields consumed by the existing codec
+  video ranking tool, so performance evidence and visual diversity are checked
+  from the same 216-run matrix.
 - Video-range NV12 (`420v`) host inputs now enter the required NV12/Metal path
   without a Core Image BGRA staging conversion. BGRA inputs remain supported
   through the Metal BGRA-to-NV12 conversion kernel.
