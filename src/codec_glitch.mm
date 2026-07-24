@@ -178,6 +178,7 @@ struct FrameContext {
   std::atomic<int64_t> decodeDeadlineNanoseconds{0};
   std::atomic<int> decodeStageIndex{-1};
   dispatch_source_t decodeDeadlineTimer = nullptr;
+  CFMutableDictionaryRef frameOptions = nullptr;
   CVPixelBufferRef fallbackInput = nullptr;
   uint64_t frameIndex = 0;
   CMTime presentationTimeStamp = kCMTimeInvalid;
@@ -705,6 +706,10 @@ private:
   CVPixelBufferPoolRef fullSizePool_ = nullptr;
   CVPixelBufferPoolRef quarterSizePool_ = nullptr;
   CVPixelBufferPoolRef halfSizePool_ = nullptr;
+  CFDictionaryRef fullSizePoolAllocationAttributes_ = nullptr;
+  CFDictionaryRef quarterSizePoolAllocationAttributes_ = nullptr;
+  CFDictionaryRef halfSizePoolAllocationAttributes_ = nullptr;
+  std::array<CFNumberRef, 52> qpNumbers_{};
   AtomicStatistics statistics_;
 };
 
@@ -713,7 +718,9 @@ private:
 namespace {
 
 bool createPixelBufferPool(int width, int height, int minimumBuffers,
-                           CVPixelBufferPoolRef &pool, std::string &error) {
+                           int maximumBuffers, CVPixelBufferPoolRef &pool,
+                           CFDictionaryRef &allocationAttributes,
+                           std::string &error) {
   NSDictionary *poolAttributes = @{
     (__bridge NSString *)
     kCVPixelBufferPoolMinimumBufferCountKey : @(minimumBuffers)
@@ -734,6 +741,44 @@ bool createPixelBufferPool(int width, int height, int minimumBuffers,
         "CVPixelBufferPoolCreate failed with status " + std::to_string(status);
     return false;
   }
+  int32_t threshold = std::max(minimumBuffers, maximumBuffers);
+  CFNumberRef thresholdNumber = CFNumberCreate(
+      kCFAllocatorDefault, kCFNumberSInt32Type, &threshold);
+  const void *keys[] = {kCVPixelBufferPoolAllocationThresholdKey};
+  const void *values[] = {thresholdNumber};
+  allocationAttributes = CFDictionaryCreate(
+      kCFAllocatorDefault, keys, values, 1, &kCFTypeDictionaryKeyCallBacks,
+      &kCFTypeDictionaryValueCallBacks);
+  CFRelease(thresholdNumber);
+  if (allocationAttributes == nullptr) {
+    CVPixelBufferPoolRelease(pool);
+    pool = nullptr;
+    error = "Failed to create pixel-buffer pool allocation attributes";
+    return false;
+  }
+
+  std::vector<CVPixelBufferRef> warmBuffers;
+  warmBuffers.reserve(static_cast<size_t>(minimumBuffers));
+  for (int index = 0; index < minimumBuffers; ++index) {
+    CVPixelBufferRef buffer = nullptr;
+    const CVReturn warmStatus =
+        CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(
+            kCFAllocatorDefault, pool, allocationAttributes, &buffer);
+    if (warmStatus != kCVReturnSuccess || buffer == nullptr) {
+      for (CVPixelBufferRef retained : warmBuffers)
+        CFRelease(retained);
+      CFRelease(allocationAttributes);
+      allocationAttributes = nullptr;
+      CVPixelBufferPoolRelease(pool);
+      pool = nullptr;
+      error = "Failed to warm pixel-buffer pool with status " +
+              std::to_string(warmStatus);
+      return false;
+    }
+    warmBuffers.push_back(buffer);
+  }
+  for (CVPixelBufferRef retained : warmBuffers)
+    CFRelease(retained);
   return true;
 }
 
@@ -852,30 +897,55 @@ bool CodecGlitchEngineImpl::createResources(std::string &error) {
         return false;
       }
 
-      const int poolSize = configuration_.maximumInFlightFrames + 4;
+      const int warmBuffers =
+          std::min(4, std::max(2, configuration_.maximumInFlightFrames));
+      const int fullPoolMaximum =
+          configuration_.decodedHistoryFrames +
+          configuration_.maximumInFlightFrames + 4;
+      const int reducedPoolMaximum =
+          configuration_.maximumInFlightFrames + 3;
       if (!createPixelBufferPool(configuration_.width, configuration_.height,
-                                 poolSize, fullSizePool_, error) ||
+                                 warmBuffers, fullPoolMaximum, fullSizePool_,
+                                 fullSizePoolAllocationAttributes_, error) ||
           !createPixelBufferPool(evenDimension(configuration_.width * 0.25),
                                  evenDimension(configuration_.height * 0.25),
-                                 poolSize, quarterSizePool_, error) ||
+                                 warmBuffers, reducedPoolMaximum,
+                                 quarterSizePool_,
+                                 quarterSizePoolAllocationAttributes_, error) ||
           !createPixelBufferPool(evenDimension(configuration_.width * 0.5),
                                  evenDimension(configuration_.height * 0.5),
-                                 poolSize, halfSizePool_, error)) {
+                                 warmBuffers, reducedPoolMaximum, halfSizePool_,
+                                 halfSizePoolAllocationAttributes_, error)) {
         destroyResources();
         return false;
+      }
+
+      for (int qp = 0; qp <= 51; ++qp) {
+        int32_t narrowed = qp;
+        qpNumbers_[static_cast<size_t>(qp)] =
+            CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &narrowed);
+        if (qpNumbers_[static_cast<size_t>(qp)] == nullptr) {
+          error = "Failed to create cached frame-QP values";
+          destroyResources();
+          return false;
+        }
       }
 
       contextCount_ = static_cast<size_t>(configuration_.maximumInFlightFrames);
       contexts_ = std::make_unique<FrameContext[]>(contextCount_);
       for (size_t index = 0; index < contextCount_; ++index) {
         FrameContext *context = &contexts_[index];
+        context->frameOptions = CFDictionaryCreateMutable(
+            kCFAllocatorDefault, 3, &kCFTypeDictionaryKeyCallBacks,
+            &kCFTypeDictionaryValueCallBacks);
         context->encodeDeadlineTimer = dispatch_source_create(
             DISPATCH_SOURCE_TYPE_TIMER, 0, 0, watchdogQueue_);
         context->decodeDeadlineTimer = dispatch_source_create(
             DISPATCH_SOURCE_TYPE_TIMER, 0, 0, watchdogQueue_);
-        if (context->encodeDeadlineTimer == nullptr ||
+        if (context->frameOptions == nullptr ||
+            context->encodeDeadlineTimer == nullptr ||
             context->decodeDeadlineTimer == nullptr) {
-          error = "Failed to create a codec operation deadline timer";
+          error = "Failed to create codec per-frame resources";
           destroyResources();
           return false;
         }
@@ -950,6 +1020,10 @@ void CodecGlitchEngineImpl::destroyResources() {
         CFRelease(context.fallbackInput);
         context.fallbackInput = nullptr;
       }
+      if (context.frameOptions != nullptr) {
+        CFRelease(context.frameOptions);
+        context.frameOptions = nullptr;
+      }
       if (context.encodeDeadlineTimer != nullptr) {
         dispatch_source_cancel(context.encodeDeadlineTimer);
         context.encodeDeadlineTimer = nullptr;
@@ -976,6 +1050,24 @@ void CodecGlitchEngineImpl::destroyResources() {
   if (halfSizePool_ != nullptr) {
     CVPixelBufferPoolRelease(halfSizePool_);
     halfSizePool_ = nullptr;
+  }
+  if (fullSizePoolAllocationAttributes_ != nullptr) {
+    CFRelease(fullSizePoolAllocationAttributes_);
+    fullSizePoolAllocationAttributes_ = nullptr;
+  }
+  if (quarterSizePoolAllocationAttributes_ != nullptr) {
+    CFRelease(quarterSizePoolAllocationAttributes_);
+    quarterSizePoolAllocationAttributes_ = nullptr;
+  }
+  if (halfSizePoolAllocationAttributes_ != nullptr) {
+    CFRelease(halfSizePoolAllocationAttributes_);
+    halfSizePoolAllocationAttributes_ = nullptr;
+  }
+  for (CFNumberRef &number : qpNumbers_) {
+    if (number != nullptr) {
+      CFRelease(number);
+      number = nullptr;
+    }
   }
   contexts_.reset();
   contextCount_ = 0;
@@ -1758,12 +1850,8 @@ bool CodecGlitchEngineImpl::configureFrameOptions(
                                                    context.controls.minimumQp) *
                                                       damage)),
                      0, 51);
-      int32_t narrowed = qp;
-      CFNumberRef qpNumber =
-          CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &narrowed);
       CFDictionarySetValue(options, kVTEncodeFrameOptionKey_BaseFrameQP,
-                           qpNumber);
-      CFRelease(qpNumber);
+                           qpNumbers_[static_cast<size_t>(qp)]);
     }
   } else if (stage.qpMode) {
     const double wave = temporalWave(context.frameIndex, context.controls.rate);
@@ -1809,15 +1897,14 @@ void CodecGlitchEngineImpl::encodeOnStage(CodecStage &stage,
     markDecodeFailure(context);
     return;
   }
-  CFMutableDictionaryRef frameOptions = CFDictionaryCreateMutable(
-      kCFAllocatorDefault, 3, &kCFTypeDictionaryKeyCallBacks,
-      &kCFTypeDictionaryValueCallBacks);
+  CFMutableDictionaryRef frameOptions = context.frameOptions;
   if (frameOptions == nullptr) {
     markDecodeFailure(context);
     return;
   }
+  CFDictionaryRemoveAllValues(frameOptions);
   if (!configureFrameOptions(stage, context, frameOptions, error)) {
-    CFRelease(frameOptions);
+    CFDictionaryRemoveAllValues(frameOptions);
     markDecodeFailure(context);
     return;
   }
@@ -1839,7 +1926,7 @@ void CodecGlitchEngineImpl::encodeOnStage(CodecStage &stage,
   const OSStatus status = VTCompressionSessionEncodeFrame(
       stage.encoder, input, context.presentationTimeStamp, duration,
       frameOptions, callbackToken, nullptr);
-  CFRelease(frameOptions);
+  CFDictionaryRemoveAllValues(frameOptions);
   if (status != noErr) {
     uint64_t expectedToken = encodeToken;
     if (!context.encodeToken.compare_exchange_strong(expectedToken, 0,
@@ -2081,8 +2168,19 @@ static void compressionOutputCallback(void *outputCallbackRefCon,
 CVReturn CodecGlitchEngineImpl::allocatePixelBuffer(
     CVPixelBufferPoolRef pool, CVPixelBufferRef *output) noexcept {
   statistics_.pixelBufferPoolRequests.fetch_add(1, std::memory_order_relaxed);
-  const CVReturn status =
-      CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, output);
+  CFDictionaryRef allocationAttributes = nullptr;
+  if (pool == fullSizePool_)
+    allocationAttributes = fullSizePoolAllocationAttributes_;
+  else if (pool == quarterSizePool_)
+    allocationAttributes = quarterSizePoolAllocationAttributes_;
+  else if (pool == halfSizePool_)
+    allocationAttributes = halfSizePoolAllocationAttributes_;
+  const CVReturn status = allocationAttributes != nullptr
+                              ? CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(
+                                    kCFAllocatorDefault, pool,
+                                    allocationAttributes, output)
+                              : CVPixelBufferPoolCreatePixelBuffer(
+                                    kCFAllocatorDefault, pool, output);
   if (status != kCVReturnSuccess || output == nullptr || *output == nullptr)
     statistics_.pixelBufferPoolFailures.fetch_add(1,
                                                   std::memory_order_relaxed);

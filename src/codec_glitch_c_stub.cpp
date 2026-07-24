@@ -105,7 +105,7 @@ void glic_codec_glitch_config_init(glic_codec_glitch_config *config) {
   config->key_frame_interval = 60;
   config->maximum_slice_bytes = 4000;
   config->decoded_history_frames = 12;
-  config->maximum_in_flight_frames = 24;
+  config->maximum_in_flight_frames = 8;
   config->poll_queue_capacity = 8;
   config->require_hardware_encoder = 1;
   config->require_hardware_decoder = 1;

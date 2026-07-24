@@ -108,7 +108,7 @@ struct CodecGlitchConfiguration {
   // and the slice effects never depend on physical compressed-frame splitting.
   int maximumSliceBytes = 4000;
   int decodedHistoryFrames = 12;
-  int maximumInFlightFrames = 24;
+  int maximumInFlightFrames = 8;
   int pollQueueCapacity = 8;
   bool requireHardwareEncoder = true;
   bool requireHardwareDecoder = true;

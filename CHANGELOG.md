@@ -131,6 +131,10 @@ semantic versioning for tagged releases.
 
 ### Changed
 
+- The realtime VideoToolbox path now decodes the encoder's original
+  `CMSampleBuffer` without rebuilding or copying compressed payloads, bounds
+  and prewarms its pixel-buffer pools, defaults to eight in-flight frames, and
+  reuses per-frame option dictionaries and cached QP values.
 - The bilingual README now explains how the realtime architecture accelerates
   the original Java/Processing implementation, including direct in-memory
   processing, Metal reconstruction, channel/frontier parallelism, persistent
