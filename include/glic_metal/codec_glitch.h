@@ -179,7 +179,9 @@ typedef struct glic_codec_glitch_stats {
   uint32_t nv12_metal_fast_path;
   uint32_t metal_texture_cache;
   uint32_t fused_metal_effects;
-  uint32_t reserved[5];
+  uint32_t asynchronous_metal_delivery;
+  uint32_t ordered_delivery;
+  uint32_t reserved[3];
 } glic_codec_glitch_stats;
 
 uint32_t glic_codec_glitch_get_abi_version(void);

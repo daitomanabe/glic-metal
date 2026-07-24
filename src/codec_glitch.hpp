@@ -138,6 +138,8 @@ struct CodecGlitchStatistics {
   uint64_t pixelBufferPoolRequests = 0;
   uint64_t pixelBufferPoolFailures = 0;
   uint64_t peakInFlightFrames = 0;
+  uint64_t gpuCommandBuffers = 0;
+  uint64_t gpuTimeouts = 0;
   double lastLatencyMilliseconds = 0.0;
   double averageLatencyMilliseconds = 0.0;
   double averageQueueLatencyMilliseconds = 0.0;
@@ -155,6 +157,8 @@ struct CodecGlitchStatistics {
   bool nv12MetalFastPath = false;
   bool metalTextureCache = false;
   bool fusedMetalEffects = false;
+  bool asynchronousMetalDelivery = false;
+  bool orderedDelivery = false;
 };
 
 // Owns one retain on its pixel buffer.  Copying a frame retains the buffer;

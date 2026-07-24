@@ -139,6 +139,10 @@ semantic versioning for tagged releases.
 
 ### Changed
 
+- Decoded NV12 frames now leave the VideoToolbox callback immediately after
+  committing a Metal command buffer. GPU completion has its own bounded
+  watchdog token, accepted submissions are delivered in order even when work
+  overlaps, and flush waits for both contexts and outstanding command buffers.
 - The realtime VideoToolbox path now decodes the encoder's original
   `CMSampleBuffer` without rebuilding or copying compressed payloads, bounds
   and prewarms its pixel-buffer pools, defaults to eight in-flight frames, and

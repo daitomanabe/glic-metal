@@ -471,6 +471,9 @@ glic_codec_glitch_get_stats(const glic_codec_glitch_context *context,
     stats->nv12_metal_fast_path = source.nv12MetalFastPath ? 1u : 0u;
     stats->metal_texture_cache = source.metalTextureCache ? 1u : 0u;
     stats->fused_metal_effects = source.fusedMetalEffects ? 1u : 0u;
+    stats->asynchronous_metal_delivery =
+        source.asynchronousMetalDelivery ? 1u : 0u;
+    stats->ordered_delivery = source.orderedDelivery ? 1u : 0u;
     return GLIC_CODEC_GLITCH_OK;
   });
 }

@@ -266,6 +266,62 @@ int runCppApiTest() {
                 largestDifference[effectIndex], p95Latency, effectFps);
   }
 
+  // Submit a real burst so multiple VideoToolbox/Metal operations overlap.
+  // Completion is still delivered in accepted submission order.
+  if (!engine->reset(error)) {
+    std::fprintf(stderr, "FAIL reset before async burst: %s\n", error.c_str());
+    CFRelease(pool);
+    return 11;
+  }
+  glic::CodecGlitchControls burstControls;
+  burstControls.effect = glic::CodecGlitchEffect::FlowLattice;
+  burstControls.amount = 0.78f;
+  burstControls.feedback = 0.74f;
+  engine->setControls(burstControls);
+  constexpr int kBurstFrames = 4;
+  const uint64_t burstFirstFrame = frameIndex;
+  for (int index = 0; index < kBurstFrames; ++index) {
+    CVPixelBufferRef input = nullptr;
+    if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &input) !=
+            kCVReturnSuccess ||
+        input == nullptr) {
+      std::fprintf(stderr, "FAIL async burst fixture allocation\n");
+      CFRelease(pool);
+      return 11;
+    }
+    fillMovingFixture(input, frameIndex);
+    if (!engine->submit(input, frameIndex, CMTimeMake(frameIndex, 30), error)) {
+      std::fprintf(stderr, "FAIL async burst submit: %s\n", error.c_str());
+      CFRelease(input);
+      CFRelease(pool);
+      return 11;
+    }
+    ++frameIndex;
+    CFRelease(input);
+  }
+  for (int index = 0; index < kBurstFrames; ++index) {
+    glic::CodecGlitchFrame output;
+    {
+      std::unique_lock lock(outputState->mutex);
+      const bool ready = outputState->condition.wait_for(
+          lock, std::chrono::seconds(2),
+          [&] { return !outputState->frames.empty(); });
+      if (ready) {
+        output = std::move(outputState->frames.front());
+        outputState->frames.pop_front();
+      }
+    }
+    const uint64_t expected = burstFirstFrame + static_cast<uint64_t>(index);
+    if (!output || output.frameIndex != expected) {
+      std::fprintf(stderr,
+                   "FAIL async burst order expected=%llu actual=%llu\n",
+                   static_cast<unsigned long long>(expected),
+                   static_cast<unsigned long long>(output.frameIndex));
+      CFRelease(pool);
+      return 11;
+    }
+  }
+
   // Hosts commonly flush or reset from an output callback. Verify the queue
   // identity guard and bounded callback state prevent self-deadlock and keep
   // old-stream frames from leaking across reset.
@@ -330,12 +386,16 @@ int runCppApiTest() {
       statistics.watchdogRecoveries != 0 || statistics.pollQueueDrops != 0 ||
       statistics.compressedCopyBytes != 0 ||
       statistics.sampleBufferRebuilds != 0 ||
-      statistics.peakInFlightFrames == 0) {
+      statistics.peakInFlightFrames < kBurstFrames ||
+      statistics.gpuCommandBuffers == 0 || statistics.gpuTimeouts != 0 ||
+      !statistics.nv12MetalFastPath || !statistics.metalTextureCache ||
+      !statistics.fusedMetalEffects ||
+      !statistics.asynchronousMetalDelivery || !statistics.orderedDelivery) {
     std::fprintf(
         stderr,
         "FAIL statistics submitted=%llu emitted=%llu backpressure=%llu "
         "errors=%llu recoveries=%llu poll=%llu copy_bytes=%llu rebuilds=%llu "
-        "peak_in_flight=%llu\n",
+        "peak_in_flight=%llu gpu=%llu gpu_timeouts=%llu async=%d ordered=%d\n",
         static_cast<unsigned long long>(statistics.submittedFrames),
         static_cast<unsigned long long>(statistics.emittedFrames),
         static_cast<unsigned long long>(statistics.backpressureDrops),
@@ -344,7 +404,11 @@ int runCppApiTest() {
         static_cast<unsigned long long>(statistics.pollQueueDrops),
         static_cast<unsigned long long>(statistics.compressedCopyBytes),
         static_cast<unsigned long long>(statistics.sampleBufferRebuilds),
-        static_cast<unsigned long long>(statistics.peakInFlightFrames));
+        static_cast<unsigned long long>(statistics.peakInFlightFrames),
+        static_cast<unsigned long long>(statistics.gpuCommandBuffers),
+        static_cast<unsigned long long>(statistics.gpuTimeouts),
+        statistics.asynchronousMetalDelivery ? 1 : 0,
+        statistics.orderedDelivery ? 1 : 0);
     return 12;
   }
   std::printf("PASS C++ codec glitch effects=%u frames=%llu hw_encoder=1 "
@@ -460,7 +524,10 @@ int runCApiTest() {
   glic_codec_glitch_stats stats;
   glic_codec_glitch_stats_init(&stats);
   if (glic_codec_glitch_get_stats(context, &stats) != GLIC_CODEC_GLITCH_OK ||
-      !stats.hardware_encoder || !stats.hardware_decoder) {
+      !stats.hardware_encoder || !stats.hardware_decoder ||
+      !stats.nv12_metal_fast_path || !stats.metal_texture_cache ||
+      !stats.fused_metal_effects || !stats.asynchronous_metal_delivery ||
+      !stats.ordered_delivery) {
     std::fprintf(stderr, "FAIL C hardware statistics\n");
     glic_codec_glitch_context_destroy(context);
     return 25;

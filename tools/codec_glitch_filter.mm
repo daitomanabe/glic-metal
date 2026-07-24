@@ -345,6 +345,9 @@ void writeStats(const Options &options,
          << statistics.pixelBufferPoolFailures << ",\n"
          << "  \"peak_in_flight_frames\": "
          << statistics.peakInFlightFrames << ",\n"
+         << "  \"gpu_command_buffers\": "
+         << statistics.gpuCommandBuffers << ",\n"
+         << "  \"gpu_timeouts\": " << statistics.gpuTimeouts << ",\n"
          << "  \"fallback_frames\": " << fallbackFrames << ",\n"
          << "  \"intentional_repeat_frames\": " << intentionalRepeatFrames
          << ",\n"
@@ -380,6 +383,10 @@ void writeStats(const Options &options,
          << jsonBool(statistics.metalTextureCache) << ",\n"
          << "  \"fused_metal_effects\": "
          << jsonBool(statistics.fusedMetalEffects) << ",\n"
+         << "  \"asynchronous_metal_delivery\": "
+         << jsonBool(statistics.asynchronousMetalDelivery) << ",\n"
+         << "  \"ordered_delivery\": "
+         << jsonBool(statistics.orderedDelivery) << ",\n"
          << "  \"kernel_realtime_20fps_passed\": " << jsonBool(kernelPassed20)
          << ",\n"
          << "  \"kernel_realtime_30fps_passed\": " << jsonBool(kernelPassed30)

@@ -17,6 +17,7 @@
 #include <cstring>
 #include <deque>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -46,6 +47,8 @@ constexpr auto kDecodeWarmupDeadline = std::chrono::milliseconds(300);
 // enforces p95 <= 50 ms and zero fallback.
 constexpr auto kEncodeDeadline = std::chrono::milliseconds(100);
 constexpr auto kEncodeWarmupDeadline = std::chrono::milliseconds(500);
+constexpr auto kGpuDeadline = std::chrono::milliseconds(80);
+constexpr auto kGpuWarmupDeadline = std::chrono::milliseconds(300);
 char kCodecEncodeQueueKey;
 char kCodecCallbackQueueKey;
 
@@ -235,16 +238,21 @@ struct FrameContext {
   std::atomic<int64_t> decodeDeadlineNanoseconds{0};
   std::atomic<int> decodeStageIndex{-1};
   dispatch_source_t decodeDeadlineTimer = nullptr;
+  std::atomic<uint64_t> gpuToken{0};
+  std::atomic<int64_t> gpuDeadlineNanoseconds{0};
+  dispatch_source_t gpuDeadlineTimer = nullptr;
   CFMutableDictionaryRef frameOptions = nullptr;
   id<MTLBuffer> effectUniformBuffer = nil;
   CVPixelBufferRef fallbackInput = nullptr;
   uint64_t frameIndex = 0;
+  uint64_t submissionSequence = 0;
   CMTime presentationTimeStamp = kCMTimeInvalid;
   CodecGlitchControls controls;
   std::chrono::steady_clock::time_point submittedAt;
   std::chrono::steady_clock::time_point encodeSubmittedAt;
   std::chrono::steady_clock::time_point sampleProcessingStartedAt;
   std::chrono::steady_clock::time_point decodeSubmittedAt;
+  std::chrono::steady_clock::time_point postProcessStartedAt;
   int generation = 0;
   int targetGenerations = 1;
   bool lowResolution = false;
@@ -482,6 +490,12 @@ namespace {
 
 class CodecGlitchEngineImpl;
 
+struct GpuCompletionState {
+  std::mutex mutex;
+  CodecGlitchEngineImpl *owner = nullptr;
+  dispatch_group_t group = dispatch_group_create();
+};
+
 struct CodecStage {
   CodecGlitchEngineImpl *owner = nullptr;
   int index = 0;
@@ -519,6 +533,8 @@ struct AtomicStatistics {
   std::atomic<uint64_t> pixelBufferPoolRequests{0};
   std::atomic<uint64_t> pixelBufferPoolFailures{0};
   std::atomic<uint64_t> peakInFlightFrames{0};
+  std::atomic<uint64_t> gpuCommandBuffers{0};
+  std::atomic<uint64_t> gpuTimeouts{0};
   std::atomic<uint64_t> totalLatencyMicroseconds{0};
   std::atomic<uint64_t> totalQueueMicroseconds{0};
   std::atomic<uint64_t> queueSamples{0};
@@ -540,6 +556,8 @@ struct AtomicStatistics {
   std::atomic<bool> nv12MetalFastPath{false};
   std::atomic<bool> metalTextureCache{false};
   std::atomic<bool> fusedMetalEffects{false};
+  std::atomic<bool> asynchronousMetalDelivery{false};
+  std::atomic<bool> orderedDelivery{true};
 };
 
 struct CallbackDeliveryState {
@@ -654,6 +672,13 @@ private:
                              std::chrono::milliseconds timeout);
   void disarmDecodeDeadline(FrameContext &context);
   void handleDecodeDeadline(FrameContext &context);
+  FrameContext *findGpuContext(uint64_t gpuToken) noexcept;
+  uint64_t armGpuDeadline(FrameContext &context,
+                          std::chrono::milliseconds timeout);
+  void disarmGpuDeadline(FrameContext &context);
+  void handleGpuDeadline(FrameContext &context);
+  void handleGpuCompletion(uint64_t gpuToken, bool succeeded,
+                           CVPixelBufferRef output);
   void encodeInitial(FrameContext &context, CVPixelBufferRef input);
   void encodeOnStage(CodecStage &stage, FrameContext &context,
                      CVPixelBufferRef input);
@@ -718,15 +743,15 @@ private:
   CVPixelBufferRef convertBgraToNv12(CVPixelBufferRef input,
                                      CVPixelBufferPoolRef pool);
   CVPixelBufferRef convertNv12ToBgra(CVPixelBufferRef input);
-  CVPixelBufferRef renderFusedMetal(CVPixelBufferRef input,
-                                    CVPixelBufferRef nearHistory,
-                                    CVPixelBufferRef farHistory,
-                                    FrameContext &context);
+  bool submitFusedMetal(CVPixelBufferRef input,
+                        CVPixelBufferRef nearHistory,
+                        CVPixelBufferRef farHistory, FrameContext &context);
   void finishDecodedFrame(CodecStage &stage, FrameContext &context,
                           CVPixelBufferRef imageBuffer);
   void emit(FrameContext &context, CVPixelBufferRef imageBuffer,
             bool repeatedPreviousFrame, bool intentionalRepeat = false,
             bool nonIntentionalFallback = false);
+  void deliverFrame(FrameContext &context, CodecGlitchFrame frame);
   void repeatOrDrop(FrameContext &context, bool intentional);
   void markDecodeFailure(FrameContext &context);
   void failClaimedContext(FrameContext &context) noexcept;
@@ -745,6 +770,8 @@ private:
   std::atomic<uint64_t> inFlight_{0};
   std::atomic<uint64_t> nextEncodeToken_{1};
   std::atomic<uint64_t> nextDecodeToken_{1};
+  std::atomic<uint64_t> nextGpuToken_{1};
+  std::atomic<uint64_t> nextSubmissionSequence_{1};
   std::mutex inFlightMutex_;
   std::condition_variable inFlightCondition_;
   std::mutex lifecycleMutex_;
@@ -758,6 +785,11 @@ private:
   dispatch_queue_t callbackQueue_ = nullptr;
   dispatch_queue_t watchdogQueue_ = nullptr;
   std::shared_ptr<CallbackDeliveryState> callbackState_;
+  std::shared_ptr<GpuCompletionState> gpuCompletionState_;
+  std::mutex orderedDeliveryMutex_;
+  std::map<uint64_t, std::pair<FrameContext *, CodecGlitchFrame>>
+      orderedDeliveryPending_;
+  uint64_t nextDeliverySequence_ = 1;
 
   mutable std::mutex pollMutex_;
   std::vector<CodecGlitchFrame> pollRing_;
@@ -879,6 +911,10 @@ CodecGlitchEngineImpl::~CodecGlitchEngineImpl() {
   } catch (...) {
     // Destructors are a hard C++/C ABI boundary and must remain noexcept.
   }
+  if (gpuCompletionState_) {
+    std::lock_guard lock(gpuCompletionState_->mutex);
+    gpuCompletionState_->owner = nullptr;
+  }
   shuttingDown_.store(true, std::memory_order_release);
   try {
     clearPendingCallbacks(true);
@@ -925,6 +961,8 @@ bool CodecGlitchEngineImpl::initialize(std::string &error) {
   callbackState_ = std::make_shared<CallbackDeliveryState>();
   callbackState_->ring.resize(
       static_cast<size_t>(configuration_.pollQueueCapacity));
+  gpuCompletionState_ = std::make_shared<GpuCompletionState>();
+  gpuCompletionState_->owner = this;
   configuration_.maximumSliceBytes =
       clampValue(configuration_.maximumSliceBytes, 1024, 1048576);
   outputHistory_.assign(
@@ -1189,10 +1227,13 @@ bool CodecGlitchEngineImpl::createResources(std::string &error) {
             DISPATCH_SOURCE_TYPE_TIMER, 0, 0, watchdogQueue_);
         context->decodeDeadlineTimer = dispatch_source_create(
             DISPATCH_SOURCE_TYPE_TIMER, 0, 0, watchdogQueue_);
+        context->gpuDeadlineTimer = dispatch_source_create(
+            DISPATCH_SOURCE_TYPE_TIMER, 0, 0, watchdogQueue_);
         if (context->frameOptions == nullptr ||
             (useNv12FastPath_ && context->effectUniformBuffer == nil) ||
             context->encodeDeadlineTimer == nullptr ||
-            context->decodeDeadlineTimer == nullptr) {
+            context->decodeDeadlineTimer == nullptr ||
+            context->gpuDeadlineTimer == nullptr) {
           error = "Failed to create codec per-frame resources";
           destroyResources();
           return false;
@@ -1211,6 +1252,13 @@ bool CodecGlitchEngineImpl::createResources(std::string &error) {
           handleDecodeDeadline(*context);
         });
         dispatch_resume(context->decodeDeadlineTimer);
+        dispatch_source_set_timer(context->gpuDeadlineTimer,
+                                  DISPATCH_TIME_FOREVER, DISPATCH_TIME_FOREVER,
+                                  0);
+        dispatch_source_set_event_handler(context->gpuDeadlineTimer, ^{
+          handleGpuDeadline(*context);
+        });
+        dispatch_resume(context->gpuDeadlineTimer);
       }
       pollRing_.clear();
       pollRing_.resize(static_cast<size_t>(configuration_.pollQueueCapacity));
@@ -1276,6 +1324,7 @@ void CodecGlitchEngineImpl::destroyResources() {
       FrameContext &context = contexts_[index];
       context.encodeToken.store(0, std::memory_order_release);
       context.decodeToken.store(0, std::memory_order_release);
+      context.gpuToken.store(0, std::memory_order_release);
       if (context.fallbackInput != nullptr) {
         CFRelease(context.fallbackInput);
         context.fallbackInput = nullptr;
@@ -1292,6 +1341,10 @@ void CodecGlitchEngineImpl::destroyResources() {
       if (context.decodeDeadlineTimer != nullptr) {
         dispatch_source_cancel(context.decodeDeadlineTimer);
         context.decodeDeadlineTimer = nullptr;
+      }
+      if (context.gpuDeadlineTimer != nullptr) {
+        dispatch_source_cancel(context.gpuDeadlineTimer);
+        context.gpuDeadlineTimer = nullptr;
       }
     }
     if (watchdogQueue_ != nullptr)
@@ -1679,6 +1732,7 @@ FrameContext *CodecGlitchEngineImpl::acquireContext() {
       updateAtomicPeak(statistics_.peakInFlightFrames, current);
       contexts_[index].decodeToken.store(0, std::memory_order_relaxed);
       contexts_[index].encodeToken.store(0, std::memory_order_relaxed);
+      contexts_[index].gpuToken.store(0, std::memory_order_relaxed);
       return &contexts_[index];
     }
   }
@@ -1688,8 +1742,10 @@ FrameContext *CodecGlitchEngineImpl::acquireContext() {
 void CodecGlitchEngineImpl::releaseContext(FrameContext &context) {
   disarmEncodeDeadline(context);
   disarmDecodeDeadline(context);
+  disarmGpuDeadline(context);
   context.encodeToken.store(0, std::memory_order_release);
   context.decodeToken.store(0, std::memory_order_release);
+  context.gpuToken.store(0, std::memory_order_release);
   CVPixelBufferRef fallbackInput = context.fallbackInput;
   context.fallbackInput = nullptr;
   if (fallbackInput != nullptr)
@@ -1859,6 +1915,103 @@ void CodecGlitchEngineImpl::handleDecodeDeadline(FrameContext &context) {
   markDecodeFailure(context);
 }
 
+FrameContext *
+CodecGlitchEngineImpl::findGpuContext(uint64_t gpuToken) noexcept {
+  if (gpuToken == 0 || contexts_ == nullptr)
+    return nullptr;
+  for (size_t index = 0; index < contextCount_; ++index) {
+    FrameContext &context = contexts_[index];
+    if (context.inUse.load(std::memory_order_acquire) &&
+        context.gpuToken.load(std::memory_order_acquire) == gpuToken)
+      return &context;
+  }
+  return nullptr;
+}
+
+uint64_t
+CodecGlitchEngineImpl::armGpuDeadline(FrameContext &context,
+                                      std::chrono::milliseconds timeout) {
+  uint64_t token = nextGpuToken_.fetch_add(1, std::memory_order_relaxed);
+  if (token == 0)
+    token = nextGpuToken_.fetch_add(1, std::memory_order_relaxed);
+  const int64_t deadline =
+      steadyNanoseconds() +
+      std::chrono::duration_cast<std::chrono::nanoseconds>(timeout).count();
+  context.gpuDeadlineNanoseconds.store(deadline, std::memory_order_release);
+  context.gpuToken.store(token, std::memory_order_release);
+  if (context.gpuDeadlineTimer != nullptr) {
+    dispatch_source_set_timer(
+        context.gpuDeadlineTimer,
+        dispatch_time(
+            DISPATCH_TIME_NOW,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(timeout)
+                .count()),
+        DISPATCH_TIME_FOREVER, NSEC_PER_MSEC);
+  }
+  return token;
+}
+
+void CodecGlitchEngineImpl::disarmGpuDeadline(FrameContext &context) {
+  if (context.gpuDeadlineTimer != nullptr) {
+    dispatch_source_set_timer(context.gpuDeadlineTimer, DISPATCH_TIME_FOREVER,
+                              DISPATCH_TIME_FOREVER, 0);
+  }
+}
+
+void CodecGlitchEngineImpl::handleGpuDeadline(FrameContext &context) {
+  if (shuttingDown_.load(std::memory_order_acquire) ||
+      !context.inUse.load(std::memory_order_acquire))
+    return;
+  const int64_t deadline =
+      context.gpuDeadlineNanoseconds.load(std::memory_order_acquire);
+  const int64_t now = steadyNanoseconds();
+  if (now < deadline) {
+    if (context.gpuDeadlineTimer != nullptr) {
+      dispatch_source_set_timer(
+          context.gpuDeadlineTimer,
+          dispatch_time(DISPATCH_TIME_NOW, deadline - now),
+          DISPATCH_TIME_FOREVER, NSEC_PER_MSEC);
+    }
+    return;
+  }
+  uint64_t token = context.gpuToken.load(std::memory_order_acquire);
+  if (token == 0 ||
+      !context.gpuToken.compare_exchange_strong(
+          token, 0, std::memory_order_acq_rel, std::memory_order_acquire))
+    return;
+  disarmGpuDeadline(context);
+  statistics_.gpuTimeouts.fetch_add(1, std::memory_order_relaxed);
+  statistics_.totalPostProcessMicroseconds.fetch_add(
+      elapsedMicroseconds(context.postProcessStartedAt),
+      std::memory_order_relaxed);
+  statistics_.postProcessSamples.fetch_add(1, std::memory_order_relaxed);
+  forceRecovery_.store(true, std::memory_order_release);
+  markDecodeFailure(context);
+}
+
+void CodecGlitchEngineImpl::handleGpuCompletion(uint64_t gpuToken,
+                                                bool succeeded,
+                                                CVPixelBufferRef output) {
+  FrameContext *context = findGpuContext(gpuToken);
+  if (context == nullptr)
+    return;
+  uint64_t expectedToken = gpuToken;
+  if (!context->gpuToken.compare_exchange_strong(
+          expectedToken, 0, std::memory_order_acq_rel,
+          std::memory_order_acquire))
+    return;
+  disarmGpuDeadline(*context);
+  statistics_.totalPostProcessMicroseconds.fetch_add(
+      elapsedMicroseconds(context->postProcessStartedAt),
+      std::memory_order_relaxed);
+  statistics_.postProcessSamples.fetch_add(1, std::memory_order_relaxed);
+  if (!succeeded || output == nullptr) {
+    markDecodeFailure(*context);
+    return;
+  }
+  emit(*context, output, false);
+}
+
 bool CodecGlitchEngineImpl::submit(CVPixelBufferRef input, uint64_t frameIndex,
                                    CMTime presentationTimeStamp,
                                    std::string &error) {
@@ -1894,6 +2047,8 @@ bool CodecGlitchEngineImpl::submit(CVPixelBufferRef input, uint64_t frameIndex,
     controlsSnapshot = controls_;
   }
   context->frameIndex = frameIndex;
+  context->submissionSequence =
+      nextSubmissionSequence_.fetch_add(1, std::memory_order_relaxed);
   context->presentationTimeStamp =
       CMTIME_IS_VALID(presentationTimeStamp)
           ? presentationTimeStamp
@@ -1904,6 +2059,7 @@ bool CodecGlitchEngineImpl::submit(CVPixelBufferRef input, uint64_t frameIndex,
   context->encodeSubmittedAt = {};
   context->sampleProcessingStartedAt = {};
   context->decodeSubmittedAt = {};
+  context->postProcessStartedAt = {};
   context->generation = 0;
   context->targetGenerations =
       controlsSnapshot.effect == CodecGlitchEffect::GenerationCascade
@@ -2010,6 +2166,10 @@ CodecGlitchStatistics CodecGlitchEngineImpl::stats() const noexcept {
       statistics_.pixelBufferPoolFailures.load(std::memory_order_relaxed);
   result.peakInFlightFrames =
       statistics_.peakInFlightFrames.load(std::memory_order_relaxed);
+  result.gpuCommandBuffers =
+      statistics_.gpuCommandBuffers.load(std::memory_order_relaxed);
+  result.gpuTimeouts =
+      statistics_.gpuTimeouts.load(std::memory_order_relaxed);
   result.lastLatencyMilliseconds =
       statistics_.lastLatencyMilliseconds.load(std::memory_order_relaxed);
   const uint64_t emitted = result.emittedFrames;
@@ -2057,6 +2217,10 @@ CodecGlitchStatistics CodecGlitchEngineImpl::stats() const noexcept {
       statistics_.metalTextureCache.load(std::memory_order_relaxed);
   result.fusedMetalEffects =
       statistics_.fusedMetalEffects.load(std::memory_order_relaxed);
+  result.asynchronousMetalDelivery =
+      statistics_.asynchronousMetalDelivery.load(std::memory_order_relaxed);
+  result.orderedDelivery =
+      statistics_.orderedDelivery.load(std::memory_order_relaxed);
   return result;
 }
 
@@ -2707,7 +2871,7 @@ CodecGlitchEngineImpl::convertNv12ToBgra(CVPixelBufferRef input) {
   return output;
 }
 
-CVPixelBufferRef CodecGlitchEngineImpl::renderFusedMetal(
+bool CodecGlitchEngineImpl::submitFusedMetal(
     CVPixelBufferRef input, CVPixelBufferRef nearHistory,
     CVPixelBufferRef farHistory, FrameContext &context) {
   const OSType inputFormat =
@@ -2718,12 +2882,12 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderFusedMetal(
       codecFallbackTexture_ == nil ||
       (inputFormat != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange &&
        inputFormat != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange))
-    return nullptr;
+    return false;
 
   CVPixelBufferRef output = nullptr;
   if (allocatePixelBuffer(fullSizePool_, &output) != kCVReturnSuccess ||
       output == nullptr)
-    return nullptr;
+    return false;
   const size_t inputWidth = CVPixelBufferGetWidth(input);
   const size_t inputHeight = CVPixelBufferGetHeight(input);
   const size_t outputWidth = CVPixelBufferGetWidth(output);
@@ -2755,7 +2919,7 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderFusedMetal(
     if (outputRef != nullptr)
       CFRelease(outputRef);
     CFRelease(output);
-    return nullptr;
+    return false;
   }
 
   const auto mapHistory = [&](CVPixelBufferRef buffer,
@@ -2804,7 +2968,7 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderFusedMetal(
     CFRelease(currentCbCrRef);
     CFRelease(outputRef);
     CFRelease(output);
-    return nullptr;
+    return false;
   }
   [encoder setComputePipelineState:codecEffectPipeline_];
   [encoder setTexture:CVMetalTextureGetTexture(currentYRef) atIndex:0];
@@ -2820,9 +2984,39 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderFusedMetal(
   [encoder dispatchThreads:MTLSizeMake(outputWidth, outputHeight, 1)
       threadsPerThreadgroup:MTLSizeMake(threadWidth, threadHeight, 1)];
   [encoder endEncoding];
+  const auto completionState = gpuCompletionState_;
+  if (!completionState) {
+    if (nearRef != nullptr)
+      CFRelease(nearRef);
+    if (farRef != nullptr)
+      CFRelease(farRef);
+    CFRelease(currentYRef);
+    CFRelease(currentCbCrRef);
+    CFRelease(outputRef);
+    CFRelease(output);
+    return false;
+  }
+  CVBufferPropagateAttachments(input, output);
+  context.postProcessStartedAt = std::chrono::steady_clock::now();
+  const uint64_t gpuToken = armGpuDeadline(
+      context, context.codecWarmup ? kGpuWarmupDeadline : kGpuDeadline);
+  dispatch_group_enter(completionState->group);
+  [command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+    {
+      std::lock_guard lock(completionState->mutex);
+      if (completionState->owner != nullptr) {
+        completionState->owner->handleGpuCompletion(
+            gpuToken, completed.status == MTLCommandBufferStatusCompleted,
+            output);
+      }
+    }
+    CFRelease(output);
+    dispatch_group_leave(completionState->group);
+  }];
+  statistics_.gpuCommandBuffers.fetch_add(1, std::memory_order_relaxed);
+  statistics_.asynchronousMetalDelivery.store(true,
+                                              std::memory_order_relaxed);
   [command commit];
-  [command waitUntilCompleted];
-  const bool succeeded = command.status == MTLCommandBufferStatusCompleted;
   if (nearRef != nullptr)
     CFRelease(nearRef);
   if (farRef != nullptr)
@@ -2830,12 +3024,7 @@ CVPixelBufferRef CodecGlitchEngineImpl::renderFusedMetal(
   CFRelease(currentYRef);
   CFRelease(currentCbCrRef);
   CFRelease(outputRef);
-  if (!succeeded) {
-    CFRelease(output);
-    return nullptr;
-  }
-  CVBufferPropagateAttachments(input, output);
-  return output;
+  return true;
 }
 
 CVPixelBufferRef CodecGlitchEngineImpl::renderScaled(CVPixelBufferRef input,
@@ -4145,13 +4334,19 @@ void CodecGlitchEngineImpl::finishDecodedFrame(CodecStage &stage,
       farHistory = nearHistory;
       CFRetain(farHistory);
     }
-    processed =
-        renderFusedMetal(imageBuffer, nearHistory, farHistory, context);
-    requiredPostProcessing = true;
+    const bool submitted =
+        submitFusedMetal(imageBuffer, nearHistory, farHistory, context);
     if (nearHistory != nullptr)
       CFRelease(nearHistory);
     if (farHistory != nullptr)
       CFRelease(farHistory);
+    if (!submitted) {
+      statistics_.totalPostProcessMicroseconds.fetch_add(
+          elapsedMicroseconds(postProcessStartedAt), std::memory_order_relaxed);
+      statistics_.postProcessSamples.fetch_add(1, std::memory_order_relaxed);
+      markDecodeFailure(context);
+    }
+    return;
   } else if (stage.lowResolution ||
       CVPixelBufferGetWidth(imageBuffer) !=
           static_cast<size_t>(configuration_.width) ||
@@ -4427,7 +4622,6 @@ void CodecGlitchEngineImpl::emit(FrameContext &context,
     releaseContext(context);
     return;
   }
-  replaceLastOutput(imageBuffer);
 
   const auto elapsed = std::chrono::steady_clock::now() - context.submittedAt;
   const auto microseconds =
@@ -4445,13 +4639,36 @@ void CodecGlitchEngineImpl::emit(FrameContext &context,
   frame.codecWarmupFrame = context.codecWarmup;
   frame.watchdogRecoveryFrame = context.watchdogRecovery;
   frame.latencyMilliseconds = milliseconds;
-  frame.deliveryQueuedAt = std::chrono::steady_clock::now();
 
+  std::vector<std::pair<FrameContext *, CodecGlitchFrame>> ready;
+  {
+    std::lock_guard lock(orderedDeliveryMutex_);
+    orderedDeliveryPending_.emplace(
+        context.submissionSequence,
+        std::make_pair(&context, std::move(frame)));
+    for (;;) {
+      auto iterator = orderedDeliveryPending_.find(nextDeliverySequence_);
+      if (iterator == orderedDeliveryPending_.end())
+        break;
+      ready.push_back(std::move(iterator->second));
+      orderedDeliveryPending_.erase(iterator);
+      ++nextDeliverySequence_;
+    }
+  }
+  for (auto &pending : ready)
+    deliverFrame(*pending.first, std::move(pending.second));
+}
+
+void CodecGlitchEngineImpl::deliverFrame(FrameContext &context,
+                                         CodecGlitchFrame frame) {
+  replaceLastOutput(frame.pixelBuffer());
+  frame.deliveryQueuedAt = std::chrono::steady_clock::now();
   statistics_.emitted.fetch_add(1, std::memory_order_relaxed);
   statistics_.totalLatencyMicroseconds.fetch_add(
-      static_cast<uint64_t>(std::max<int64_t>(0, microseconds)),
+      static_cast<uint64_t>(
+          std::max(0.0, frame.latencyMilliseconds * 1000.0)),
       std::memory_order_relaxed);
-  statistics_.lastLatencyMilliseconds.store(milliseconds,
+  statistics_.lastLatencyMilliseconds.store(frame.latencyMilliseconds,
                                             std::memory_order_relaxed);
   bool deliverCallback = false;
   bool scheduleCallbackDrain = false;
@@ -4573,6 +4790,19 @@ bool CodecGlitchEngineImpl::flush(std::chrono::milliseconds timeout,
     forceRecovery_.store(true, std::memory_order_release);
     error = "Timed out while flushing codec glitch frames";
     return false;
+  }
+  const auto gpuState = gpuCompletionState_;
+  if (gpuState) {
+    const auto remaining = deadline - std::chrono::steady_clock::now();
+    const int64_t remainingNanoseconds = std::max<int64_t>(
+        0, std::chrono::duration_cast<std::chrono::nanoseconds>(remaining)
+               .count());
+    if (dispatch_group_wait(
+            gpuState->group,
+            dispatch_time(DISPATCH_TIME_NOW, remainingNanoseconds)) != 0) {
+      error = "Timed out while flushing codec Metal command buffers";
+      return false;
+    }
   }
   const auto callbackState = callbackState_;
   if (callbackState && dispatch_get_specific(&kCodecCallbackQueueKey) != this) {
