@@ -122,7 +122,7 @@ def normalized_encode_command(
         "-g",
         str(gop),
         "-bf",
-        "2",
+        "0",
         "-f",
         "avi",
         str(destination),
