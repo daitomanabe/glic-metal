@@ -860,7 +860,6 @@ def cross_codec_chain(
     current = source
     processes: list[dict] = []
     bitstreams: list[Path] = []
-    cross_modal_evidence: dict | None = None
     for codec in ("av1", "vp9", "hevc", "prores"):
         current, stage_processes, bitstream = transcode_cycle(
             ffmpeg,
@@ -1090,6 +1089,7 @@ def main() -> int:
 
     processes: list[dict] = []
     bitstreams: list[Path] = []
+    cross_modal_evidence: dict | None = None
     motion_frames: list[dict] | None = None
     motion_evidence: dict | None = None
     capture_source = args.input
