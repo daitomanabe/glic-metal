@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_right
 from collections import deque
 import hashlib
 import json
@@ -48,6 +49,8 @@ ANALYSIS_EFFECTS = (
     "decoder_fingerprint_ensemble",
     "cross_codec_chain",
     "audio_codec_orchestra",
+    "decoder_disagreement_amplifier",
+    "audio_packet_resonance",
 )
 EFFECTS = SYNTAX_EFFECTS + ANALYSIS_EFFECTS
 CODECS = ("h264", "hevc", "av1", "vp9", "prores", "av2")
@@ -69,6 +72,12 @@ IMPLEMENTATION_LEVEL = {
     "decoder_fingerprint_ensemble": "real_multi_decoder_ensemble",
     "cross_codec_chain": "real_cross_codec_generation_chain",
     "audio_codec_orchestra": "decoded_audio_driven_codec_reconstruction",
+    "decoder_disagreement_amplifier": (
+        "real_h264_hevc_prores_decoder_pixel_disagreement_amplification"
+    ),
+    "audio_packet_resonance": (
+        "real_opus_packet_size_timestamp_driven_video_reconstruction"
+    ),
 }
 
 
@@ -522,15 +531,27 @@ def transform_frame(
     if effect == "cross_codec_chain":
         return block_transplant(frame, far, strength * 0.7, seed, index), frozen_flow
 
-    if effect == "audio_codec_orchestra":
+    if effect in {"audio_codec_orchestra", "audio_packet_resonance"}:
         rng = np.random.default_rng(seed + index)
         result = frame.copy()
-        stripe = max(2, round(28 - audio_level * 22))
+        stripe = max(
+            2,
+            round(
+                (28 if effect == "audio_codec_orchestra" else 40)
+                - audio_level * (22 if effect == "audio_codec_orchestra" else 34)
+            ),
+        )
         offset = round((audio_level - 0.5) * frame.shape[1] * 0.24)
         for y in range((index * stripe) % (stripe * 2), frame.shape[0], stripe * 2):
             result[y : y + stripe] = np.roll(
                 result[y : y + stripe], offset, axis=1
             )
+        if effect == "audio_packet_resonance":
+            block = max(4, round(28 - audio_level * 20))
+            quantized = (
+                result.astype(np.uint16) // block * block
+            ).astype(np.uint8)
+            result = mix(result, quantized, 0.25 + audio_level * 0.65)
         noise = rng.normal(0, audio_level * strength * 24, result.shape)
         return clamp_frame(result.astype(np.float32) + noise), frozen_flow
 
@@ -665,6 +686,109 @@ def audio_envelope(ffmpeg: str, source: Path, frame_count_value: int, fps: int) 
     return [min(1.0, level / max(peak, 1.0e-9)) for level in levels]
 
 
+def audio_packet_envelope(
+    ffmpeg: str,
+    ffprobe: str,
+    source: Path,
+    frame_count_value: int,
+    fps: int,
+    work: Path,
+    timeout: int,
+    maximum_file_bytes: int,
+) -> tuple[list[float], dict, Path, dict]:
+    encoded = work / "cross-modal-audio.opus.ogg"
+    process = run_isolated(
+        [
+            ffmpeg,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source),
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "32k",
+            "-vbr",
+            "on",
+            str(encoded),
+        ],
+        log=work / "audio-packet-encode.log",
+        timeout_seconds=timeout,
+        maximum_file_bytes=maximum_file_bytes,
+    )
+    if process.return_code != 0 or not encoded.is_file():
+        raise RuntimeError(
+            "audio_packet_resonance requires a decodable source audio stream; "
+            f"see {process.log}"
+        )
+    probe = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_packets",
+            "-show_entries",
+            "packet=pts_time,duration_time,size,flags",
+            "-of",
+            "json",
+            str(encoded),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    packets = json.loads(probe.stdout).get("packets", [])
+    samples: list[tuple[float, float]] = []
+    for packet in packets:
+        try:
+            timestamp = float(packet["pts_time"])
+            size = float(packet["size"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(timestamp) and math.isfinite(size) and size > 0:
+            samples.append((max(0.0, timestamp), size))
+    if len(samples) < 2:
+        raise RuntimeError("encoded Opus stream exposed fewer than two packets")
+    sizes = np.asarray([size for _, size in samples], dtype=np.float64)
+    low, high = np.percentile(sizes, (5.0, 95.0))
+    scale = max(1.0, float(high - low))
+    normalized = [
+        float(np.clip((size - low) / scale, 0.0, 1.0))
+        for _, size in samples
+    ]
+    timestamps = [timestamp for timestamp, _ in samples]
+    envelope: list[float] = []
+    for frame_index in range(frame_count_value):
+        time_value = frame_index / fps
+        packet_index = max(0, bisect_right(timestamps, time_value) - 1)
+        envelope.append(normalized[min(packet_index, len(normalized) - 1)])
+    evidence = {
+        "audio_codec": "opus",
+        "driver": "encoded_packet_size_and_pts",
+        "packet_count": len(samples),
+        "packet_size_min": int(sizes.min()),
+        "packet_size_max": int(sizes.max()),
+        "packet_size_mean": round(float(sizes.mean()), 6),
+        "packet_size_p05": round(float(low), 6),
+        "packet_size_p95": round(float(high), 6),
+        "bitstream": {
+            "path": str(encoded),
+            "bytes": encoded.stat().st_size,
+            "sha256": sha256(encoded),
+        },
+    }
+    return envelope, result_json(process), encoded, evidence
+
+
 def transcode_cycle(
     ffmpeg: str,
     source: Path,
@@ -736,6 +860,7 @@ def cross_codec_chain(
     current = source
     processes: list[dict] = []
     bitstreams: list[Path] = []
+    cross_modal_evidence: dict | None = None
     for codec in ("av1", "vp9", "hevc", "prores"):
         current, stage_processes, bitstream = transcode_cycle(
             ffmpeg,
@@ -811,6 +936,94 @@ def decoder_ensemble(
     if result.return_code != 0 or not ensemble.is_file():
         raise RuntimeError(f"decoder ensemble failed; see {result.log}")
     return ensemble, processes, bitstreams
+
+
+def decoder_disagreement(
+    ffmpeg: str,
+    source: Path,
+    fps: int,
+    threads: int,
+    amount: float,
+    work: Path,
+    timeout: int,
+    maximum_file_bytes: int,
+) -> tuple[Path, list[dict], list[Path], dict]:
+    decoded_paths: list[Path] = []
+    processes: list[dict] = []
+    bitstreams: list[Path] = []
+    codecs = ("h264", "hevc", "prores")
+    for codec in codecs:
+        decoded, stage_processes, bitstream = transcode_cycle(
+            ffmpeg,
+            source,
+            codec,
+            fps,
+            threads,
+            work / codec,
+            timeout,
+            maximum_file_bytes,
+        )
+        decoded_paths.append(decoded)
+        processes.extend(stage_processes)
+        if bitstream:
+            bitstreams.append(bitstream)
+    captures = [cv2.VideoCapture(str(path)) for path in decoded_paths]
+    if not all(capture.isOpened() for capture in captures):
+        for capture in captures:
+            capture.release()
+        raise RuntimeError("could not open every decoder disagreement source")
+    output = work / "decoder-disagreement.ffv1.mkv"
+    width = int(captures[0].get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(captures[0].get(cv2.CAP_PROP_FRAME_HEIGHT))
+    writer = cv2.VideoWriter(
+        str(output),
+        cv2.VideoWriter_fourcc(*"FFV1"),
+        float(fps),
+        (width, height),
+    )
+    if not writer.isOpened():
+        for capture in captures:
+            capture.release()
+        raise RuntimeError("OpenCV FFV1 writer is unavailable for disagreement")
+    gain = 6.0 + float(np.clip(amount, 0.0, 1.0)) * 26.0
+    frame_count_value = 0
+    disagreement_values: list[float] = []
+    try:
+        while True:
+            decoded_frames = [capture.read() for capture in captures]
+            if not all(success for success, _ in decoded_frames):
+                break
+            stack = np.stack(
+                [frame.astype(np.float32) for _, frame in decoded_frames],
+                axis=0,
+            )
+            center = np.median(stack, axis=0)
+            residual = stack - center
+            disagreement_values.append(float(np.abs(residual).mean()))
+            channel_residual = np.empty_like(center)
+            channel_residual[..., 0] = residual[0, ..., 0] - residual[1, ..., 0]
+            channel_residual[..., 1] = residual[1, ..., 1] - residual[2, ..., 1]
+            channel_residual[..., 2] = residual[2, ..., 2] - residual[0, ..., 2]
+            writer.write(clamp_frame(center + channel_residual * gain))
+            frame_count_value += 1
+    finally:
+        writer.release()
+        for capture in captures:
+            capture.release()
+    if frame_count_value < 2 or not output.is_file():
+        raise RuntimeError("decoder disagreement produced fewer than two frames")
+    evidence = {
+        "decoders": list(codecs),
+        "frames": frame_count_value,
+        "amplification_gain": round(gain, 6),
+        "mean_unamplified_pixel_disagreement": round(
+            float(np.mean(disagreement_values)), 6
+        ),
+        "max_unamplified_pixel_disagreement": round(
+            float(np.max(disagreement_values)), 6
+        ),
+    }
+    return output, processes, bitstreams, evidence
 
 
 def parse_args() -> argparse.Namespace:
@@ -915,7 +1128,28 @@ def main() -> int:
     if not writer.isOpened():
         raise RuntimeError("OpenCV FFV1 writer is unavailable")
 
-    envelope = audio_envelope(ffmpeg, args.input, args.max_frames, args.fps)
+    if args.effect == "audio_packet_resonance":
+        (
+            envelope,
+            audio_process,
+            audio_bitstream,
+            cross_modal_evidence,
+        ) = audio_packet_envelope(
+            ffmpeg,
+            ffprobe,
+            args.input,
+            args.max_frames,
+            args.fps,
+            work,
+            args.timeout,
+            maximum_file_bytes,
+        )
+        processes.append(audio_process)
+        bitstreams.append(audio_bitstream)
+    else:
+        envelope = audio_envelope(
+            ffmpeg, args.input, args.max_frames, args.fps
+        )
     history: deque[np.ndarray] = deque(maxlen=12)
     frozen_flow = None
     processed_frames = 0
@@ -990,6 +1224,24 @@ def main() -> int:
             args.fps,
             args.threads,
             work / "ensemble",
+            args.timeout,
+            maximum_file_bytes,
+        )
+        processes.extend(effect_processes)
+        bitstreams.extend(effect_bitstreams)
+    elif args.effect == "decoder_disagreement_amplifier":
+        (
+            decoded,
+            effect_processes,
+            effect_bitstreams,
+            cross_modal_evidence,
+        ) = decoder_disagreement(
+            ffmpeg,
+            transformed,
+            args.fps,
+            args.threads,
+            args.amount,
+            work / "decoder-disagreement",
             args.timeout,
             maximum_file_bytes,
         )
@@ -1124,6 +1376,7 @@ def main() -> int:
             if path.is_file()
         ],
         "motion_vector_evidence": motion_evidence,
+        "cross_modal_evidence": cross_modal_evidence,
         "processes": processes,
         "output_probe": output_probe,
     }

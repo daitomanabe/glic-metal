@@ -69,7 +69,19 @@
       "decoder_fingerprint_ensemble",
       "cross_codec_chain",
       "evolutionary_codec_search",
-      "audio_codec_orchestra"
-    ]
+      "audio_codec_orchestra",
+      "decoder_disagreement_amplifier",
+      "audio_packet_resonance"
+    ],
+    "implementation_levels": {
+      "semantic_reference_retarget": "opencv_motion_semantic_fallback",
+      "depth_motion_rift": "deterministic_monocular_depth_proxy",
+      "decoder_fingerprint_ensemble": "real_multi_decoder_ensemble",
+      "cross_codec_chain": "real_cross_codec_generation_chain",
+      "evolutionary_codec_search": "deterministic_local_parameter_search",
+      "audio_codec_orchestra": "decoded_audio_rms_driven_codec_reconstruction",
+      "decoder_disagreement_amplifier": "real_h264_hevc_prores_decoder_pixel_disagreement_amplification",
+      "audio_packet_resonance": "real_opus_packet_size_timestamp_driven_video_reconstruction"
+    }
   }
 }
