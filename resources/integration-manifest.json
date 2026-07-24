@@ -67,7 +67,9 @@
       "output": "glic_codec_glitch_copy_latest_pixel_buffer",
       "native_codecs": ["h264", "hevc", "prores_422"],
       "codec_selector": "glic_codec_glitch_config.codec",
-      "effect_count": 28,
+      "implementation_level": "glic_codec_glitch_effect_implementation_level",
+      "implementation_contract": "VideoToolbox encoded samples are decoded cleanly; realtime visual reconstruction does not mutate compressed payload bytes.",
+      "effect_count": 36,
       "effect_names": [
         "qp_pump", "bitrate_crush", "slice_dropout", "slice_transplant",
         "pframe_loss", "idr_starvation", "payload_xor",
@@ -78,7 +80,10 @@
         "dual_codec_crossbreed", "codec_pingpong", "gop_accordion",
         "bframe_braid", "plane_split_codec", "roi_quality_islands",
         "codec_phase_mosaic", "encoder_hot_swap", "pts_rubberband",
-        "bitrate_raster"
+        "bitrate_raster", "plane_time_split", "reference_atlas",
+        "flow_lattice", "scan_order_fold", "regional_gop_clock",
+        "entropy_feedback", "rolling_time_shutter",
+        "asymmetric_plane_codec"
       ],
       "required_resources": []
     }
@@ -88,11 +93,16 @@
       "execution": "offline_process",
       "entrypoint": "scripts/process_multicodec_glitch.py",
       "sdk_entrypoint": "Tools/process_multicodec_glitch.py",
-      "codecs": ["av1", "av2", "hevc", "vp9", "prores"],
+      "codecs": [
+        "av1", "av2", "hevc", "vp9", "prores", "vvc", "theora", "dirac"
+      ],
       "software_codecs": {
         "av1": "FFmpeg_libaom-av1_plus_libdav1d",
         "vp9": "FFmpeg_libvpx-vp9",
-        "av2": "AOMedia_AVM_v1.0.0_reference"
+        "av2": "AOMedia_AVM_v1.0.0_reference",
+        "vvc": "Fraunhofer_VVenC_v1.14.0_reference",
+        "theora": "FFmpeg_libtheora",
+        "dirac": "FFmpeg_VC2_Dirac"
       },
       "persistent_evidence": [
         "compressed_bitstream",
@@ -146,7 +156,7 @@
       "entrypoint": "scripts/process_codec_lab.py",
       "sdk_entrypoint": "Tools/process_codec_lab.py",
       "catalog": "resources/codec-lab-effects.json",
-      "effect_count": 12,
+      "effect_count": 13,
       "implementation_contract": "decoded reconstruction proxies are labeled; codec cycles are real",
       "codecs": ["h264", "hevc", "av1", "vp9", "prores", "av2"],
       "realtime_claim": false
@@ -157,9 +167,43 @@
       "sdk_entrypoint": "Tools/process_codec_lab.py",
       "search_entrypoint": "scripts/evolutionary_codec_search.py",
       "sdk_search_entrypoint": "Tools/evolutionary_codec_search.py",
-      "effect_count": 6,
+      "effect_count": 8,
       "token_free_search": true,
       "resume_state": true,
+      "realtime_claim": false
+    },
+    "structured_bitstream_lab": {
+      "execution": "offline_isolated_process",
+      "entrypoint": "scripts/process_structured_codec_glitch.py",
+      "sdk_entrypoint": "Tools/process_structured_codec_glitch.py",
+      "catalog": "resources/codec-lab-effects.json",
+      "effect_count": 6,
+      "codecs": ["h264", "hevc", "av1"],
+      "may_produce_invalid_bitstream": true,
+      "realtime_claim": false
+    },
+    "transport_glitch_lab": {
+      "execution": "offline_isolated_process",
+      "entrypoint": "scripts/process_transport_glitch.py",
+      "sdk_entrypoint": "Tools/process_transport_glitch.py",
+      "catalog": "resources/codec-lab-effects.json",
+      "effect_count": 3,
+      "transport_models": [
+        "mpegts",
+        "rfc6184_h264_offline_packet_model",
+        "hls_mpegts"
+      ],
+      "network_capture": false,
+      "may_produce_invalid_bitstream": true,
+      "realtime_claim": false
+    },
+    "metadata_glitch_lab": {
+      "execution": "offline_process",
+      "entrypoint": "scripts/process_metadata_glitch.py",
+      "sdk_entrypoint": "Tools/process_metadata_glitch.py",
+      "catalog": "resources/codec-lab-effects.json",
+      "effect_count": 2,
+      "codecs": ["h264", "hevc"],
       "realtime_claim": false
     }
   },
@@ -173,7 +217,7 @@
     "selected-presets.json": "optional_data_copy_for_inspection_and_exchange",
     "integration-manifest.json": "optional_machine_readable_integration_contract",
     "offline-codec-effects.json": "optional_offline_packet_glitch_catalog",
-    "codec-lab-effects.json": "optional_realtime_and_offline_codec_lab_catalog"
+    "codec-lab-effects.json": "optional_realtime_and_offline_codec_lab_catalog_with_implementation_levels"
   },
   "threading": {
     "image_context": "one_serial_processing_queue_per_context",

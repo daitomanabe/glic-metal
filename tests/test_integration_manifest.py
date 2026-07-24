@@ -73,10 +73,17 @@ def main() -> int:
         "dual_codec_crossbreed", "codec_pingpong", "gop_accordion",
         "bframe_braid", "plane_split_codec", "roi_quality_islands",
         "codec_phase_mosaic", "encoder_hot_swap", "pts_rubberband",
-        "bitrate_raster",
+        "bitrate_raster", "plane_time_split", "reference_atlas",
+        "flow_lattice", "scan_order_fold", "regional_gop_clock",
+        "entropy_feedback", "rolling_time_shutter",
+        "asymmetric_plane_codec",
     ]
-    assert lanes["codec"]["effect_count"] == len(expected_codec_effects) == 28
+    assert lanes["codec"]["effect_count"] == len(expected_codec_effects) == 36
     assert lanes["codec"]["effect_names"] == expected_codec_effects
+    assert (
+        lanes["codec"]["implementation_level"]
+        == "glic_codec_glitch_effect_implementation_level"
+    )
 
     packet_workflow = manifest["offline_workflows"]["packet_glitch_lab"]
     assert packet_workflow["execution"] == "offline_isolated_process"
@@ -99,19 +106,39 @@ def main() -> int:
     assert (
         manifest["offline_workflows"]["codec_syntax_lab"]["effect_count"]
         == len(codec_lab_catalog["syntax_lab"]["effect_names"])
-        == 12
+        == 13
     )
     assert (
         manifest["offline_workflows"]["analysis_and_evolutionary_lab"][
             "effect_count"
         ]
         == len(codec_lab_catalog["analysis_and_search"]["effect_names"])
-        == 6
+        == 8
     )
     assert (
         codec_lab_catalog["realtime_crossbreed"]["effect_names"]
-        == expected_codec_effects[-10:]
+        == expected_codec_effects[18:28]
     )
+    assert (
+        codec_lab_catalog["realtime_native_expansion"]["effect_names"]
+        == expected_codec_effects[-8:]
+    )
+    workflow_catalog_sections = {
+        "structured_bitstream_lab": "structured_bitstream_lab",
+        "transport_glitch_lab": "transport_lab",
+        "metadata_glitch_lab": "metadata_lab",
+    }
+    for workflow_name, catalog_name in workflow_catalog_sections.items():
+        workflow = manifest["offline_workflows"][workflow_name]
+        catalog_section = codec_lab_catalog[catalog_name]
+        assert workflow["effect_count"] == len(catalog_section["effect_names"])
+        assert workflow["realtime_claim"] is False
+    assert set(
+        manifest["offline_workflows"]["codec_generations"]["codecs"]
+    ) == set(codec_lab_catalog["generation_codecs"]["codecs"])
+    assert manifest["offline_workflows"]["transport_glitch_lab"][
+        "network_capture"
+    ] is False
     for workflow in manifest["offline_workflows"].values():
         assert workflow["sdk_entrypoint"].startswith("Tools/")
 

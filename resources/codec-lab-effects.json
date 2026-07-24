@@ -1,5 +1,11 @@
 {
   "schema": "glic-codec-lab-effect-catalog-v1",
+  "implementation_level_contract": {
+    "purpose": "Machine-readable disclosure of the real processing boundary; effect names are artistic names, not evidence of compressed syntax access.",
+    "native": "Directly parses, mutates, generates, or packetizes the named compressed codec or transport structure.",
+    "decoded_proxy": "Uses decoder-exported data or decoded pixels and reconstructs the result; it does not mutate entropy-coded payload bytes.",
+    "realtime": "Requires the VideoToolbox/CoreImage/Metal path to meet 960x540 at 20 fps; offline entries make no realtime claim."
+  },
   "realtime_crossbreed": {
     "entrypoint": "glic_codec_glitch_context",
     "engine": "videotoolbox_clean_decode_plus_gpu_reconstruction",
@@ -20,6 +26,36 @@
       "bitrate_raster"
     ],
     "implementation_note": "Single hardware-codec realtime adaptations; true multi-codec chains remain offline."
+  },
+  "realtime_native_expansion": {
+    "entrypoint": "glic_codec_glitch_context",
+    "engine": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction",
+    "minimum_width": 960,
+    "minimum_height": 540,
+    "minimum_fps": 20,
+    "realtime_certified": true,
+    "may_produce_invalid_bitstream": false,
+    "effect_names": [
+      "plane_time_split",
+      "reference_atlas",
+      "flow_lattice",
+      "scan_order_fold",
+      "regional_gop_clock",
+      "entropy_feedback",
+      "rolling_time_shutter",
+      "asymmetric_plane_codec"
+    ],
+    "implementation_levels": {
+      "plane_time_split": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction",
+      "reference_atlas": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction",
+      "flow_lattice": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction",
+      "scan_order_fold": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction",
+      "regional_gop_clock": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction",
+      "entropy_feedback": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction",
+      "rolling_time_shutter": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction",
+      "asymmetric_plane_codec": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction"
+    },
+    "implementation_note": "Hardware codec decode history is recomposed by CoreImage kernels on Metal. Names such as flow, scan order, entropy, and planes describe the visual model and do not claim native compressed-field mutation."
   },
   "syntax_lab": {
     "entrypoint": "scripts/process_codec_lab.py",
@@ -57,6 +93,89 @@
       "av2_optical_flow_wound": "official_avm_cycle_plus_flow_reconstruction"
     }
   },
+  "structured_bitstream_lab": {
+    "entrypoint": "scripts/process_structured_codec_glitch.py",
+    "execution_class": "offline_isolated_process",
+    "realtime_certified": false,
+    "may_produce_invalid_bitstream": true,
+    "effect_names": [
+      "av1_tile_group_surgery",
+      "av1_film_grain_seed_surgery",
+      "av1_reference_slot_surgery",
+      "temporal_layer_dropout",
+      "temporal_layer_reorder",
+      "cross_stream_unit_transplant"
+    ],
+    "implementation_levels": {
+      "av1_tile_group_surgery": "av1_trace_aligned_tile_group_obu_dropout",
+      "av1_film_grain_seed_surgery": "av1_trace_aligned_grain_seed_field_rewrite",
+      "av1_reference_slot_surgery": "av1_trace_aligned_ref_frame_idx_field_rewrite",
+      "temporal_layer_dropout": "hevc_nuh_temporal_id_unit_dropout",
+      "temporal_layer_reorder": "hevc_nuh_temporal_id_unit_reorder",
+      "cross_stream_unit_transplant": "codec_frame_unit_transplant"
+    }
+  },
+  "transport_lab": {
+    "entrypoint": "scripts/process_transport_glitch.py",
+    "execution_class": "offline_isolated_process",
+    "realtime_certified": false,
+    "may_produce_invalid_bitstream": true,
+    "effect_names": [
+      "mpegts_continuity_fracture",
+      "rtp_sequence_jitter",
+      "hls_segment_boundary_splice"
+    ],
+    "implementation_levels": {
+      "mpegts_continuity_fracture": "native_mpegts_188_byte_continuity_counter_rewrite",
+      "rtp_sequence_jitter": "rfc6184_h264_offline_packet_model_not_network_capture",
+      "hls_segment_boundary_splice": "native_hls_mpegts_segment_reorder_with_discontinuity"
+    }
+  },
+  "metadata_lab": {
+    "entrypoint": "scripts/process_metadata_glitch.py",
+    "execution_class": "offline_process",
+    "realtime_certified": false,
+    "may_produce_invalid_bitstream": false,
+    "effect_names": [
+      "color_vui_oscillator",
+      "hdr_metadata_pulse"
+    ],
+    "implementation_levels": {
+      "color_vui_oscillator": "native_h264_hevc_vui_rewrite_plus_metadata_aware_preview",
+      "hdr_metadata_pulse": "native_hevc_vui_and_mastering_display_sei_temporal_reencode"
+    }
+  },
+  "generation_codecs": {
+    "entrypoint": "scripts/process_multicodec_glitch.py",
+    "execution_class": "offline_process",
+    "realtime_certified": false,
+    "codecs": [
+      "av1",
+      "av2",
+      "hevc",
+      "vp9",
+      "prores",
+      "vvc",
+      "theora",
+      "dirac"
+    ],
+    "effect_names": [
+      "generation_cascade",
+      "temporal_echo",
+      "chroma_drift",
+      "residual_noise"
+    ],
+    "implementation_levels": {
+      "av1": "ffmpeg_libaom_av1_generation_cycle",
+      "av2": "official_aomedia_avm_reference_generation_cycle",
+      "hevc": "ffmpeg_libx265_generation_cycle",
+      "vp9": "ffmpeg_libvpx_vp9_generation_cycle",
+      "prores": "ffmpeg_prores_ks_generation_cycle",
+      "vvc": "official_fraunhofer_vvenc_v1_14_0_generation_cycle",
+      "theora": "ffmpeg_libtheora_generation_cycle",
+      "dirac": "ffmpeg_vc2_dirac_generation_cycle"
+    }
+  },
   "analysis_and_search": {
     "entrypoint": "scripts/process_codec_lab.py",
     "search_entrypoint": "scripts/evolutionary_codec_search.py",
@@ -79,7 +198,7 @@
       "decoder_fingerprint_ensemble": "real_multi_decoder_ensemble",
       "cross_codec_chain": "real_cross_codec_generation_chain",
       "evolutionary_codec_search": "deterministic_local_parameter_search",
-      "audio_codec_orchestra": "decoded_audio_rms_driven_codec_reconstruction",
+      "audio_codec_orchestra": "decoded_audio_driven_codec_reconstruction",
       "decoder_disagreement_amplifier": "real_h264_hevc_prores_decoder_pixel_disagreement_amplification",
       "audio_packet_resonance": "real_opus_packet_size_timestamp_driven_video_reconstruction"
     }
