@@ -67,6 +67,18 @@ const char *glic_codec_glitch_effect_name(glic_codec_glitch_effect effect) {
   return kEffectNames[effect];
 }
 
+const char *
+glic_codec_glitch_effect_implementation_level(glic_codec_glitch_effect effect) {
+  if (effect < GLIC_CODEC_GLITCH_QP_PUMP ||
+      effect > GLIC_CODEC_GLITCH_ASYMMETRIC_PLANE_CODEC)
+    return "unknown";
+  if (effect <= GLIC_CODEC_GLITCH_CONCEALMENT_CHOREOGRAPHY)
+    return "videotoolbox_clean_encode_decode_plus_gpu_reconstruction";
+  if (effect <= GLIC_CODEC_GLITCH_BITRATE_RASTER)
+    return "videotoolbox_single_codec_crossbreed_plus_gpu_reconstruction";
+  return "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction";
+}
+
 const char *glic_codec_glitch_codec_name(glic_codec_glitch_codec codec) {
   switch (codec) {
   case GLIC_CODEC_GLITCH_CODEC_H264:

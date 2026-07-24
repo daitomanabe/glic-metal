@@ -169,6 +169,14 @@ typedef struct glic_codec_glitch_stats {
 uint32_t glic_codec_glitch_get_abi_version(void);
 const char *glic_codec_glitch_status_string(glic_codec_glitch_status status);
 const char *glic_codec_glitch_effect_name(glic_codec_glitch_effect effect);
+/*
+ * Returns a stable, machine-readable description of the actual processing
+ * boundary used by the effect. This deliberately distinguishes clean
+ * VideoToolbox encode/decode plus GPU reconstruction from compressed syntax
+ * mutation performed by the separate offline tools.
+ */
+const char *
+glic_codec_glitch_effect_implementation_level(glic_codec_glitch_effect effect);
 const char *glic_codec_glitch_codec_name(glic_codec_glitch_codec codec);
 
 void glic_codec_glitch_config_init(glic_codec_glitch_config *config);

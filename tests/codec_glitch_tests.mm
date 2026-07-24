@@ -364,7 +364,14 @@ int runCApiTest() {
       std::strcmp(
           glic_codec_glitch_effect_name(
               GLIC_CODEC_GLITCH_ASYMMETRIC_PLANE_CODEC),
-          "asymmetric_plane_codec") != 0) {
+          "asymmetric_plane_codec") != 0 ||
+      std::strcmp(
+          glic_codec_glitch_effect_implementation_level(
+              GLIC_CODEC_GLITCH_PLANE_TIME_SPLIT),
+          "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction") !=
+          0 ||
+      std::strcmp(glic_codec_glitch_effect_implementation_level(-1),
+                  "unknown") != 0) {
     std::fprintf(stderr, "FAIL C ABI metadata\n");
     return 20;
   }

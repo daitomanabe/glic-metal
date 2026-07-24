@@ -123,6 +123,14 @@ const char *glic_codec_glitch_effect_name(glic_codec_glitch_effect effect) {
       static_cast<glic::CodecGlitchEffect>(effect));
 }
 
+const char *
+glic_codec_glitch_effect_implementation_level(glic_codec_glitch_effect effect) {
+  if (!validEffect(effect))
+    return "unknown";
+  return glic::codecGlitchEffectImplementationLevel(
+      static_cast<glic::CodecGlitchEffect>(effect));
+}
+
 const char *glic_codec_glitch_codec_name(glic_codec_glitch_codec codec) {
   if (!validCodec(codec))
     return "unknown";

@@ -1,4 +1,5 @@
 #include <glic_metal/glic_metal.h>
+#include <glic_metal/codec_glitch.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -42,6 +43,11 @@ int main(void) {
   expect(glic_metal_get_abi_version() == GLIC_METAL_ABI_VERSION,
          "ABI version");
   expect(glic_metal_get_version_string()[0] != '\0', "version string");
+  expect(strcmp(glic_codec_glitch_effect_implementation_level(
+                    GLIC_CODEC_GLITCH_PLANE_TIME_SPLIT),
+                "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction") ==
+             0,
+         "codec glitch implementation level metadata");
 
   size_t preset_count = 0;
   expect(glic_metal_enumerate_presets(GLIC_TEST_PRESETS_DIR, count_preset,

@@ -305,6 +305,24 @@ const char *codecGlitchEffectName(CodecGlitchEffect effect) noexcept {
   return "unknown";
 }
 
+const char *
+codecGlitchEffectImplementationLevel(CodecGlitchEffect effect) noexcept {
+  const auto value = static_cast<uint32_t>(effect);
+  if (value <= static_cast<uint32_t>(
+                   CodecGlitchEffect::ConcealmentChoreography)) {
+    return "videotoolbox_clean_encode_decode_plus_gpu_reconstruction";
+  }
+  if (value <=
+      static_cast<uint32_t>(CodecGlitchEffect::BitrateRaster)) {
+    return "videotoolbox_single_codec_crossbreed_plus_gpu_reconstruction";
+  }
+  if (value <
+      static_cast<uint32_t>(CodecGlitchEffect::Count)) {
+    return "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction";
+  }
+  return "unknown";
+}
+
 bool codecGlitchEffectFromName(std::string_view name,
                                CodecGlitchEffect &effect) noexcept {
   for (uint32_t index = 0;

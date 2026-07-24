@@ -73,6 +73,8 @@ enum class CodecGlitchEffect : uint32_t {
 };
 
 const char *codecGlitchEffectName(CodecGlitchEffect effect) noexcept;
+const char *
+codecGlitchEffectImplementationLevel(CodecGlitchEffect effect) noexcept;
 bool codecGlitchEffectFromName(std::string_view name,
                                CodecGlitchEffect &effect) noexcept;
 

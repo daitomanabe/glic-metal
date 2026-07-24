@@ -289,6 +289,9 @@ void writeStats(const Options &options,
          << glic::codecGlitchEffectName(options.controls.effect) << "\",\n"
          << "  \"effect_family\": \""
          << glic::codecGlitchEffectName(options.controls.effect) << "\",\n"
+         << "  \"implementation_level\": \""
+         << glic::codecGlitchEffectImplementationLevel(options.controls.effect)
+         << "\",\n"
          << "  \"amount\": " << options.controls.amount << ",\n"
          << "  \"rate\": " << options.controls.rate << ",\n"
          << "  \"feedback\": " << options.controls.feedback << ",\n"
