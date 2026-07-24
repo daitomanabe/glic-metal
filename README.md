@@ -207,6 +207,14 @@ python3 scripts/process_video.py input.mov output-original.mp4 \
 codec、37 presetの`original_visual`、全144 presetを視覚近似する
 `compat_realtime`とは別で、GLIC presetの意味や原作とのpixel一致を主張しません。
 
+現在のFast Pathは420v NV12をencode/decode内部形式にし、encoderの元
+`CMSampleBufferRef`をcopy/rebuildせずdecoderへ渡します。decoderのY/CbCr planeは
+`CVMetalTextureCache`で直接Metal textureへmapし、36 effectを1つのfused compute
+kernelで処理します。420v host入力はBGRA stagingなし、32BGRA入力はMetalで420vへ
+変換し、公開出力は互換性のため32BGRAです。decode callbackはMetal commit直後に戻り、
+GPU完了後に受理順で出力します。`AUTO`、必須`NV12_METAL`、明示的BGRA互換の3経路を
+選べます。
+
 ```bash
 python3 scripts/process_video.py input.mov output-codec.mp4 \
   --processing-mode codec_glitch \
@@ -229,8 +237,7 @@ python3 scripts/process_video.py input.mov output-codec.mp4 \
 `encoder_hot_swap`、`pts_rubberband`、`bitrate_raster`と、追加8種の
 `plane_time_split`、`reference_atlas`、`flow_lattice`、`scan_order_fold`、
 `regional_gop_clock`、`entropy_feedback`、`rolling_time_shutter`、
-`asymmetric_plane_codec`です。全effectが圧縮H.264の
-VCL byteを変更せず、
+`asymmetric_plane_codec`です。全effectが選択codecの圧縮payload byteを変更せず、
 VideoToolboxでclean decodeします。`slice_dropout`と`slice_transplant`はdecode履歴の
 水平row／帯を合成し、`payload_xor`はposterize、RGB組み替え、位置をずらした
 macroblock状tileでdigital damageを作ります。`reference_timewarp`は4〜12 frameへ
@@ -239,8 +246,8 @@ macroblock状tileでdigital damageを作ります。`reference_timewarp`は4〜1
 新しい6 effectは、複数時点の領域合成、再帰的な自己block copy、予測と残差の
 再合成、GPU grain、復元filter feedback、領域別concealmentをMetal-backed pathで
 実装します。
-`pframe_loss`と`idr_starvation`だけはencode済みframeを意図的にholdし、直前の正常な
-decode結果をrepeatします。
+H.264の`pframe_loss`だけがencode済みsampleをholdします。HEVC/ProResの
+`pframe_loss`と`idr_starvation`はdecoderを壊さないfused-Metal履歴holdです。
 
 `prepare`は通常stageのhardware encoderでbackendを検証し、QP/cascade/縮小encoderと
 decoderは最初の利用時に遅延生成します。VideoToolboxの`RealTime`とlow-latency rate
@@ -260,9 +267,13 @@ backpressure drop、output queue dropがすべて0の場合だけtrueです。le
 `poll_queue_drops`はcallback/poll両方のdropを合算します。20fps合格にはさらに
 960×540以上、120 frame以上、frame数維持、hardware codec、実測/stream 20fps以上、
 p95 50ms以下が必要です。
+Apple M5 MaxでのPhase 6実動画matrixは36 effect × 3 codec × 2解像度の216条件が
+すべて合格し、最も遅いHEVC 1920×1080 `generation_cascade`でも52.463fps、
+p95 20.635msでした。別machineや組み込み後のhost全体に対する保証値ではありません。
 複数effectの動画比較と非類似rankingには
 `scripts/evaluate_codec_glitch_videos.py`を使います。
 詳細とC APIは[Codec Glitch](docs/CODEC_GLITCH.md)と
+[VideoToolbox Fast Path](docs/VIDEOTOOLBOX_FAST_PATH.md)、
 [Multi-codec guide](docs/MULTICODEC_GLITCH.md)、
 [Glitch expansion catalog](docs/GLITCH_EXPANSION.md)、
 [Embedding guide](docs/EMBEDDING.md#codec-glitch-c-api-macos-only)を参照してください。
@@ -613,7 +624,8 @@ The port keeps the file codec, original parameter semantics, realtime visual app
 ### Features
 
 - C++20 file codec plus CPU / Metal realtime processing
-- Eighteen VideoToolbox H.264 / HEVC / ProRes codec effects with a Metal-backed post path
+- Thirty-six VideoToolbox H.264 / HEVC / ProRes codec effects with an
+  NV12/IOSurface fused-Metal post path
 - Stable C ABI and installable CMake package for C, C++, Objective-C, and Swift
 - Modern C++ features (`std::ranges`, `std::span`, `std::bit_cast`, `[[likely]]` attributes, etc.)
 - CPU paths are CI-tested on macOS and Linux; Windows is designed for but not
@@ -833,6 +845,15 @@ path. It is distinct from the `.glic` file codec, 37-preset `original_visual`,
 and all-144 visual approximation in `compat_realtime`. It does not apply GLIC
 preset semantics or claim upstream pixel equivalence.
 
+The current Fast Path uses video-range NV12 internally, sends the encoder's
+original `CMSampleBufferRef` to the decoder without payload copy/rebuild, maps
+decoder Y/CbCr planes through `CVMetalTextureCache`, and runs all 36 effects in
+one fused compute kernel. A full-size 420v host input needs no BGRA staging;
+32BGRA is converted to 420v by Metal, and stable public output remains 32BGRA.
+Decode callbacks return after Metal commit and GPU completions are delivered in
+accepted-submission order. Hosts can choose `AUTO`, required `NV12_METAL`, or
+explicit BGRA compatibility.
+
 ```bash
 python3 scripts/process_video.py input.mov output-codec.mp4 \
   --processing-mode codec_glitch \
@@ -853,8 +874,8 @@ The 36 effects include `qp_pump`, `bitrate_crush`, `slice_dropout`,
 effects from `dual_codec_crossbreed` through `bitrate_raster`, and the eight
 decoded-history/Metal effects from `plane_time_split` through
 `asymmetric_plane_codec`.
-Every effect sends
-unchanged H.264 VCL bytes through a clean VideoToolbox decode. `slice_dropout` and
+Every effect sends the selected codec's compressed payload unchanged through a
+clean VideoToolbox decode. `slice_dropout` and
 `slice_transplant` composite horizontal rows/bands from decoded history;
 `payload_xor` creates digital damage with posterization, RGB rewiring, and
 displaced macroblock-like tiles. `reference_timewarp` selects an older frame
@@ -863,9 +884,9 @@ instead of reusing a compressed P packet. `resolution_hop` adds pixelation
 while restoring its one-half or one-quarter-resolution codec result.
 The six additional effects use Metal-backed multi-age regional composition,
 recursive self-copy, prediction/residual recomposition, synthesized grain,
-restoration feedback, and regional concealment. Only `pframe_loss` and
-`idr_starvation` intentionally hold encoded frames and repeat the prior good
-decoded result.
+restoration feedback, and regional concealment. Only H.264 `pframe_loss`
+holds encoded samples. HEVC/ProRes `pframe_loss` and `idr_starvation` use
+decoder-safe fused-Metal history holds.
 
 `prepare` validates the backend with the normal-stage hardware encoder;
 specialized QP/cascade/downscale encoders and the decoder are created on first
@@ -887,8 +908,12 @@ errors, watchdog recoveries, backpressure drops, and output-queue drops. The
 legacy `poll_queue_drops` field combines callback and polling delivery losses.
 The 20 fps pass also requires at least 960×540, at least 120 frames, preserved
 frame count, hardware encode/decode, processing and stream rates of at least
-20 fps, and p95 at or below 50 ms. See
+20 fps, and p95 at or below 50 ms. The Apple M5 Max Phase 6 matrix passed all
+216 cells (36 effects × three codecs × two resolutions); its slowest cell was
+HEVC 1920×1080 `generation_cascade` at 52.463fps and 20.635ms p95. This is
+machine/input evidence, not a host-wide guarantee. See
 [Codec Glitch](docs/CODEC_GLITCH.md) and the
+[VideoToolbox Fast Path](docs/VIDEOTOOLBOX_FAST_PATH.md), the
 [multi-codec guide](docs/MULTICODEC_GLITCH.md), plus the
 [glitch expansion catalog](docs/GLITCH_EXPANSION.md) and
 [embedding guide](docs/EMBEDDING.md#codec-glitch-c-api-macos-only).

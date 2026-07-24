@@ -221,7 +221,10 @@ glic_codec_glitch_set_controls(glic_codec_glitch_context *context,
 
 /*
  * Nonblocking submit. pixel_buffer is a CVPixelBufferRef bridged as void * and
- * only needs to remain valid for this call. PTS is expressed as value/scale.
+ * only needs to remain valid for this call. Full-size video-range bi-planar
+ * NV12 (420v) enters the NV12/Metal path without BGRA staging. 32BGRA is also
+ * supported and is converted to 420v by Metal when that path is active.
+ * Output remains 32BGRA. PTS is expressed as value/scale.
  */
 glic_codec_glitch_status
 glic_codec_glitch_submit_pixel_buffer(glic_codec_glitch_context *context,

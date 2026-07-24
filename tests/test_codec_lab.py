@@ -24,6 +24,16 @@ def main() -> int:
         (ROOT / "resources" / "codec-lab-effects.json").read_text()
     )
     assert catalog["schema"] == "glic-codec-lab-effect-catalog-v1"
+    fast_path = catalog["videotoolbox_fast_path"]
+    assert fast_path["codecs"] == ["h264", "hevc", "prores_422"]
+    assert fast_path["effect_count"] == 36
+    assert fast_path["pixel_paths"] == [
+        "auto",
+        "nv12_metal",
+        "bgra_compatibility",
+    ]
+    assert fast_path["validated_matrix"]["runs"] == 216
+    assert fast_path["validated_matrix"]["passed_runs"] == 216
     assert catalog["realtime_crossbreed"]["effect_names"] == [
         "dual_codec_crossbreed",
         "codec_pingpong",
@@ -46,6 +56,11 @@ def main() -> int:
         "rolling_time_shutter",
         "asymmetric_plane_codec",
     ]
+    assert set(
+        catalog["realtime_native_expansion"]["implementation_levels"].values()
+    ) == {
+        "videotoolbox_decoded_history_plus_fused_metal_or_coreimage_fallback"
+    }
     assert catalog["syntax_lab"]["effect_names"] == list(lab.SYNTAX_EFFECTS)
     assert catalog["native_compressed_syntax_lab"]["effect_names"] == list(
         native_syntax.EFFECTS

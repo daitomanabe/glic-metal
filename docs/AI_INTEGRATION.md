@@ -24,9 +24,10 @@ VideoToolbox処理へ振り分ける。
 5. `include/glic_metal/glic_metal.h` — Original / Spatial画像API
 6. `include/glic_metal/codec_glitch.h` — Codec非同期API
 7. `docs/EMBEDDING.md` — 人間向けの詳細な組み込み手順
-8. `docs/MULTICODEC_GLITCH.md` — codec別backend、速度claim、offline契約
-9. `docs/GLITCH_EXPANSION.md` — 追加全系統、実装レベル、実動画評価
-10. `docs/OFFLINE_PACKET_GLITCH.md` — 破損bitstreamの隔離実行・評価契約
+8. `docs/VIDEOTOOLBOX_FAST_PATH.md` — NV12/Metal、pixel path、非同期順序、検証matrix
+9. `docs/MULTICODEC_GLITCH.md` — codec別backend、速度claim、offline契約
+10. `docs/GLITCH_EXPANSION.md` — 追加全系統、実装レベル、実動画評価
+11. `docs/OFFLINE_PACKET_GLITCH.md` — 破損bitstreamの隔離実行・評価契約
 
 `src/` 内のヘッダーは公開APIではない。他アプリからincludeしない。
 
@@ -44,6 +45,9 @@ VideoToolbox処理へ振り分ける。
 - 内部C++ API、プリセット値、Metal shaderをホスト側へ複製しない。
 - Processing版GLICとのpixel完全一致を主張しない。
 - H.264 / HEVC / ProResは`glic_codec_glitch_config.codec`でprepare前に選ぶ。
+- Codecのpixel pathも`glic_codec_glitch_config.pixel_path`でprepare前に選ぶ。
+  `AUTO`はcompatibility fallbackを許容し、`NV12_METAL`はFast Pathを作れなければ
+  fail closedする。prepare成功だけでFast Path有効と判断しない。
 - AV1 / VP9 / AV2 / VVC / Theora / DiracはC ABIへ偽装せず、multi-codec
   runnerのJSON契約を使う。
 - AV2 toolsが無い場合はAV1へ置換せずfail-closedする。
@@ -56,7 +60,7 @@ VideoToolbox処理へ振り分ける。
 |---|---:|---|---|---|
 | `original` | 14 | 同期 | BGRA8/RGBA8 CPU buffer | `glic_metal_context` |
 | `spatial` | 4 | 同期 | CPU bufferまたはBGRA8Unorm texture | `glic_metal_context` |
-| `codec` | 1 | 非同期 | `CVPixelBufferRef` 32BGRA | `glic_codec_glitch_context` |
+| `codec` | 1 | 非同期 | `CVPixelBufferRef` 420vまたは32BGRA | `glic_codec_glitch_context` |
 
 19件の順序と値は `glic_glitch_preset_count()` と
 `glic_glitch_preset_get()` が返す。全144件を返す
@@ -128,6 +132,19 @@ contextあたり最大3 frame in flightとし、commit・同期・texture lifeti
 Codec経路:
 
 ```c
+/* capture/render callback外で一度だけprepareする。 */
+glic_codec_glitch_config codec_config;
+glic_codec_glitch_config_init(&codec_config);
+codec_config.width = width;
+codec_config.height = height;
+codec_config.frames_per_second = fps;
+codec_config.pixel_path = GLIC_CODEC_GLITCH_PIXEL_PATH_NV12_METAL;
+if (glic_codec_glitch_prepare(codec_context, &codec_config) !=
+    GLIC_CODEC_GLITCH_OK) {
+  /* required Fast Pathを互換経路へ黙って置換しない。 */
+  return;
+}
+
 glic_codec_glitch_status status = glic_codec_glitch_submit_pixel_buffer(
     codec_context, (void *)input_pixel_buffer, frame_index,
     pts.value, pts.timescale);
@@ -147,6 +164,11 @@ if (status == GLIC_CODEC_GLITCH_OK) {
 
 `NO_FRAME_AVAILABLE` は正常状態。取得成功したpixel bufferは必ず
 `glic_codec_glitch_pixel_buffer_release()` で1回だけ解放する。
+420v入力はBGRA stagingなしでencodeへ入り、32BGRA入力はMetalで420vへ変換される。
+出力はどちらも32BGRA。`AUTO`を使う場合はstatsの
+`nv12_metal_fast_path`、`metal_texture_cache`、`fused_metal_effects`、
+`asynchronous_metal_delivery`、`ordered_delivery`をすべて記録する。詳細は
+`docs/VIDEOTOOLBOX_FAST_PATH.md`を参照する。
 
 採用済み19 presetのメニューとは別に、実験用Codec Glitchを全て表示する場合は
 `resources/integration-manifest.json`の`lanes.codec.effect_names`を参照する。
@@ -184,7 +206,9 @@ macOSでは次をlinkする:
 `GlicMetalResources.bundle/Contents/Resources` には以下が入る:
 
 - `Presets/` — Original / Spatialに必須（Spatialは`default`を基礎設定に使う）
-- `glic_realtime.metallib` — Original / Spatial Metalに必須
+- `glic_realtime.metallib` — Original / Spatial MetalとCodec NV12/Metal
+  Fast Pathに必須。欠落時に`AUTO`はBGRA compatibilityへfallbackし、
+  `NV12_METAL`はfail closedする
 - `selected-presets.json` — 確認・交換用
 - `integration-manifest.json` — AI向け機械可読仕様
 - `offline-codec-effects.json` — offline packet effectとcodec対応表
@@ -226,6 +250,7 @@ fail-closedします。正規一覧は
 - 最低処理速度: 20fps
 - p95 frame latency: 50ms以下
 - Codec: hardware encoder / decoderの両方が必須
+- Codec Fast Path: 5つのruntime evidence flagがすべてtrue
 - Codec: 非意図的fallback、codec error、watchdog recovery、backpressure、
   output queue dropを計測する
 
@@ -263,8 +288,8 @@ Route categories exactly:
 - `original`: synchronous `glic_metal_context`, CPU BGRA/RGBA frame API;
 - `spatial`: synchronous `glic_metal_context`, CPU frame or BGRA8Unorm Metal
   texture API;
-- `codec`: asynchronous `glic_codec_glitch_context`, 32BGRA
-  `CVPixelBufferRef` submit/poll API.
+- `codec`: asynchronous `glic_codec_glitch_context`, video-range NV12 (`420v`)
+  or 32BGRA `CVPixelBufferRef` input, always 32BGRA output.
 
 Never use `glic_metal_enumerate_presets()` for the adopted menu because it
 returns the complete 144-preset compatibility corpus. Enumerate with
@@ -280,8 +305,9 @@ The CMake target is `GlicMetal::GlicMetal`; the Swift module is `GlicMetal`.
 Prefer the generated XCFramework and resource bundle for Xcode hosts. Link all
 frameworks listed in `resources/integration-manifest.json`. Resolve `Presets`
 and `glic_realtime.metallib` from the resource bundle. Original and Spatial
-require both because Spatial loads `default` as its base configuration; Codec
-requires neither runtime file.
+require both because Spatial loads `default` as its base configuration. The
+Codec NV12/Metal Fast Path also requires the metallib; `AUTO` may fall back to
+BGRA compatibility when it is unavailable, while `NV12_METAL` must fail closed.
 
 The generated SDK is self-contained: `Documentation/` carries the integration
 contracts and `Tools/` carries offline entrypoints plus `requirements.txt`.
@@ -294,6 +320,12 @@ unknown presets and category mismatches as fail-closed. A codec submit may
 return `BACKPRESSURE`; drop that input rather than blocking. A codec poll may
 return `NO_FRAME_AVAILABLE`; this is normal. Release every successfully polled
 pixel buffer exactly once with `glic_codec_glitch_pixel_buffer_release()`.
+Choose `glic_codec_glitch_config.pixel_path` before prepare. Prefer required
+`NV12_METAL` when the product depends on its performance; use `AUTO` only when
+compatibility fallback is acceptable. With `AUTO`, record all five fast-path
+evidence flags from `glic_codec_glitch_stats`. A full-size 420v input reaches
+the encoder without BGRA staging; 32BGRA is converted by Metal. See
+`docs/VIDEOTOOLBOX_FAST_PATH.md`.
 
 The adopted 19-preset menu is separate from the complete experimental Codec
 Glitch effect list. If the host exposes every effect, read the 36 canonical

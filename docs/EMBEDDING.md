@@ -259,9 +259,11 @@ Codec Glitchは、上記の同期画像APIとは独立した、VideoToolboxに�
 処理です。GLICのファイルcodec、37 presetの`original_visual`、全144 presetを扱う
 `compat_realtime`のいずれでもありません。入力は`CVPixelBufferRef`で、36種類の
 effect名と安全境界は[CODEC_GLITCH.md](CODEC_GLITCH.md)にあります。
-全effectが圧縮H.264のVCL byteを変更しません。`slice_dropout`、
-`slice_transplant`、`payload_xor`はMetal-backed CoreImageでclean decode結果へ作用し、
-`reference_timewarp`は4〜12 frameへ設定できるdecode済み`CVPixelBuffer`履歴を使います。
+全effectが圧縮payload byteを変更しません。優先経路は420v NV12、
+`CVMetalTextureCache`、36 effectをまとめたfused Metal kernelです。420v入力はBGRA
+stagingなし、32BGRA入力はMetalで420vへ変換し、出力は常に32BGRAです。pixel path、
+zero-copy境界、非同期順序保証は
+[VIDEOTOOLBOX_FAST_PATH.md](VIDEOTOOLBOX_FAST_PATH.md)を参照してください。
 
 `prepare`はqueue、pixel-buffer pool、Metal-backed post path、通常stageのhardware
 encoderを作ってbackendを検証するため、capture callbackではなくcontrol/background
@@ -292,9 +294,13 @@ synchronous image API above. It is distinct from the GLIC file codec,
 37-preset `original_visual` lane, and all-144 `compat_realtime` lane. It accepts
 `CVPixelBufferRef` input and exposes the 36 effects documented in
 [CODEC_GLITCH.md](CODEC_GLITCH.md). No effect modifies compressed H.264 VCL
-bytes. `slice_dropout`, `slice_transplant`, and `payload_xor` use Metal-backed
-CoreImage after a clean decode, while `reference_timewarp` uses a bounded
-history configured from four to twelve decoded `CVPixelBuffer` objects.
+bytes or the selected HEVC/ProRes payload. `slice_dropout`, `slice_transplant`,
+and `payload_xor` use Metal-backed
+reconstruction after a clean decode, while `reference_timewarp` uses a bounded
+history configured from four to twelve decoded `CVPixelBuffer` objects. The
+preferred path maps 420v decoder planes through `CVMetalTextureCache` and runs
+one fused Metal kernel; the disclosed BGRA/Core Image path is a compatibility
+fallback. See [VIDEOTOOLBOX_FAST_PATH.md](VIDEOTOOLBOX_FAST_PATH.md).
 Display the actual processing boundary returned by
 `glic_codec_glitch_effect_implementation_level()`; do not infer native
 compressed-field access from an artistic effect name.
@@ -328,6 +334,8 @@ config.average_bit_rate = 4000000;
 config.decoded_history_frames = 12; /* Clamped to [4, 12]. */
 config.require_hardware_encoder = 1;
 config.require_hardware_decoder = 1;
+/* Use AUTO for compatibility, or NV12_METAL to fail closed. */
+config.pixel_path = GLIC_CODEC_GLITCH_PIXEL_PATH_NV12_METAL;
 
 if (glic_codec_glitch_prepare(codec, &config) != GLIC_CODEC_GLITCH_OK) {
   log_error(glic_codec_glitch_get_last_error(codec));
@@ -373,6 +381,12 @@ if (status == GLIC_CODEC_GLITCH_OK) {
 glic_codec_glitch_stats stats;
 glic_codec_glitch_stats_init(&stats);
 glic_codec_glitch_get_stats(codec, &stats);
+bool fast_path_active =
+    stats.nv12_metal_fast_path &&
+    stats.metal_texture_cache &&
+    stats.fused_metal_effects &&
+    stats.asynchronous_metal_delivery &&
+    stats.ordered_delivery;
 
 glic_codec_glitch_flush(codec, 2000);
 glic_codec_glitch_context_destroy(codec);

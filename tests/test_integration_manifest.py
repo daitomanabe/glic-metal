@@ -58,6 +58,8 @@ def main() -> int:
     lanes = manifest["lanes"]
     assert set(lanes) == set(counts)
     assert lanes["codec"]["execution"] == "asynchronous"
+    assert lanes["codec"]["input"] == "CVPixelBufferRef_420v_or_32BGRA"
+    assert lanes["codec"]["output_format"] == "CVPixelBufferRef_32BGRA"
     assert lanes["original"]["execution"] == "synchronous"
     assert lanes["spatial"]["execution"] == "synchronous"
     assert lanes["original"]["apply"] == "glic_glitch_preset_apply_metal"
@@ -84,6 +86,21 @@ def main() -> int:
         lanes["codec"]["implementation_level"]
         == "glic_codec_glitch_effect_implementation_level"
     )
+    assert lanes["codec"]["pixel_path_selector"] == (
+        "glic_codec_glitch_config.pixel_path"
+    )
+    assert set(lanes["codec"]["pixel_paths"]) == {
+        "auto",
+        "nv12_metal",
+        "bgra_compatibility",
+    }
+    fast_path = lanes["codec"]["fast_path"]
+    assert fast_path["direct_host_input"] == "420v_without_bgra_staging"
+    assert fast_path["decoded_plane_mapping"].startswith("CVMetalTextureCache")
+    assert fast_path["delivery"] == (
+        "asynchronous_and_ordered_by_accepted_submission"
+    )
+    assert len(fast_path["runtime_evidence_flags"]) == 5
 
     packet_workflow = manifest["offline_workflows"]["packet_glitch_lab"]
     assert packet_workflow["execution"] == "offline_isolated_process"
@@ -103,6 +120,9 @@ def main() -> int:
     }
     assert manifest["runtime_resources"]["offline-codec-effects.json"]
     assert manifest["runtime_resources"]["codec-lab-effects.json"]
+    matrix = manifest["realtime_acceptance"]["codec_fast_path_matrix"]
+    assert matrix["runs"] == 36 * 3 * 2 == 216
+    assert matrix["zero_gpu_timeouts"] is True
     assert (
         manifest["offline_workflows"]["codec_syntax_lab"]["effect_count"]
         == len(codec_lab_catalog["syntax_lab"]["effect_names"])

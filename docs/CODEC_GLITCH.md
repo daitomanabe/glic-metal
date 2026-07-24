@@ -9,6 +9,9 @@ It is intentionally separate from the GLIC file codec and both realtime image
 lanes. The encoder and decoder are provided by VideoToolbox; Metal-compatible
 `CVPixelBuffer` pools and a Metal-backed post/composite path keep frames in a
 GPU-friendly native video pipeline.
+The current NV12/IOSurface path, runtime selector, asynchronous delivery rules,
+and 216-run validation are specified in
+[VIDEOTOOLBOX_FAST_PATH.md](VIDEOTOOLBOX_FAST_PATH.md).
 
 ## 日本語
 
@@ -35,21 +38,20 @@ macOS専用の非同期処理レーンです。圧縮video payload byteは変更
 
 ### 処理構成
 
-1. ホストがBGRAの`CVPixelBufferRef`を非同期engineへsubmitします。
+1. ホストが420v NV12または32BGRAの`CVPixelBufferRef`を非同期engineへsubmitします。
+   420vはstagingなし、BGRAはMetal kernelで420vへ変換します。
 2. `codec_feedback`は前回のcodec decode結果をencode入力へ合成し、
    `resolution_hop`はencode前に入力を縮小します。
-3. VideoToolboxのH.264 hardware encoderが`RealTime` modeでpacketを生成します。QP、bitrate、
-   世代数を使うeffectは、このencode/decode段を強く変調または反復します。
-4. `pframe_loss`と`idr_starvation`は選択したencode済みframeを意図的にholdし、
-   直前の正常なdecode結果をrepeatします。
-5. それ以外のH.264 packetはbyteを変更せず、VideoToolbox hardware decoderが映像
-   frameを復元します。
-6. `slice_dropout`、`slice_transplant`、`payload_xor`、
-   `chroma_codec_echo`と研究版6 effect、縮小復元／pixel化はMetal互換pixel-buffer poolと
-   Metal-backed CoreImage pathを使います。`reference_timewarp`は4〜12 frameへ設定できる
-   decode済み`CVPixelBuffer`履歴から過去frameを選択します。
-7. 完成frameはcallback、または有界poll queueへ返ります。意図したholdと障害時の
-   fallbackは別々のflagで識別できます。
+3. 選択したVideoToolbox hardware encoderが`RealTime` modeでpacketを生成し、元の
+   `CMSampleBufferRef`を再構築・payload copyせずdecoderへ渡します。
+4. H.264の`pframe_loss`だけが選択したencode済みframeをholdします。HEVC/ProResの
+   `pframe_loss`と`idr_starvation`はdecoderを壊さないfused-Metal履歴holdです。
+5. decoderの420v Y/CbCr planeを`CVMetalTextureCache`から直接参照し、現在frameと
+   近い／遠いBGRA履歴を1つのfused Metal kernelへ渡します。
+6. 36 effectすべてが公開契約の32BGRA outputを1回のGPU dispatchで生成します。
+   明示したBGRA compatibility pathだけが従来のCore Image実装を使います。
+7. decode callbackはMetal commit直後に戻り、完成frameは受理したsubmission順で
+   callbackまたは有界poll queueへ返ります。
 
 H.264のencode/decode自体をMetal shaderで置き換えているわけではありません。
 圧縮処理はVideoToolbox、後段の画像処理とGPU連携がMetal-backedです。
@@ -112,7 +114,8 @@ residual係数自体、`recursive_codec_skin`はAV1 CDEF / restoration bitstream
 Crossbreedです。複数encoderを毎frame並列起動するとは主張しません。AV2 motion
 refinementの再構成版はofflineの`av2_optical_flow_wound`として
 [CODEC_LAB.md](CODEC_LAB.md)に分離しています。最後の8 effectもdecode履歴と
-CoreImage/Metal再構成であり、名称に含まれるplane、flow、scan、entropyは
+fused Metal（または明示的なCore Image fallback）再構成であり、名称に含まれる
+plane、flow、scan、entropyは
 native compressed-field hookを意味しません。
 
 `amount`、`rate`、`feedback`は0〜1です。effect固有のQP、bitrate、世代数、
@@ -170,7 +173,14 @@ stream 20fps以上も満たした場合だけ`realtime_20fps_passed`をtrueに�
 30fps gateは同じ信頼性条件に加えて30fps、p95 33.334ms以下を要求します。
 公開effect設定は対象machineで実動画を使って再計測してください。
 
-2026-07-23にApple M5 Maxで、5.53秒・166 frameの実写入力を960×540 / 30fpsへ
+最新のPhase 6検証では、Apple M5 Max上で同じ120 frame実写入力を使い、
+36 effect × H.264/HEVC/ProRes 422 × 960×540/1920×1080の216条件がすべて
+20fps / p95 50ms / reliability gateに合格しました。最も遅い条件はHEVC
+1920×1080 `generation_cascade`の52.463fps、p95 20.635msです。詳細と再実行方法は
+[VIDEOTOOLBOX_FAST_PATH.md](VIDEOTOOLBOX_FAST_PATH.md)を参照してください。
+
+2026-07-23の研究版6 effect回帰計測では、Apple M5 Maxで5.53秒・166 frameの実写入力を
+960×540 / 30fpsへ
 変換して新6 effectを測定しました。全6件でframe数を維持し、hardware encode/decode、
 非意図的fallback 0、codec error 0、20fps hard gate合格でした。
 
@@ -214,7 +224,7 @@ raw BGRA pipelineを組む場合は、filterを直接使えます。
 ffmpeg -i input.mov -f rawvideo -pix_fmt bgra - \
   | ./build/glic_codec_glitch_filter \
       --width 960 --height 540 --fps 30 \
-      --effect payload_xor --amount 0.16 --rate 0.30 \
+      --effect payload_xor --amount 0.16 --rate 0.30 --pixel-path nv12 \
       --stats-json codec-stats.json \
   | ffmpeg -f rawvideo -pix_fmt bgra -s 960x540 -r 30 -i - output.mp4
 ```
@@ -260,7 +270,7 @@ C / Objective-C / Swiftからの組み込みは
 ### Scope
 
 Codec Glitch is a macOS-only asynchronous lane that encodes and decodes input
-frames as H.264 with VideoToolbox. Depending on the effect, it modulates codec
+frames as H.264, HEVC, or ProRes 422 with VideoToolbox. Depending on the effect, it modulates codec
 quality, intentionally holds selected encoded frames, or composites decoded
 history before or after the codec stages. It does not modify compressed H.264
 VCL bytes.
@@ -281,23 +291,20 @@ vary across macOS, Apple silicon, and VideoToolbox versions even with one seed.
 
 ### Pipeline
 
-1. The host submits a BGRA `CVPixelBufferRef` to the asynchronous engine.
+1. The host submits a video-range NV12 (`420v`) or 32BGRA
+   `CVPixelBufferRef`. 420v needs no staging; Metal converts BGRA to 420v.
 2. `codec_feedback` composites the prior codec-decoded result into the encode
    input, while `resolution_hop` scales its encode input down.
-3. The selected VideoToolbox H.264 / HEVC / ProRes encoder produces a packet in `RealTime`
-   mode. QP, bitrate, and generation effects strongly modulate or repeat codec
-   stages.
-4. `pframe_loss` and `idr_starvation` intentionally hold selected encoded
-   frames and repeat the prior good decoded result.
-5. All other H.264 packets reach the VideoToolbox hardware decoder without
-   byte modification.
-6. `slice_dropout`, `slice_transplant`, `payload_xor`, `chroma_codec_echo`,
-   the six research effects, and scaled/pixelated recovery use
-   Metal-compatible pixel-buffer pools and a
-   Metal-backed CoreImage path. `reference_timewarp` selects an older frame
-   from decoded `CVPixelBuffer` history configured from four to twelve frames.
-7. The completed frame is delivered through a callback or bounded poll queue.
-   Separate flags identify intentional holds and failure fallback.
+3. The VideoToolbox encoder produces a packet in `RealTime` mode. Its original
+   `CMSampleBufferRef` reaches the decoder without payload rebuild or copy.
+4. Only H.264 `pframe_loss` holds encoded samples. HEVC/ProRes `pframe_loss`
+   and `idr_starvation` use decoder-safe fused-Metal history holds.
+5. `CVMetalTextureCache` maps the decoder's 420v Y/CbCr planes directly, and
+   one fused kernel reads the current planes plus near/far BGRA history.
+6. All 36 effects create the stable 32BGRA output in one GPU dispatch. Only
+   the explicit BGRA compatibility path uses the previous Core Image effects.
+7. The decode callback returns after Metal commit. Completed frames are
+   delivered in accepted-submission order through callback or bounded poll.
 
 H.264 / HEVC / ProRes encode/decode is provided by VideoToolbox, not implemented as a Metal
 shader. Metal backs the native pixel-buffer/post-processing side of the lane.
@@ -435,6 +442,13 @@ encoded/muxed frame count is unavailable or differs from the filter count. The
 30 fps flag raises the rate gate to 30 fps and p95 gate to 33.334 ms.
 Re-measure the intended effects and controls on the deployment Mac with
 representative video.
+
+The current Phase 6 run used the same 120-frame live-action input for 36
+effects × H.264/HEVC/ProRes 422 × 960×540/1920×1080. All 216 cells passed the
+20fps, p95 50ms, and reliability gates. The slowest cell was HEVC 1920×1080
+`generation_cascade` at 52.463fps and 20.635ms p95. See
+[VIDEOTOOLBOX_FAST_PATH.md](VIDEOTOOLBOX_FAST_PATH.md) for the complete
+contract and reproducible runner.
 
 On 2026-07-23, the six research effects were measured on an Apple M5 Max with
 a 5.53-second, 166-frame live-action input converted to 960×540 at 30 fps. All

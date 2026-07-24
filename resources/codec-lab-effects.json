@@ -4,11 +4,35 @@
     "purpose": "Machine-readable disclosure of the real processing boundary; effect names are artistic names, not evidence of compressed syntax access.",
     "native": "Directly parses, mutates, generates, or packetizes the named compressed codec or transport structure.",
     "decoded_proxy": "Uses decoder-exported data or decoded pixels and reconstructs the result; it does not mutate entropy-coded payload bytes.",
-    "realtime": "Requires the VideoToolbox/CoreImage/Metal path to meet 960x540 at 20 fps; offline entries make no realtime claim."
+    "realtime": "Requires the VideoToolbox/NV12/Metal fast path or disclosed BGRA/CoreImage fallback to meet 960x540 at 20 fps; offline entries make no realtime claim."
+  },
+  "videotoolbox_fast_path": {
+    "execution_class": "realtime",
+    "entrypoint": "glic_codec_glitch_context",
+    "codec_count": 3,
+    "codecs": ["h264", "hevc", "prores_422"],
+    "effect_count": 36,
+    "pixel_paths": ["auto", "nv12_metal", "bgra_compatibility"],
+    "default_pixel_path": "auto",
+    "internal_pixel_format": "420v",
+    "public_output_pixel_format": "32BGRA",
+    "direct_host_input": "420v_without_bgra_staging",
+    "bgra_host_input": "metal_bgra_to_420v_conversion",
+    "decoded_plane_mapping": "CVMetalTextureCache",
+    "post_processing": "single_fused_metal_compute_dispatch",
+    "delivery": "asynchronous_ordered",
+    "implementation_level": "videotoolbox_decoded_history_plus_fused_metal_or_coreimage_fallback",
+    "validated_matrix": {
+      "resolutions": ["960x540", "1920x1080"],
+      "runs": 216,
+      "minimum_fps": 20,
+      "maximum_p95_milliseconds": 50,
+      "passed_runs": 216
+    }
   },
   "realtime_crossbreed": {
     "entrypoint": "glic_codec_glitch_context",
-    "engine": "videotoolbox_clean_decode_plus_gpu_reconstruction",
+    "engine": "videotoolbox_nv12_plus_fused_metal_or_bgra_coreimage_fallback",
     "minimum_width": 960,
     "minimum_height": 540,
     "minimum_fps": 20,
@@ -25,11 +49,11 @@
       "pts_rubberband",
       "bitrate_raster"
     ],
-    "implementation_note": "Single hardware-codec realtime adaptations; true multi-codec chains remain offline."
+    "implementation_note": "Single hardware-codec realtime adaptations. The preferred path maps decoded NV12 planes through CVMetalTextureCache and emits one fused Metal reconstruction; true multi-codec chains remain offline."
   },
   "realtime_native_expansion": {
     "entrypoint": "glic_codec_glitch_context",
-    "engine": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction",
+    "engine": "videotoolbox_decoded_history_plus_fused_metal_or_coreimage_fallback",
     "minimum_width": 960,
     "minimum_height": 540,
     "minimum_fps": 20,
@@ -46,16 +70,16 @@
       "asymmetric_plane_codec"
     ],
     "implementation_levels": {
-      "plane_time_split": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction",
-      "reference_atlas": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction",
-      "flow_lattice": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction",
-      "scan_order_fold": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction",
-      "regional_gop_clock": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction",
-      "entropy_feedback": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction",
-      "rolling_time_shutter": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction",
-      "asymmetric_plane_codec": "videotoolbox_decoded_history_plus_coreimage_metal_reconstruction"
+      "plane_time_split": "videotoolbox_decoded_history_plus_fused_metal_or_coreimage_fallback",
+      "reference_atlas": "videotoolbox_decoded_history_plus_fused_metal_or_coreimage_fallback",
+      "flow_lattice": "videotoolbox_decoded_history_plus_fused_metal_or_coreimage_fallback",
+      "scan_order_fold": "videotoolbox_decoded_history_plus_fused_metal_or_coreimage_fallback",
+      "regional_gop_clock": "videotoolbox_decoded_history_plus_fused_metal_or_coreimage_fallback",
+      "entropy_feedback": "videotoolbox_decoded_history_plus_fused_metal_or_coreimage_fallback",
+      "rolling_time_shutter": "videotoolbox_decoded_history_plus_fused_metal_or_coreimage_fallback",
+      "asymmetric_plane_codec": "videotoolbox_decoded_history_plus_fused_metal_or_coreimage_fallback"
     },
-    "implementation_note": "Hardware codec decode history is recomposed by CoreImage kernels on Metal. Names such as flow, scan order, entropy, and planes describe the visual model and do not claim native compressed-field mutation."
+    "implementation_note": "The preferred path recomposes hardware-codec NV12 decode history in one fused Metal kernel; BGRA compatibility uses CoreImage on Metal. Names such as flow, scan order, entropy, and planes describe the visual model and do not claim native compressed-field mutation."
   },
   "syntax_lab": {
     "entrypoint": "scripts/process_codec_lab.py",

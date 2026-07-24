@@ -59,7 +59,8 @@
     },
     "codec": {
       "execution": "asynchronous",
-      "input": "CVPixelBufferRef_32BGRA",
+      "input": "CVPixelBufferRef_420v_or_32BGRA",
+      "output_format": "CVPixelBufferRef_32BGRA",
       "context": "glic_codec_glitch_context",
       "apply": "glic_glitch_preset_apply_codec",
       "prepare": "glic_codec_glitch_prepare",
@@ -67,6 +68,38 @@
       "output": "glic_codec_glitch_copy_latest_pixel_buffer",
       "native_codecs": ["h264", "hevc", "prores_422"],
       "codec_selector": "glic_codec_glitch_config.codec",
+      "pixel_path_selector": "glic_codec_glitch_config.pixel_path",
+      "pixel_paths": {
+        "auto": {
+          "enum": "GLIC_CODEC_GLITCH_PIXEL_PATH_AUTO",
+          "behavior": "prefer_nv12_metal_then_fall_back_to_bgra_compatibility"
+        },
+        "nv12_metal": {
+          "enum": "GLIC_CODEC_GLITCH_PIXEL_PATH_NV12_METAL",
+          "behavior": "require_nv12_iosurface_cvmetaltexturecache_and_fused_metal"
+        },
+        "bgra_compatibility": {
+          "enum": "GLIC_CODEC_GLITCH_PIXEL_PATH_BGRA_COMPATIBILITY",
+          "behavior": "use_original_bgra_coreimage_compatibility_path"
+        }
+      },
+      "fast_path": {
+        "encode_pixel_format": "420v",
+        "direct_host_input": "420v_without_bgra_staging",
+        "bgra_host_input": "metal_bgra_to_420v_conversion",
+        "decoded_plane_mapping": "CVMetalTextureCache_no_decoded_pixel_copy",
+        "post_processing": "one_fused_metal_compute_dispatch_per_output",
+        "delivery": "asynchronous_and_ordered_by_accepted_submission",
+        "gpu_watchdog_milliseconds": {"steady": 80, "warmup": 300},
+        "required_runtime_resource": "glic_realtime.metallib",
+        "runtime_evidence_flags": [
+          "nv12_metal_fast_path",
+          "metal_texture_cache",
+          "fused_metal_effects",
+          "asynchronous_metal_delivery",
+          "ordered_delivery"
+        ]
+      },
       "implementation_level": "glic_codec_glitch_effect_implementation_level",
       "implementation_contract": "VideoToolbox encoded samples are decoded cleanly; realtime visual reconstruction does not mutate compressed payload bytes.",
       "effect_count": 36,
@@ -254,6 +287,8 @@
   "threading": {
     "image_context": "one_serial_processing_queue_per_context",
     "codec_submit": "nonblocking_and_may_return_backpressure",
+    "codec_metal_completion": "asynchronous_private_queue_with_ordered_delivery",
+    "codec_flush": "waits_for_codec_contexts_and_outstanding_metal_commands",
     "prepare": "control_or_background_queue_only",
     "render_callback": "process_or_submit_only",
     "context_thread_safety": "not_concurrently_thread_safe"
@@ -264,7 +299,17 @@
     "minimum_frames_per_second": 20,
     "maximum_p95_frame_milliseconds": 50,
     "codec_requires_hardware_encoder": true,
-    "codec_requires_hardware_decoder": true
+    "codec_requires_hardware_decoder": true,
+    "codec_fast_path_matrix": {
+      "effects": 36,
+      "codecs": ["h264", "hevc", "prores_422"],
+      "resolutions": ["960x540", "1920x1080"],
+      "runs": 216,
+      "minimum_processing_fps": 20,
+      "maximum_p95_frame_milliseconds": 50,
+      "zero_gpu_timeouts": true,
+      "zero_unintentional_fallback": true
+    }
   },
   "fail_closed_rules": [
     "do_not_route_codec_presets_to_glic_metal_context",
@@ -282,13 +327,15 @@
   "verification": [
     "python3 scripts/check_public_release.py --source .",
     "cmake --build build --parallel",
-    "ctest --test-dir build --output-on-failure"
+    "ctest --test-dir build --output-on-failure",
+    "python3 scripts/validate_videotoolbox_fast_path.py input.mov --filter-bin build/glic_codec_glitch_filter --output-dir validation/videotoolbox-fast-path"
   ],
   "documentation": {
     "quickstart": "docs/DOWNSTREAM_QUICKSTART.md",
     "human": "docs/EMBEDDING.md",
     "agent": "docs/AI_INTEGRATION.md",
     "codec": "docs/CODEC_GLITCH.md",
+    "videotoolbox_fast_path": "docs/VIDEOTOOLBOX_FAST_PATH.md",
     "multicodec": "docs/MULTICODEC_GLITCH.md",
     "offline_packet_glitch": "docs/OFFLINE_PACKET_GLITCH.md",
     "codec_lab": "docs/CODEC_LAB.md",
