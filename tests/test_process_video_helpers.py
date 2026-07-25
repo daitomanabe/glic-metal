@@ -148,6 +148,8 @@ def main() -> int:
             "0.2",
         ]
     )
+    assert codec_args.codec_input_pixel_format == "nv12"
+    assert codec_args.codec_pixel_path == "nv12"
     codec_fields = MODULE.codec_glitch_report_fields(
         codec_args,
         {
