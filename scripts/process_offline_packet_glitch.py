@@ -83,6 +83,7 @@ def run_isolated(
     log: Path,
     timeout_seconds: int,
     maximum_file_bytes: int,
+    environment: dict[str, str] | None = None,
 ) -> ProcessResult:
     log.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
@@ -95,6 +96,7 @@ def run_isolated(
             stdin=subprocess.DEVNULL,
             stdout=output,
             stderr=subprocess.STDOUT,
+            env=environment,
             start_new_session=True,
             preexec_fn=lambda: _limit_child(
                 # RLIMIT_CPU is accumulated CPU time, not wall time. Codec

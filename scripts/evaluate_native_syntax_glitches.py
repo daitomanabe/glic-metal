@@ -263,7 +263,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ffedit", default=os.environ.get("GLIC_FFEDIT", "ffedit")
     )
-    parser.add_argument("--x265", default=os.environ.get("GLIC_X265", "x265"))
+    parser.add_argument(
+        "--x265",
+        default=os.environ.get(
+            "GLIC_X265_HOOK", os.environ.get("GLIC_X265", "x265")
+        ),
+    )
+    parser.add_argument(
+        "--hevc-hook",
+        choices=("auto", "entropy", "analysis"),
+        default="auto",
+    )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
     if args.selftest:
@@ -428,6 +438,8 @@ def main() -> int:
                             ffedit,
                             "--x265",
                             x265,
+                            "--hevc-hook",
+                            args.hevc_hook,
                             "--work-dir",
                             str(codec_dir / f"{name}-stages"),
                             "--report",

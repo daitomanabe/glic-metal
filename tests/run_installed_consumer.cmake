@@ -66,6 +66,9 @@ foreach(tool IN ITEMS
     process_native_syntax_glitch.py
     native_syntax_glitch.py
     x265_analysis_glitch.py
+    build_x265_glitch_reference.py
+    x265-4.2-glic-entropy-hooks.patch
+    x265_glic_entropy_hook.h
     evaluate_native_syntax_glitches.py
     install_ffglitch_reference.py
     evolutionary_codec_search.py

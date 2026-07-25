@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -37,13 +38,28 @@ SUPPORTED_CODECS_BY_EFFECT = {
         effect: {"mpeg2", "mpeg4_part2", "hevc"}
         for effect in MOTION_EFFECTS
     },
-    **{effect: {"mpeg2"} for effect in COEFFICIENT_EFFECTS},
+    **{effect: {"mpeg2", "hevc"} for effect in COEFFICIENT_EFFECTS},
     **{effect: {"mpeg2"} for effect in QUANTIZER_EFFECTS},
 }
 DEFAULT_CODEC = "mpeg2"
 FFGLITCH_VERSION = "0.10.2"
 FFGLITCH_DOWNLOAD = "https://ffglitch.org/download/"
 X265_ANALYSIS_VERSION_PREFIX = "4.2"
+X265_HOOK_SCHEMA = "glic-x265-entropy-hook-build-v1"
+X265_HOOK_COMMIT = "e444744c03978c1fb4e037168967020cf2648427"
+X265_ENTROPY_IMPLEMENTATION_LEVEL = {
+    **{
+        effect: "native_hevc_x265_cabac_mvd_late_entropy_injection"
+        for effect in MOTION_EFFECTS
+    },
+    **{
+        effect: (
+            "native_hevc_x265_cabac_quantized_coefficient_"
+            "late_entropy_injection"
+        )
+        for effect in COEFFICIENT_EFFECTS
+    },
+}
 
 
 def parse_rate(value: object) -> float:
@@ -234,11 +250,104 @@ def x265_analysis_command(
     return command
 
 
+def x265_entropy_command(
+    x265: str, source: Path, destination: Path
+) -> list[str]:
+    return [
+        x265,
+        "--y4m",
+        "--input",
+        str(source),
+        "--output",
+        str(destination),
+        "--preset",
+        "medium",
+        "--crf",
+        "24",
+        "--frame-threads",
+        "1",
+        "--no-wpp",
+        "--pools",
+        "none",
+        "--log-level",
+        "warning",
+    ]
+
+
+def x265_hook_marker(x265: str) -> Path:
+    binary = Path(x265).expanduser().resolve()
+    return Path(str(binary) + ".glic-hook.json")
+
+
+def load_x265_hook_contract(x265: str) -> dict | None:
+    marker = x265_hook_marker(x265)
+    if not marker.is_file():
+        return None
+    try:
+        contract = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    binary = Path(x265).expanduser().resolve()
+    if not (
+        contract.get("schema") == X265_HOOK_SCHEMA
+        and contract.get("x265_commit") == X265_HOOK_COMMIT
+        and contract.get("binary_sha256") == sha256(binary)
+    ):
+        return None
+    return contract
+
+
+def parse_x265_hook_evidence(
+    log: Path, effect: str, amount: float, seed: int
+) -> dict:
+    text = log.read_text(errors="replace")
+    matches = re.findall(
+        r"^\[glic-x265-hook\] effect=(\S+) candidates=(\d+) "
+        r"selected=(\d+) changed=(\d+)$",
+        text,
+        flags=re.MULTILINE,
+    )
+    if len(matches) != 1 or matches[0][0] != effect:
+        raise RuntimeError(
+            f"x265 entropy-hook evidence is missing or ambiguous; see {log}"
+        )
+    _, candidates, selected, changed = matches[0]
+    implementation_level = X265_ENTROPY_IMPLEMENTATION_LEVEL[effect]
+    return {
+        "feature": (
+            "hevc_cabac_mvd"
+            if effect in MOTION_EFFECTS
+            else "hevc_cabac_quantized_coefficient"
+        ),
+        "effect": effect,
+        "seed": seed,
+        "amount": amount,
+        "implementation_level": implementation_level,
+        "total_syntax_candidates": int(candidates),
+        "selected_syntax_candidates": int(selected),
+        "changed_values": int(changed),
+        "late_entropy_injection": True,
+        "encoder_reconstruction_mismatch_intentional": True,
+    }
+
+
+def clean_x265_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    for name in (
+        "GLIC_X265_HOOK_EFFECT",
+        "GLIC_X265_HOOK_AMOUNT",
+        "GLIC_X265_HOOK_SEED",
+    ):
+        environment.pop(name, None)
+    return environment
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Mutate MPEG-2/MPEG-4 Part 2 fields through FFglitch "
-            "transplication or inject HEVC MVs through x265 analysis-load."
+            "transplication, x265 analysis-load MV injection, or the pinned "
+            "x265 late-entropy MVD/coefficient hook."
         )
     )
     parser.add_argument("input", type=Path)
@@ -273,7 +382,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ffedit", default=os.environ.get("GLIC_FFEDIT", "ffedit")
     )
-    parser.add_argument("--x265", default=os.environ.get("GLIC_X265", "x265"))
+    parser.add_argument(
+        "--x265",
+        default=os.environ.get(
+            "GLIC_X265_HOOK", os.environ.get("GLIC_X265", "x265")
+        ),
+    )
+    parser.add_argument(
+        "--hevc-hook",
+        choices=("auto", "entropy", "analysis"),
+        default="auto",
+        help=(
+            "auto uses a verified GLIC x265 entropy-hook build when present "
+            "and otherwise falls back to analysis-load for MV effects"
+        ),
+    )
     args = parser.parse_args()
     args.input = args.input.expanduser().resolve()
     args.output = args.output.expanduser().resolve()
@@ -332,8 +455,9 @@ def process_hevc(args: argparse.Namespace) -> int:
         or f"version {X265_ANALYSIS_VERSION_PREFIX}" not in version_text
     ):
         raise RuntimeError(
-            "HEVC analysis injection requires x265 4.2.x because its analysis "
-            f"file is an internal ABI; see {version_result.log}"
+            "HEVC native hooks require x265 4.2.x because the analysis file "
+            "and late-entropy patch target internal x265 ABIs; see "
+            f"{version_result.log}"
         )
 
     source_probe_before = source_contract(ffprobe, args.input)
@@ -356,59 +480,168 @@ def process_hevc(args: argparse.Namespace) -> int:
     if normalize_result.return_code != 0 or not normalized.is_file():
         raise RuntimeError(f"Y4M normalization failed; see {normalize_result.log}")
 
-    source_bitstream = work / "source-hevc.hevc"
-    exported_analysis = work / "source-x265-analysis.dat"
-    save_result = run_isolated(
-        x265_analysis_command(
-            x265,
-            normalized,
-            source_bitstream,
-            exported_analysis,
-            mode="save",
-        ),
-        log=work / "02-x265-analysis-save.log",
-        timeout_seconds=args.timeout,
-        maximum_file_bytes=maximum_file_bytes,
-    )
-    if (
-        save_result.return_code != 0
-        or not source_bitstream.is_file()
-        or not exported_analysis.is_file()
-    ):
+    hook_contract = load_x265_hook_contract(x265)
+    hook_mode = args.hevc_hook
+    if hook_mode == "auto":
+        hook_mode = "entropy" if hook_contract is not None else "analysis"
+    if hook_mode == "entropy" and hook_contract is None:
         raise RuntimeError(
-            f"x265 analysis-save encode failed; see {save_result.log}"
+            "--hevc-hook entropy requires the verified custom x265 binary "
+            "from scripts/build_x265_glitch_reference.py"
+        )
+    if hook_mode == "analysis" and args.effect not in MOTION_EFFECTS:
+        raise RuntimeError(
+            "HEVC coefficient effects require --hevc-hook entropy and the "
+            "binary built by scripts/build_x265_glitch_reference.py"
         )
 
-    mutated_analysis = work / f"mutated-{args.effect}-x265-analysis.dat"
-    mutation_evidence = mutate_analysis_file(
-        exported_analysis,
-        mutated_analysis,
-        args.effect,
-        args.amount,
-        args.seed,
-    )
+    source_bitstream = work / "source-hevc.hevc"
+    damaged = work / f"damaged-{args.effect}-hevc.hevc"
+    exported_syntax: dict | None
+    mutated_syntax: dict
+    if hook_mode == "entropy":
+        source_encode_result = run_isolated(
+            x265_entropy_command(x265, normalized, source_bitstream),
+            log=work / "02-x265-clean-encode.log",
+            timeout_seconds=args.timeout,
+            maximum_file_bytes=maximum_file_bytes,
+            environment=clean_x265_environment(),
+        )
+        if (
+            source_encode_result.return_code != 0
+            or not source_bitstream.is_file()
+        ):
+            raise RuntimeError(
+                f"x265 clean encode failed; see {source_encode_result.log}"
+            )
+        hook_configuration = work / "x265-entropy-hook-config.json"
+        hook_configuration.write_text(
+            json.dumps(
+                {
+                    "schema": "glic-x265-entropy-hook-run-v1",
+                    "effect": args.effect,
+                    "amount": args.amount,
+                    "seed": args.seed,
+                    "x265_contract": hook_contract,
+                    "runtime_constraints": {
+                        "frame_threads": 1,
+                        "wpp": False,
+                        "pools": "none",
+                    },
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        hook_environment = clean_x265_environment()
+        hook_environment.update(
+            {
+                "GLIC_X265_HOOK_EFFECT": args.effect,
+                "GLIC_X265_HOOK_AMOUNT": str(args.amount),
+                "GLIC_X265_HOOK_SEED": str(args.seed),
+            }
+        )
+        damaged_encode_result = run_isolated(
+            x265_entropy_command(x265, normalized, damaged),
+            log=work / "03-x265-late-entropy-hook.log",
+            timeout_seconds=args.timeout,
+            maximum_file_bytes=maximum_file_bytes,
+            environment=hook_environment,
+        )
+        if damaged_encode_result.return_code != 0 or not damaged.is_file():
+            raise RuntimeError(
+                "x265 late-entropy encode failed; see "
+                f"{damaged_encode_result.log}"
+            )
+        mutation_evidence = parse_x265_hook_evidence(
+            damaged_encode_result.log,
+            args.effect,
+            args.amount,
+            args.seed,
+        )
+        exported_syntax = None
+        mutated_syntax = {
+            "kind": "x265_late_entropy_hook_configuration",
+            "path": str(hook_configuration),
+            "bytes": hook_configuration.stat().st_size,
+            "sha256": sha256(hook_configuration),
+            "process_log": str(damaged_encode_result.log),
+        }
+        encode_processes = {
+            "x265_clean_encode": result_json(source_encode_result),
+            "x265_late_entropy_hook": result_json(damaged_encode_result),
+        }
+    else:
+        exported_analysis = work / "source-x265-analysis.dat"
+        source_encode_result = run_isolated(
+            x265_analysis_command(
+                x265,
+                normalized,
+                source_bitstream,
+                exported_analysis,
+                mode="save",
+            ),
+            log=work / "02-x265-analysis-save.log",
+            timeout_seconds=args.timeout,
+            maximum_file_bytes=maximum_file_bytes,
+            environment=clean_x265_environment(),
+        )
+        if (
+            source_encode_result.return_code != 0
+            or not source_bitstream.is_file()
+            or not exported_analysis.is_file()
+        ):
+            raise RuntimeError(
+                "x265 analysis-save encode failed; see "
+                f"{source_encode_result.log}"
+            )
+        mutated_analysis = work / f"mutated-{args.effect}-x265-analysis.dat"
+        mutation_evidence = mutate_analysis_file(
+            exported_analysis,
+            mutated_analysis,
+            args.effect,
+            args.amount,
+            args.seed,
+        )
+        damaged_encode_result = run_isolated(
+            x265_analysis_command(
+                x265,
+                normalized,
+                damaged,
+                mutated_analysis,
+                mode="load",
+            ),
+            log=work / "03-x265-analysis-load.log",
+            timeout_seconds=args.timeout,
+            maximum_file_bytes=maximum_file_bytes,
+            environment=clean_x265_environment(),
+        )
+        if damaged_encode_result.return_code != 0 or not damaged.is_file():
+            raise RuntimeError(
+                "x265 analysis-load encode failed; see "
+                f"{damaged_encode_result.log}"
+            )
+        exported_syntax = {
+            "kind": "x265_analysis_save_binary",
+            "path": str(exported_analysis),
+            "bytes": exported_analysis.stat().st_size,
+            "sha256": sha256(exported_analysis),
+        }
+        mutated_syntax = {
+            "kind": "x265_analysis_load_binary",
+            "path": str(mutated_analysis),
+            "bytes": mutated_analysis.stat().st_size,
+            "sha256": sha256(mutated_analysis),
+        }
+        encode_processes = {
+            "x265_analysis_save": result_json(source_encode_result),
+            "x265_analysis_load": result_json(damaged_encode_result),
+        }
     if mutation_evidence["changed_values"] < 1:
         raise RuntimeError(
-            "effect selected no HEVC motion vectors; increase --amount or "
-            "use a source with inter prediction"
-        )
-
-    damaged = work / f"damaged-{args.effect}-hevc.hevc"
-    load_result = run_isolated(
-        x265_analysis_command(
-            x265,
-            normalized,
-            damaged,
-            mutated_analysis,
-            mode="load",
-        ),
-        log=work / "03-x265-analysis-load.log",
-        timeout_seconds=args.timeout,
-        maximum_file_bytes=maximum_file_bytes,
-    )
-    if load_result.return_code != 0 or not damaged.is_file():
-        raise RuntimeError(
-            f"x265 analysis-load encode failed; see {load_result.log}"
+            "effect selected no HEVC syntax values; increase --amount or "
+            "use a source with more coded motion/residual data"
         )
     source_digest = sha256(source_bitstream)
     damaged_digest = sha256(damaged)
@@ -499,7 +732,7 @@ def process_hevc(args: argparse.Namespace) -> int:
         "realtime_certified": False,
         "effect": args.effect,
         "codec": "hevc",
-        "feature": "x265_analysis_mv",
+        "feature": mutation_evidence["feature"],
         "implementation_level": mutation_evidence["implementation_level"],
         "input": str(args.input),
         "output": str(args.output),
@@ -518,22 +751,38 @@ def process_hevc(args: argparse.Namespace) -> int:
         "decode_survival_ratio": round(survival, 6),
         "qualified_preview": qualified,
         "compressed_domain_edit": True,
-        "native_encoder_motion_decision_injection": True,
+        "native_encoder_motion_decision_injection": (
+            hook_mode == "analysis"
+        ),
+        "late_entropy_syntax_injection": hook_mode == "entropy",
+        "encoder_reconstruction_mismatch_intentional": (
+            hook_mode == "entropy"
+        ),
         "existing_bitstream_transplication": False,
         "decoded_pixels_modified_before_entropy_coding": False,
         "may_produce_invalid_bitstream": False,
         "h264_direct_support": "not_implemented_fail_closed",
-        "hevc_direct_support": "x265_4_2_analysis_mv_encoder_hook",
+        "hevc_direct_support": (
+            "x265_4_2_late_entropy_mvd_and_quantized_coefficient_hook"
+            if hook_mode == "entropy"
+            else "x265_4_2_analysis_mv_encoder_hook"
+        ),
         "x265": {
             "required_version_prefix": X265_ANALYSIS_VERSION_PREFIX,
             "binary": x265,
             "version_log": str(version_result.log),
-            "analysis_file_contract": {
-                "reuse_level": 10,
-                "cutree": False,
-                "b_intra": False,
-                "ctu_distortion_refine": False,
-            },
+            "hook_mode": hook_mode,
+            "custom_hook_contract": hook_contract,
+            "analysis_file_contract": (
+                {
+                    "reuse_level": 10,
+                    "cutree": False,
+                    "b_intra": False,
+                    "ctu_distortion_refine": False,
+                }
+                if hook_mode == "analysis"
+                else None
+            ),
         },
         "mutation_evidence": mutation_evidence,
         "source_bitstream": {
@@ -542,18 +791,8 @@ def process_hevc(args: argparse.Namespace) -> int:
             "sha256": source_digest,
             "probe": source_probe,
         },
-        "exported_syntax": {
-            "kind": "x265_analysis_save_binary",
-            "path": str(exported_analysis),
-            "bytes": exported_analysis.stat().st_size,
-            "sha256": sha256(exported_analysis),
-        },
-        "mutated_syntax": {
-            "kind": "x265_analysis_load_binary",
-            "path": str(mutated_analysis),
-            "bytes": mutated_analysis.stat().st_size,
-            "sha256": sha256(mutated_analysis),
-        },
+        "exported_syntax": exported_syntax,
+        "mutated_syntax": mutated_syntax,
         "damaged_bitstream": {
             "path": str(damaged),
             "bytes": damaged.stat().st_size,
@@ -563,8 +802,7 @@ def process_hevc(args: argparse.Namespace) -> int:
         "processes": {
             "x265_version": result_json(version_result),
             "normalize_y4m": result_json(normalize_result),
-            "x265_analysis_save": result_json(save_result),
-            "x265_analysis_load": result_json(load_result),
+            **encode_processes,
             "decode": result_json(decode_result),
             "preview": result_json(preview_result) if preview_result else None,
         },
@@ -575,7 +813,8 @@ def process_hevc(args: argparse.Namespace) -> int:
         json.dumps(report, indent=2) + "\n", encoding="utf-8"
     )
     print(
-        f"effect={args.effect} feature=x265_analysis_mv "
+        f"effect={args.effect} feature={mutation_evidence['feature']} "
+        f"hook={hook_mode} "
         f"changed={mutation_evidence['changed_values']} "
         f"survival={survival:.3f} frames={salvaged_frames}/{source_frames} "
         f"qualified={qualified} report={report_path}"

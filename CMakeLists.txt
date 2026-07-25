@@ -378,6 +378,9 @@ if(BUILD_TESTING)
         add_test(NAME glic_x265_analysis_glitch_helpers
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_x265_analysis_glitch.py")
+        add_test(NAME glic_x265_entropy_hook_contract
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${PROJECT_SOURCE_DIR}/tests/test_x265_entropy_hook.py")
         add_test(NAME glic_native_syntax_ranking_selftest
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/scripts/evaluate_native_syntax_glitches.py"
@@ -624,10 +627,14 @@ install(PROGRAMS scripts/process_multicodec_glitch.py
                  scripts/probe_multicodec_capabilities.py
                  scripts/build_av2_reference.py
                  scripts/build_vvc_reference.py
+                 scripts/build_x265_glitch_reference.py
                  scripts/install_ffglitch_reference.py
                  scripts/validate_videotoolbox_fast_path.py
                  scripts/evaluate_codec_glitch_videos.py
                  tools/evaluate_effect_difference.py
+        DESTINATION bin)
+install(FILES patches/x265-4.2-glic-entropy-hooks.patch
+              patches/x265_glic_entropy_hook.h
         DESTINATION bin)
 install(DIRECTORY presets/
         DESTINATION ${CMAKE_INSTALL_DATADIR}/glic-metal/presets)

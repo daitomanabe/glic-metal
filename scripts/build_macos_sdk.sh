@@ -114,6 +114,9 @@ for tool in \
   probe_multicodec_capabilities.py \
   build_av2_reference.py \
   build_vvc_reference.py \
+  build_x265_glitch_reference.py \
+  x265-4.2-glic-entropy-hooks.patch \
+  x265_glic_entropy_hook.h \
   install_ffglitch_reference.py \
   validate_videotoolbox_fast_path.py \
   evaluate_codec_glitch_videos.py \
