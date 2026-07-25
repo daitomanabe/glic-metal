@@ -23,10 +23,17 @@ FFglitch is GPL-2.0-or-later and is neither linked into nor bundled with the
 MIT-licensed GLIC Metal library. See
 [NATIVE_SYNTAX_GLITCH.md](NATIVE_SYNTAX_GLITCH.md).
 
-The HEVC MV encoder-hook lane additionally requires x265 CLI 4.2.x. GLIC Metal
-does not bundle x265. The tool pins the accepted version prefix because the
-analysis-save binary is an internal ABI rather than a stable interchange
-format.
+The HEVC late-entropy lane builds a separate x265 CLI from pinned official
+commit `e444744c03978c1fb4e037168967020cf2648427`:
+
+```bash
+python3 scripts/build_x265_glitch_reference.py
+```
+
+The builder applies the GPL hook, records patch/header/binary hashes, and
+keeps the result in the ignored cache. GLIC Metal does not link or bundle
+x265. A stock x265 4.2 CLI can still run the weaker analysis-load fallback for
+the four motion effects.
 
 ## Clone and build
 

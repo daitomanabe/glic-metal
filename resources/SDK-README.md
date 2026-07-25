@@ -34,14 +34,16 @@ the separate syntax/analysis workflows. Their exit status and JSON report are
 the completion contract; do not call them from a capture or render callback.
 `Tools/process_native_syntax_glitch.py` provides true MPEG-2 MV/qDCT/qscale
 and MPEG-4 Part 2 MV transplication through a separately installed FFglitch
-`ffedit`. It also provides HEVC MV injection through a separately installed
-x265 4.2 CLI and its analysis-save/load encoder hook. The HEVC source is
-re-encoded; this is not existing-bitstream CABAC transplication.
+`ffedit`. It also provides four HEVC MVD and four quantized-coefficient
+effects through the separately built pinned x265 4.2 late-entropy hook.
+`Tools/build_x265_glitch_reference.py` builds and verifies that external GPL
+CLI; stock x265 remains an analysis-load motion fallback. The HEVC source is
+re-encoded, so this is not existing-bitstream CABAC transplication.
 `Tools/evaluate_native_syntax_glitches.py` renders and
 diversity-ranks all supported variants using actual-video metrics.
 `Tools/install_ffglitch_reference.py` installs the checksum-pinned Apple
 Silicon reference build into a cache; FFglitch is not bundled with this SDK.
-H.264 CAVLC/CABAC editing and HEVC transform-coefficient editing fail closed.
+H.264 CAVLC/CABAC editing fails closed.
 Structured NAL/OBU, transport, and metadata workflows have dedicated Tools
 entrypoints. See `Documentation/GLITCH_EXPANSION.md` for the complete catalog,
 implementation-level labels, and actual-video validation.

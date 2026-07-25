@@ -11,7 +11,7 @@ GLIC Metalはcodec系グリッチを、次の安全境界へ分けます。
 | Realtime Codec Glitch | 36 | VideoToolbox clean encode/decode + GPU再構成 | 960×540・20fps gate |
 | Offline Packet Lab | 8 | FFmpeg bitstream filter + 隔離救済decode | 非対応 |
 | Offline Syntax / Analysis Lab | 21 | 実codec cycle + 復号再構成・解析・探索 | 非対応 |
-| Native Compressed Syntax Lab | 12 / 20 variants | FFglitch MPEG-2 `mv` / `q_dct` / `qscale`、MPEG-4 Part 2 `mv`、x265 HEVC `mv` encoder hook | 非対応 |
+| Native Compressed Syntax Lab | 12 / 24 variants | FFglitch MPEG-2 `mv` / `q_dct` / `qscale`、MPEG-4 Part 2 `mv`、x265 HEVC MVD / 量子化係数hook | 非対応 |
 | Structured / Transport / Metadata | 11 | NAL/OBU、TS/HLS/RTP model、VUI/SEI | 非対応 |
 
 ### Realtime Crossbreed
@@ -80,8 +80,9 @@ python3 scripts/process_codec_lab.py input.mov vortex.mp4 \
 （`mv`）、量子化DCT係数（`q_dct`）、quantizer scale（`qscale`）、または
 MPEG-4 Part 2/AVIの`mv`をFFglitch `ffedit`でexportし、値を直接変更して
 entropy syntaxへtransplicateします。既存Syntax Labのdecoded reconstruction
-proxyとは別workflowです。HEVCの4 MV effectはx265 4.2 analysis-save/loadで
-encoder decisionへ注入し、CABAC符号化前に適用します。
+proxyとは別workflowです。HEVCの4 MVD effectと4量子化係数effectは、pinned
+x265 4.2の最終CABAC出力直前へ注入します。通常x265はMV analysis-load
+fallbackとして利用できます。
 
 ```bash
 FFEDIT="$(python3 scripts/install_ffglitch_reference.py --print-ffedit)"
@@ -92,10 +93,9 @@ python3 scripts/process_native_syntax_glitch.py input.mov output.mp4 \
 
 source/damaged bitstream、変更前後syntax JSON、SHA-256、probe、log、救済decodeを
 保持します。HEVC経路はsourceを再encodeし、既存bitstreamのCABACをtransplicate
-しません。H.264 direct syntax、HEVC係数編集、既存HEVC CABAC transplicationは
-fail-closedします。
+しません。H.264 direct syntaxと既存HEVC CABAC transplicationはfail-closedします。
 詳細は[NATIVE_SYNTAX_GLITCH.md](NATIVE_SYNTAX_GLITCH.md)を参照してください。
-`evaluate_native_syntax_glitches.py`は20 codec-effect variantを一括処理し、実動画
+`evaluate_native_syntax_glitches.py`は24 codec-effect variantを一括処理し、実動画
 差分と非類似性をtoken-freeでrankingします。
 
 ### Semantic / Analysis Lab
@@ -146,7 +146,7 @@ Codec effects are split into explicit safety classes: 36 clean-decode
 VideoToolbox realtime effects, eight isolated packet operations, 21
 decoded-syntax/analysis/search workflows, eight direct MPEG-2 compressed
 syntax effects, four MPEG-2 quantizer effects, four MPEG-4 Part 2 MV variants,
-four HEVC MV encoder-hook variants,
+eight HEVC MVD/coefficient encoder-hook variants,
 and 11 structured/transport/metadata operations.
 
 The ten Realtime Crossbreed effects are low-latency adaptations. They use one
@@ -159,10 +159,10 @@ labeling decoded motion/residual/reference reconstruction honestly as a proxy,
 not as a native bitstream syntax hook. The separate Native Compressed Syntax
 Lab uses FFglitch transplication to edit MPEG-2 encoded motion vectors and
 quantized DCT coefficients or quantizer scales directly, and supports the four
-MV effects on MPEG-4 Part 2. It also injects the four HEVC MV effects through
-x265 4.2 analysis-save/load before CABAC coding. Its token-free batch evaluator
-ranks all 20 codec-effect variants using actual-video difference and
-diversity. H.264 direct syntax, HEVC coefficients, and existing-bitstream HEVC
+MV effects on MPEG-4 Part 2. It also injects four HEVC MVD and four quantized-
+coefficient effects through a pinned x265 4.2 late-entropy hook. Its token-free
+batch evaluator ranks all 24 codec-effect variants using actual-video
+difference and diversity. H.264 direct syntax and existing-bitstream HEVC
 CABAC transplication fail closed. AV2 processing uses the pinned
 official AVM tools and fails closed when unavailable.
 

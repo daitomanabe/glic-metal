@@ -24,15 +24,16 @@ semantic versioning for tagged releases.
   public output remains BGRA for existing hosts.
 - A true compressed-domain syntax lane with four motion-vector, four
   quantized-DCT, and four quantizer-scale effects for MPEG-2 plus the four
-  motion-vector variants for MPEG-4 Part 2 and four HEVC MV variants injected
-  through x265 4.2 analysis-save/load before CABAC coding. It uses
+  motion-vector variants for MPEG-4 Part 2 and eight HEVC MVD/quantized-
+  coefficient variants injected through a pinned x265 4.2 late-entropy hook.
+  Stock x265 retains an analysis-load fallback for HEVC motion. It uses
   checksum-pinned external FFglitch 0.10.2 transplication for MPEG, retains
   before/after syntax and bitstream evidence, supports preserved AVI input,
-  and fails closed for H.264 syntax, HEVC coefficient edits, and
-  existing-bitstream HEVC CABAC transplication.
+  and fails closed for H.264 syntax and existing-bitstream HEVC CABAC
+  transplication.
 - A token-free native-syntax batch evaluator with resumable rendering,
   actual-video difference metrics, decode-survival checks, and deterministic
-  quality/diversity ranking across all 20 codec-effect variants.
+  quality/diversity ranking across all 24 codec-effect variants.
 - Eight decoded-history/CoreImage-Metal realtime effects with an implementation
   level API and 960x540 actual-video performance/difference/technical-QA
   evidence.

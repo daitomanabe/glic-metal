@@ -230,7 +230,7 @@ subprocessとして起動し、`resources/offline-codec-effects.json`で対応co
 詳細は`docs/OFFLINE_PACKET_GLITCH.md`を参照してください。
 
 Syntax/解析系21 workflow、MPEG-2/MPEG-4 Part 2圧縮syntax直接編集と
-HEVC native encoder MV注入を合わせた12 effect・20 codec-effect variant、
+HEVC native encoder MVD/量子化係数注入を合わせた12 effect・24 codec-effect variant、
 structured/transport/metadata系11 operationも
 リアルタイムC ABIへ混在させません。
 `scripts/process_codec_lab.py`、`scripts/process_native_syntax_glitch.py`、
@@ -238,9 +238,9 @@ structured/transport/metadata系11 operationも
 `scripts/evolutionary_codec_search.py`をfile単位で実行し、
 `implementation_level`を必ず確認します。decoded reconstruction proxyを
 native codec syntax hookとして表示してはいけません。FFglitch transplicationは
-catalogにあるMPEG-2/MPEG-4 Part 2対応だけを許可します。HEVC MVはx265 4.2の
-analysis-save/load encoder hookとしてsourceを再encodeし、H.264 direct syntax、
-HEVC coefficient、既存HEVC bitstream CABAC transplicationはfail-closedします。正規一覧は
+catalogにあるMPEG-2/MPEG-4 Part 2対応だけを許可します。HEVC MVD/量子化係数は
+pinned x265 4.2のlate-entropy hookとしてsourceを再encodeし、H.264 direct
+syntaxと既存HEVC bitstream CABAC transplicationはfail-closedします。正規一覧は
 `resources/codec-lab-effects.json`、詳細は`docs/CODEC_LAB.md`です。
 
 ### リソースパス
@@ -372,8 +372,8 @@ process; and retain the declared
 native bitstream syntax hook. See `docs/CODEC_LAB.md`.
 The direct compressed-syntax lane is limited to catalogued MPEG-2
 `mv`/`q_dct`/`qscale` and MPEG-4 Part 2 `mv` transplication through external
-FFglitch, plus HEVC MV injection through the external x265 4.2
-analysis-save/load encoder hook. H.264 direct syntax, HEVC coefficient edits,
-and existing-bitstream HEVC CABAC transplication must fail closed. Use the
+FFglitch, plus four HEVC MVD and four quantized-coefficient effects through
+the pinned external x265 4.2 late-entropy hook. H.264 direct syntax and
+existing-bitstream HEVC CABAC transplication must fail closed. Use the
 token-free evaluator for actual-video difference and diversity ranking across
-all 20 variants.
+all 24 variants.

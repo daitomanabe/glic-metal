@@ -76,7 +76,13 @@ def main() -> int:
     ) == set(native_syntax.MOTION_EFFECTS)
     assert set(
         catalog["native_compressed_syntax_lab"]["codec_support"]["hevc"]
-    ) == set(native_syntax.MOTION_EFFECTS)
+    ) == set(native_syntax.MOTION_EFFECTS + native_syntax.COEFFICIENT_EFFECTS)
+    assert (
+        catalog["native_compressed_syntax_lab"][
+            "decoded_pixels_modified_before_entropy_coding"
+        ]
+        is False
+    )
     assert catalog["native_compressed_syntax_lab"]["token_free_ranking"] is True
     assert (
         set(catalog["analysis_and_search"]["effect_names"])

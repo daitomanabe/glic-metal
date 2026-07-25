@@ -91,3 +91,19 @@ The official binary reports GNU General Public License version 2 or, at the
 user's option, any later version. Its archive includes the complete upstream
 notice, and source is available from the
 [official FFglitch download page](https://ffglitch.org/download/).
+
+## x265
+
+The optional HEVC late-entropy workflow builds
+[x265](https://github.com/Multicorewareinc/x265) 4.2 from pinned commit
+`e444744c03978c1fb4e037168967020cf2648427` and applies the separately
+distributed GLIC MVD/coefficient hook. The resulting CLI is an external
+GPL-2.0-or-later executable. It is cached locally and is not included in this
+repository, linked into the MIT-licensed GLIC Metal library, or bundled in the
+SDK.
+
+x265 Copyright (c) 2013-2025 MulticoreWare, Inc. and x265 contributors.
+
+The builder retains the complete upstream source and license in its cache.
+The hook source carries the same GPL-2.0-or-later license because it is
+compiled into that external executable.

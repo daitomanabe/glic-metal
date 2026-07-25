@@ -315,19 +315,25 @@ token-free自動探索は[Codec Lab](docs/CODEC_LAB.md)へ分離しています�
 さらにMPEG-2の圧縮motion vector、量子化DCT係数、quantizer scaleを直接変更する
 12 effectと、MPEG-4 Part 2の圧縮MVを直接変更する4 variantは、独立した
 FFglitch transplication経路です。HEVCでは同じ4種類のMV effectを、x265 4.2の
-analysis-save/loadを使うnative encoder hookとしてCABAC符号化前に注入します。
+late-entropy MVD hookとして実装し、さらに4種類の量子化係数effectもCABAC出力
+直前へ注入します。通常x265ではMVだけanalysis-save/loadへfallbackします。
 
 ```bash
 FFEDIT="$(python3 scripts/install_ffglitch_reference.py --print-ffedit)"
 python3 scripts/process_native_syntax_glitch.py input.mov direct.mp4 \
   --effect compressed_motion_vector_vortex --ffedit "$FFEDIT"
+
+X265_GLIC="$(python3 scripts/build_x265_glitch_reference.py --print-x265)"
+python3 scripts/process_native_syntax_glitch.py input.mov hevc-direct.mp4 \
+  --codec hevc --effect compressed_coefficient_sign_flip \
+  --x265 "$X265_GLIC" --hevc-hook entropy
 ```
 
-H.264 CAVLC/CABACのMV・係数編集は未実装でfail-closedします。HEVCはMVの
-encoder-hook注入のみ対応し、既存bitstreamのCABAC transplicationとtransform
-coefficient編集は未実装です。詳細と証跡契約は
+H.264 CAVLC/CABACのMV・係数編集は未実装でfail-closedします。HEVCはMVDと
+量子化係数のencoder-hook注入に対応しますが、既存bitstreamのCABAC
+transplicationではなくsourceを再encodeします。詳細と証跡契約は
 [Native Compressed Syntax Glitch](docs/NATIVE_SYNTAX_GLITCH.md)を参照してください。
-全20 codec-effect variantの実動画差分と非類似性rankingは次で自動生成できます。
+全24 codec-effect variantの実動画差分と非類似性rankingは次で自動生成できます。
 
 ```bash
 python3 scripts/evaluate_native_syntax_glitches.py input.mov \
@@ -968,11 +974,11 @@ coefficients, or quantizer scales through FFglitch transplication. Four
 additional codec-effect variants apply the MV family to MPEG-4 Part 2. This is
 a separate offline process with retained syntax JSON and before/after
 bitstreams; it is not a decoded reconstruction proxy. HEVC adds the same four
-MV effects through an x265 4.2 analysis-save/load encoder hook before CABAC
-coding. A token-free batch tool ranks actual-video difference and diversity
-across all 20 variants. H.264 CAVLC/CABAC editing remains fail-closed; HEVC
-transform-coefficient editing and existing-bitstream CABAC transplication are
-not implemented. See
+MV effects plus four quantized-coefficient effects through a pinned x265 4.2
+late-entropy hook. A token-free batch tool ranks actual-video difference and
+diversity across all 24 variants. H.264 CAVLC/CABAC editing remains
+fail-closed; HEVC re-encodes the source and does not transplicate an existing
+HEVC bitstream. See
 [Native Compressed Syntax Glitch](docs/NATIVE_SYNTAX_GLITCH.md).
 
 ### Glitch difference QA

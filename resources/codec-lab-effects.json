@@ -135,15 +135,18 @@
       "installer": "scripts/install_ffglitch_reference.py"
     },
     "hevc_dependency": {
-      "name": "x265 CLI",
-      "required_version_prefix": "4.2",
+      "name": "pinned GLIC x265 late-entropy CLI",
+      "required_commit": "e444744c03978c1fb4e037168967020cf2648427",
       "bundled": false,
-      "reason": "analysis-save binary layout is an internal versioned ABI"
+      "builder": "scripts/build_x265_glitch_reference.py",
+      "license": "GPL-2.0-or-later",
+      "fallback": "stock_x265_4.2_analysis_load_for_motion_only"
     },
     "may_produce_invalid_bitstream": false,
     "decoded_pixels_modified_before_transplication": false,
+    "decoded_pixels_modified_before_entropy_coding": false,
     "h264_direct_support": "not_implemented_fail_closed",
-    "hevc_direct_support": "x265_4_2_analysis_mv_encoder_hook",
+    "hevc_direct_support": "x265_4_2_late_entropy_mvd_and_quantized_coefficient_hook",
     "effect_names": [
       "compressed_motion_vector_vortex",
       "compressed_motion_vector_mirror",
@@ -183,7 +186,11 @@
         "compressed_motion_vector_vortex",
         "compressed_motion_vector_mirror",
         "compressed_motion_vector_quantizer",
-        "compressed_motion_vector_freeze"
+        "compressed_motion_vector_freeze",
+        "compressed_coefficient_sign_flip",
+        "compressed_coefficient_band_gate",
+        "compressed_coefficient_transplant",
+        "compressed_coefficient_scan_fold"
       ]
     },
     "implementation_levels": {
@@ -210,9 +217,12 @@
         "motion": "native_mpeg4_part2_ffglitch_motion_vector_entropy_transplication"
       },
       "hevc": {
-        "motion": "native_hevc_x265_analysis_motion_vector_injection_before_cabac",
+        "motion": "native_hevc_x265_cabac_mvd_late_entropy_injection",
+        "coefficient": "native_hevc_x265_cabac_quantized_coefficient_late_entropy_injection",
+        "stock_x265_motion_fallback": "native_hevc_x265_analysis_motion_vector_injection_before_cabac",
         "existing_bitstream_transplication": false,
-        "native_encoder_hook": true
+        "native_encoder_hook": true,
+        "encoder_reconstruction_mismatch_intentional": true
       }
     },
     "ranking_entrypoint": "scripts/evaluate_native_syntax_glitches.py",
