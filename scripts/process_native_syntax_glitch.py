@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Direct MPEG-2/MPEG-4 Part 2 compressed-syntax editing."""
+"""Native MPEG syntax editing and HEVC encoder-hook MV injection."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from native_syntax_glitch import (
     QUANTIZER_EFFECTS,
     mutate_json_file,
 )
+from x265_analysis_glitch import mutate_analysis_file
 from process_offline_packet_glitch import (
     frame_count,
     preview_encoder_options,
@@ -32,13 +33,17 @@ from process_offline_packet_glitch import (
 
 CODECS = ("mpeg2", "mpeg4_part2", "h264", "hevc")
 SUPPORTED_CODECS_BY_EFFECT = {
-    **{effect: {"mpeg2", "mpeg4_part2"} for effect in MOTION_EFFECTS},
+    **{
+        effect: {"mpeg2", "mpeg4_part2", "hevc"}
+        for effect in MOTION_EFFECTS
+    },
     **{effect: {"mpeg2"} for effect in COEFFICIENT_EFFECTS},
     **{effect: {"mpeg2"} for effect in QUANTIZER_EFFECTS},
 }
 DEFAULT_CODEC = "mpeg2"
 FFGLITCH_VERSION = "0.10.2"
 FFGLITCH_DOWNLOAD = "https://ffglitch.org/download/"
+X265_ANALYSIS_VERSION_PREFIX = "4.2"
 
 
 def parse_rate(value: object) -> float:
@@ -140,11 +145,100 @@ def normalized_encode_command(
     ]
 
 
+def normalized_y4m_command(
+    ffmpeg: str,
+    source: Path,
+    destination: Path,
+    *,
+    width: int,
+    height: int,
+    fps: int,
+    max_frames: int,
+    threads: int,
+) -> list[str]:
+    return [
+        ffmpeg,
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(source),
+        "-map",
+        "0:v:0",
+        "-an",
+        "-vf",
+        f"scale={width}:{height}:flags=lanczos,fps={fps},format=yuv420p",
+        "-frames:v",
+        str(max_frames),
+        "-threads",
+        str(threads),
+        "-f",
+        "yuv4mpegpipe",
+        str(destination),
+    ]
+
+
+def x265_analysis_command(
+    x265: str,
+    source: Path,
+    destination: Path,
+    analysis: Path,
+    *,
+    mode: str,
+) -> list[str]:
+    if mode not in ("save", "load"):
+        raise ValueError("x265 analysis mode must be save or load")
+    analysis_option = (
+        "--analysis-save" if mode == "save" else "--analysis-load"
+    )
+    reuse_option = (
+        "--analysis-save-reuse-level"
+        if mode == "save"
+        else "--analysis-load-reuse-level"
+    )
+    command = [
+        x265,
+        "--y4m",
+        "--input",
+        str(source),
+        "--output",
+        str(destination),
+        analysis_option,
+        str(analysis),
+        reuse_option,
+        "10",
+        "--preset",
+        "medium",
+        "--crf",
+        "24",
+        "--no-cutree",
+        "--no-b-intra",
+        "--frame-threads",
+        "1",
+        "--log-level",
+        "warning",
+    ]
+    if mode == "load":
+        command.extend(
+            [
+                "--refine-intra",
+                "0",
+                "--refine-inter",
+                "0",
+                "--refine-mv",
+                "1",
+            ]
+        )
+    return command
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Directly mutate catalogued MPEG-2 or MPEG-4 Part 2 encoded "
-            "fields through FFglitch transplication."
+            "Mutate MPEG-2/MPEG-4 Part 2 fields through FFglitch "
+            "transplication or inject HEVC MVs through x265 analysis-load."
         )
     )
     parser.add_argument("input", type=Path)
@@ -157,7 +251,8 @@ def parse_args() -> argparse.Namespace:
         default="normalize",
         help=(
             "normalize encodes an FFglitch-compatible MPEG-2/AVI source; "
-            "preserve edits an existing MPEG-2/AVI input without pre-encoding"
+            "preserve edits an existing MPEG-2/AVI input without pre-encoding; "
+            "HEVC requires normalize"
         ),
     )
     parser.add_argument("--amount", type=float, default=0.65)
@@ -178,6 +273,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ffedit", default=os.environ.get("GLIC_FFEDIT", "ffedit")
     )
+    parser.add_argument("--x265", default=os.environ.get("GLIC_X265", "x265"))
     args = parser.parse_args()
     args.input = args.input.expanduser().resolve()
     args.output = args.output.expanduser().resolve()
@@ -185,9 +281,16 @@ def parse_args() -> argparse.Namespace:
         parser.error(f"input does not exist: {args.input}")
     if args.codec not in SUPPORTED_CODECS_BY_EFFECT[args.effect]:
         supported = ", ".join(sorted(SUPPORTED_CODECS_BY_EFFECT[args.effect]))
+        parser.error(f"{args.effect} supports: {supported}")
+    if args.codec == "h264":
         parser.error(
-            f"{args.effect} supports: {supported}; "
-            "H.264/HEVC entropy syntax is fail-closed"
+            "H.264 CAVLC/CABAC motion syntax remains fail-closed; use "
+            "mpeg2, mpeg4_part2, or HEVC motion-vector injection"
+        )
+    if args.codec == "hevc" and args.source_mode == "preserve":
+        parser.error(
+            "HEVC uses an x265 native encoder hook and requires "
+            "--source-mode normalize"
         )
     if not 0.0 <= args.amount <= 1.0:
         parser.error("--amount must be between 0 and 1")
@@ -198,8 +301,292 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
+def process_hevc(args: argparse.Namespace) -> int:
+    ffmpeg = require_tool(args.ffmpeg)
+    ffprobe = require_tool(args.ffprobe)
+    x265 = require_tool(args.x265)
+    work = (
+        args.work_dir.expanduser().resolve()
+        if args.work_dir
+        else args.output.with_suffix(args.output.suffix + ".native-syntax-stages")
+    )
+    report_path = (
+        args.report.expanduser().resolve()
+        if args.report
+        else args.output.with_suffix(args.output.suffix + ".json")
+    )
+    work.mkdir(parents=True, exist_ok=True)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    maximum_file_bytes = args.maximum_file_mib * 1024 * 1024
+
+    version_result = run_isolated(
+        [x265, "--version"],
+        log=work / "00-x265-version.log",
+        timeout_seconds=min(args.timeout, 30),
+        maximum_file_bytes=maximum_file_bytes,
+    )
+    version_text = version_result.log.read_text(errors="replace")
+    if (
+        version_result.return_code != 0
+        or f"version {X265_ANALYSIS_VERSION_PREFIX}" not in version_text
+    ):
+        raise RuntimeError(
+            "HEVC analysis injection requires x265 4.2.x because its analysis "
+            f"file is an internal ABI; see {version_result.log}"
+        )
+
+    source_probe_before = source_contract(ffprobe, args.input)
+    normalized = work / "source-hevc.y4m"
+    normalize_result = run_isolated(
+        normalized_y4m_command(
+            ffmpeg,
+            args.input,
+            normalized,
+            width=args.width,
+            height=args.height,
+            fps=args.fps,
+            max_frames=args.max_frames,
+            threads=args.threads,
+        ),
+        log=work / "01-normalize-y4m.log",
+        timeout_seconds=args.timeout,
+        maximum_file_bytes=maximum_file_bytes,
+    )
+    if normalize_result.return_code != 0 or not normalized.is_file():
+        raise RuntimeError(f"Y4M normalization failed; see {normalize_result.log}")
+
+    source_bitstream = work / "source-hevc.hevc"
+    exported_analysis = work / "source-x265-analysis.dat"
+    save_result = run_isolated(
+        x265_analysis_command(
+            x265,
+            normalized,
+            source_bitstream,
+            exported_analysis,
+            mode="save",
+        ),
+        log=work / "02-x265-analysis-save.log",
+        timeout_seconds=args.timeout,
+        maximum_file_bytes=maximum_file_bytes,
+    )
+    if (
+        save_result.return_code != 0
+        or not source_bitstream.is_file()
+        or not exported_analysis.is_file()
+    ):
+        raise RuntimeError(
+            f"x265 analysis-save encode failed; see {save_result.log}"
+        )
+
+    mutated_analysis = work / f"mutated-{args.effect}-x265-analysis.dat"
+    mutation_evidence = mutate_analysis_file(
+        exported_analysis,
+        mutated_analysis,
+        args.effect,
+        args.amount,
+        args.seed,
+    )
+    if mutation_evidence["changed_values"] < 1:
+        raise RuntimeError(
+            "effect selected no HEVC motion vectors; increase --amount or "
+            "use a source with inter prediction"
+        )
+
+    damaged = work / f"damaged-{args.effect}-hevc.hevc"
+    load_result = run_isolated(
+        x265_analysis_command(
+            x265,
+            normalized,
+            damaged,
+            mutated_analysis,
+            mode="load",
+        ),
+        log=work / "03-x265-analysis-load.log",
+        timeout_seconds=args.timeout,
+        maximum_file_bytes=maximum_file_bytes,
+    )
+    if load_result.return_code != 0 or not damaged.is_file():
+        raise RuntimeError(
+            f"x265 analysis-load encode failed; see {load_result.log}"
+        )
+    source_digest = sha256(source_bitstream)
+    damaged_digest = sha256(damaged)
+    if source_digest == damaged_digest:
+        raise RuntimeError(
+            "x265 analysis injection did not change the HEVC bitstream"
+        )
+
+    salvaged = work / "salvaged.ffv1.mkv"
+    decode_result = run_isolated(
+        [
+            ffmpeg,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+            "-y",
+            "-threads",
+            "1",
+            "-i",
+            str(damaged),
+            "-map",
+            "0:v:0",
+            "-an",
+            "-vf",
+            f"setpts=N/({args.fps}*TB),fps={args.fps},format=yuv420p",
+            "-c:v",
+            "ffv1",
+            str(salvaged),
+        ],
+        log=work / "04-decode.log",
+        timeout_seconds=args.timeout,
+        maximum_file_bytes=maximum_file_bytes,
+    )
+
+    source_probe = safe_probe(ffprobe, source_bitstream)
+    damaged_probe = safe_probe(ffprobe, damaged)
+    salvage_probe = safe_probe(ffprobe, salvaged)
+    source_frames = frame_count(source_probe)
+    salvaged_frames = frame_count(salvage_probe)
+    survival = (
+        min(1.0, salvaged_frames / source_frames) if source_frames else 0.0
+    )
+    preview_result = None
+    if salvaged_frames >= 2:
+        preview_result = run_isolated(
+            [
+                ffmpeg,
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(salvaged),
+                "-i",
+                str(args.input),
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a?",
+                *preview_encoder_options(ffmpeg),
+                "-c:a",
+                "aac",
+                "-shortest",
+                "-movflags",
+                "+faststart",
+                str(args.output),
+            ],
+            log=work / "05-preview.log",
+            timeout_seconds=args.timeout,
+            maximum_file_bytes=maximum_file_bytes,
+        )
+
+    output_probe = safe_probe(ffprobe, args.output)
+    streams = output_probe.get("streams", [])
+    qualified = bool(
+        mutation_evidence["changed_values"] > 0
+        and source_digest != damaged_digest
+        and salvaged_frames >= 2
+        and args.output.is_file()
+        and preview_result is not None
+        and preview_result.return_code == 0
+    )
+    report = {
+        "schema": "glic-native-compressed-syntax-glitch-v1",
+        "execution_class": "offline_native_encoder_hook",
+        "realtime_certified": False,
+        "effect": args.effect,
+        "codec": "hevc",
+        "feature": "x265_analysis_mv",
+        "implementation_level": mutation_evidence["implementation_level"],
+        "input": str(args.input),
+        "output": str(args.output),
+        "source_mode": "normalize",
+        "amount": args.amount,
+        "seed": args.seed,
+        "target_width": args.width,
+        "target_height": args.height,
+        "target_fps": args.fps,
+        "output_fps": round(
+            parse_rate(streams[0].get("avg_frame_rate")) if streams else 0.0,
+            6,
+        ),
+        "source_frames": source_frames,
+        "salvaged_frames": salvaged_frames,
+        "decode_survival_ratio": round(survival, 6),
+        "qualified_preview": qualified,
+        "compressed_domain_edit": True,
+        "native_encoder_motion_decision_injection": True,
+        "existing_bitstream_transplication": False,
+        "decoded_pixels_modified_before_entropy_coding": False,
+        "may_produce_invalid_bitstream": False,
+        "h264_direct_support": "not_implemented_fail_closed",
+        "hevc_direct_support": "x265_4_2_analysis_mv_encoder_hook",
+        "x265": {
+            "required_version_prefix": X265_ANALYSIS_VERSION_PREFIX,
+            "binary": x265,
+            "version_log": str(version_result.log),
+            "analysis_file_contract": {
+                "reuse_level": 10,
+                "cutree": False,
+                "b_intra": False,
+                "ctu_distortion_refine": False,
+            },
+        },
+        "mutation_evidence": mutation_evidence,
+        "source_bitstream": {
+            "path": str(source_bitstream),
+            "bytes": source_bitstream.stat().st_size,
+            "sha256": source_digest,
+            "probe": source_probe,
+        },
+        "exported_syntax": {
+            "kind": "x265_analysis_save_binary",
+            "path": str(exported_analysis),
+            "bytes": exported_analysis.stat().st_size,
+            "sha256": sha256(exported_analysis),
+        },
+        "mutated_syntax": {
+            "kind": "x265_analysis_load_binary",
+            "path": str(mutated_analysis),
+            "bytes": mutated_analysis.stat().st_size,
+            "sha256": sha256(mutated_analysis),
+        },
+        "damaged_bitstream": {
+            "path": str(damaged),
+            "bytes": damaged.stat().st_size,
+            "sha256": damaged_digest,
+            "probe": damaged_probe,
+        },
+        "processes": {
+            "x265_version": result_json(version_result),
+            "normalize_y4m": result_json(normalize_result),
+            "x265_analysis_save": result_json(save_result),
+            "x265_analysis_load": result_json(load_result),
+            "decode": result_json(decode_result),
+            "preview": result_json(preview_result) if preview_result else None,
+        },
+        "input_probe": source_probe_before,
+        "output_probe": output_probe,
+    }
+    report_path.write_text(
+        json.dumps(report, indent=2) + "\n", encoding="utf-8"
+    )
+    print(
+        f"effect={args.effect} feature=x265_analysis_mv "
+        f"changed={mutation_evidence['changed_values']} "
+        f"survival={survival:.3f} frames={salvaged_frames}/{source_frames} "
+        f"qualified={qualified} report={report_path}"
+    )
+    return 0 if qualified else 4
+
+
 def main() -> int:
     args = parse_args()
+    if args.codec == "hevc":
+        return process_hevc(args)
     ffmpeg = require_tool(args.ffmpeg)
     ffprobe = require_tool(args.ffprobe)
     ffedit = require_tool(args.ffedit)
@@ -453,7 +840,8 @@ def main() -> int:
         "compressed_domain_edit": True,
         "decoded_pixels_modified_before_transplication": False,
         "may_produce_invalid_bitstream": False,
-        "h264_hevc_direct_support": "not_implemented_fail_closed",
+        "h264_direct_support": "not_implemented_fail_closed",
+        "hevc_direct_support": "x265_4_2_analysis_mv_encoder_hook",
         "ffglitch": {
             "required_version": FFGLITCH_VERSION,
             "binary": ffedit,

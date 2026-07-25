@@ -17,11 +17,12 @@ from process_native_syntax_glitch import (
     DEFAULT_CODEC,
     SUPPORTED_CODECS_BY_EFFECT,
     normalized_encode_command,
+    normalized_y4m_command,
 )
 from process_offline_packet_glitch import preview_encoder_options, require_tool
 
 
-CODECS = ("mpeg2", "mpeg4_part2")
+CODECS = ("mpeg2", "mpeg4_part2", "hevc")
 SCHEMA = "glic-native-syntax-ranking-v1"
 
 
@@ -70,7 +71,8 @@ def run_logged(command: list[str], log: Path) -> int:
 
 
 def source_name(codec: str) -> str:
-    return f"source-{codec}.avi"
+    suffix = "y4m" if codec == "hevc" else "avi"
+    return f"source-{codec}.{suffix}"
 
 
 def candidate_name(codec: str, effect: str, amount: float) -> str:
@@ -261,6 +263,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ffedit", default=os.environ.get("GLIC_FFEDIT", "ffedit")
     )
+    parser.add_argument("--x265", default=os.environ.get("GLIC_X265", "x265"))
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
     if args.selftest:
@@ -284,7 +287,17 @@ def main() -> int:
         return selftest()
     ffmpeg = require_tool(args.ffmpeg)
     ffprobe = require_tool(args.ffprobe)
-    ffedit = require_tool(args.ffedit)
+    selected_codecs = CODECS if args.codec == "all" else (args.codec,)
+    ffedit = (
+        require_tool(args.ffedit)
+        if any(codec != "hevc" for codec in selected_codecs)
+        else args.ffedit
+    )
+    x265 = (
+        require_tool(args.x265)
+        if "hevc" in selected_codecs
+        else args.x265
+    )
     script_directory = Path(__file__).resolve().parent
     root = script_directory.parent
     runner = script_directory / "process_native_syntax_glitch.py"
@@ -298,7 +311,7 @@ def main() -> int:
         )
     output = args.output_dir
     output.mkdir(parents=True, exist_ok=True)
-    codecs = CODECS if args.codec == "all" else (args.codec,)
+    codecs = selected_codecs
     failed_runs: list[dict] = []
     ranking_rows: list[dict] = []
 
@@ -306,8 +319,19 @@ def main() -> int:
         codec_dir = output / codec
         codec_dir.mkdir(parents=True, exist_ok=True)
         source = codec_dir / source_name(codec)
-        normalize_code = run_logged(
-            normalized_encode_command(
+        normalize_command = (
+            normalized_y4m_command(
+                ffmpeg,
+                args.input,
+                source,
+                width=args.width,
+                height=args.height,
+                fps=args.fps,
+                max_frames=args.max_frames,
+                threads=args.threads,
+            )
+            if codec == "hevc"
+            else normalized_encode_command(
                 ffmpeg,
                 args.input,
                 source,
@@ -317,7 +341,10 @@ def main() -> int:
                 max_frames=args.max_frames,
                 threads=args.threads,
                 codec=codec,
-            ),
+            )
+        )
+        normalize_code = run_logged(
+            normalize_command,
             codec_dir / "00-normalize.log",
         )
         if normalize_code != 0:
@@ -336,6 +363,8 @@ def main() -> int:
                 "-i",
                 str(source),
                 "-an",
+                "-frames:v",
+                str(args.max_frames),
                 *preview_encoder_options(ffmpeg),
                 "-movflags",
                 "+faststart",
@@ -374,7 +403,7 @@ def main() -> int:
                             "--codec",
                             codec,
                             "--source-mode",
-                            "preserve",
+                            "normalize" if codec == "hevc" else "preserve",
                             "--effect",
                             effect,
                             "--amount",
@@ -387,12 +416,18 @@ def main() -> int:
                             str(args.max_frames),
                             "--threads",
                             str(args.threads),
+                            "--width",
+                            str(args.width),
+                            "--height",
+                            str(args.height),
                             "--ffmpeg",
                             ffmpeg,
                             "--ffprobe",
                             ffprobe,
                             "--ffedit",
                             ffedit,
+                            "--x265",
+                            x265,
                             "--work-dir",
                             str(codec_dir / f"{name}-stages"),
                             "--report",
