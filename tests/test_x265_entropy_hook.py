@@ -25,6 +25,9 @@ def main() -> int:
     header_text = header.read_text(encoding="utf-8")
     assert "glicMutateMvd" in patch_text
     assert "glicMutateCoefficients" in patch_text
+    assert "--unidiff-zero" in Path(builder.__file__).read_text(
+        encoding="utf-8"
+    )
     for effect in syntax.MOTION_EFFECTS + syntax.COEFFICIENT_EFFECTS:
         assert effect in header_text
         assert "hevc" in process.SUPPORTED_CODECS_BY_EFFECT[effect]

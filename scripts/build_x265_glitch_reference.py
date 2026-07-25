@@ -134,8 +134,8 @@ def main() -> int:
             "x265 source checkout is not clean; use a separate --cache-dir"
         )
     shutil.copy2(header, source / "source" / "encoder" / header.name)
-    run(["git", "apply", "--check", str(patch)], cwd=source)
-    run(["git", "apply", str(patch)], cwd=source)
+    run(["git", "apply", "--unidiff-zero", "--check", str(patch)], cwd=source)
+    run(["git", "apply", "--unidiff-zero", str(patch)], cwd=source)
 
     run(
         [
