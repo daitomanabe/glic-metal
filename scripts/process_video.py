@@ -143,6 +143,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Native VideoToolbox codec used by codec_glitch mode.",
     )
     parser.add_argument(
+        "--codec-input-pixel-format",
+        choices=("nv12", "bgra"),
+        default="nv12",
+        help=(
+            "Raw decoder-to-filter format for codec_glitch. NV12 is the "
+            "direct 420v fast path; BGRA preserves compatibility."
+        ),
+    )
+    parser.add_argument(
+        "--codec-pixel-path",
+        choices=("auto", "nv12", "bgra"),
+        default="nv12",
+        help=(
+            "VideoToolbox post-decode path for codec_glitch. NV12 keeps "
+            "post-processing in fused Metal kernels."
+        ),
+    )
+    parser.add_argument(
         "--codec-amount",
         type=float,
         default=0.55,
@@ -426,6 +444,8 @@ def resolve_backend(
 def codec_glitch_filter_options(
     *,
     codec_format: str = "h264",
+    codec_input_pixel_format: str = "nv12",
+    codec_pixel_path: str = "nv12",
     codec_effect: str,
     codec_amount: float,
     codec_rate: float,
@@ -443,6 +463,10 @@ def codec_glitch_filter_options(
         str(codec_frames_per_second),
         "--codec",
         codec_format,
+        "--input-pixel-format",
+        codec_input_pixel_format,
+        "--pixel-path",
+        codec_pixel_path,
         "--effect",
         codec_effect,
         "--amount",
@@ -474,6 +498,11 @@ def codec_glitch_report_fields(
     return {
         "codec_format": filter_report.get("codec", args.codec_format),
         "codec_backend": filter_report.get("codec_backend", "videotoolbox"),
+        "codec_input_pixel_format": metric(
+            "input_pixel_format", args.codec_input_pixel_format
+        ),
+        "codec_pixel_path": metric("pixel_path", args.codec_pixel_path),
+        "codec_direct_420v_input": metric("direct_420v_input", False),
         "codec_effect": filter_report.get(
             "effect_family", filter_report.get("codec_effect", args.codec_effect)
         ),
@@ -606,6 +635,14 @@ def main() -> int:
         raise RuntimeError("Input frame rate could not be determined")
     width = args.width or source_width
     height = args.height or source_height
+    if (
+        args.processing_mode == "codec_glitch"
+        and args.codec_input_pixel_format == "nv12"
+        and ((width & 1) != 0 or (height & 1) != 0)
+    ):
+        raise RuntimeError(
+            "codec_glitch NV12 input requires even output width and height"
+        )
     target_fps = args.fps if args.fps is not None else source_fps
     frame_rate = f"{target_fps:g}"
     source_duration = first_valid_duration(
@@ -675,7 +712,14 @@ def main() -> int:
             video_filters.append(f"fps={frame_rate}")
         if video_filters:
             decode_command.extend(["-vf", ",".join(video_filters)])
-        decode_command.extend(["-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1"])
+        decoder_pixel_format = (
+            args.codec_input_pixel_format
+            if args.processing_mode == "codec_glitch"
+            else "bgra"
+        )
+        decode_command.extend(
+            ["-f", "rawvideo", "-pix_fmt", decoder_pixel_format, "pipe:1"]
+        )
         filter_command = [
             str(filter_binary),
             "--width",
@@ -705,6 +749,8 @@ def main() -> int:
             filter_command.extend(
                 codec_glitch_filter_options(
                     codec_format=args.codec_format,
+                    codec_input_pixel_format=args.codec_input_pixel_format,
+                    codec_pixel_path=args.codec_pixel_path,
                     codec_effect=args.codec_effect,
                     codec_amount=args.codec_amount,
                     codec_rate=args.codec_rate,

@@ -100,6 +100,8 @@ def main() -> int:
 
     assert MODULE.codec_glitch_filter_options(
         codec_format="hevc",
+        codec_input_pixel_format="nv12",
+        codec_pixel_path="nv12",
         codec_effect="slice_transplant",
         codec_amount=0.625,
         codec_rate=0.25,
@@ -112,6 +114,10 @@ def main() -> int:
         "30",
         "--codec",
         "hevc",
+        "--input-pixel-format",
+        "nv12",
+        "--pixel-path",
+        "nv12",
         "--effect",
         "slice_transplant",
         "--amount",
@@ -150,6 +156,9 @@ def main() -> int:
             "rate": 0.4,
             "feedback": 0.2,
             "hardware_encoder": True,
+            "input_pixel_format": "nv12_420v",
+            "pixel_path": "nv12_metal",
+            "direct_420v_input": True,
             "latency_p50_ms": 8.0,
             "latency_p95_ms": 18.0,
             "fallback_frames": 4,
@@ -173,6 +182,9 @@ def main() -> int:
     assert codec_fields["codec_rate"] == 0.4
     assert codec_fields["codec_feedback"] == 0.2
     assert codec_fields["codec_hardware_encoder"] is True
+    assert codec_fields["codec_input_pixel_format"] == "nv12_420v"
+    assert codec_fields["codec_pixel_path"] == "nv12_metal"
+    assert codec_fields["codec_direct_420v_input"] is True
     assert codec_fields["codec_hardware_decoder"] is True
     assert codec_fields["codec_encoded_frames"] == 160
     assert codec_fields["codec_decoded_frames"] == 152
