@@ -16,13 +16,15 @@ from native_syntax_glitch import EFFECTS
 from process_native_syntax_glitch import (
     DEFAULT_CODEC,
     SUPPORTED_CODECS_BY_EFFECT,
+    clean_x265_environment,
     normalized_encode_command,
     normalized_y4m_command,
+    x265_entropy_command,
 )
 from process_offline_packet_glitch import preview_encoder_options, require_tool
 
 
-CODECS = ("mpeg2", "mpeg4_part2", "hevc")
+CODECS = ("mpeg2", "mpeg4_part2", "h264", "hevc")
 SCHEMA = "glic-native-syntax-ranking-v1"
 
 
@@ -55,7 +57,12 @@ def parse_effects(value: str) -> list[str]:
     return values
 
 
-def run_logged(command: list[str], log: Path) -> int:
+def run_logged(
+    command: list[str],
+    log: Path,
+    *,
+    environment: dict[str, str] | None = None,
+) -> int:
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("w", encoding="utf-8") as output:
         output.write("+ " + shlex.join(command) + "\n")
@@ -66,12 +73,13 @@ def run_logged(command: list[str], log: Path) -> int:
             stdout=output,
             stderr=subprocess.STDOUT,
             check=False,
+            env=environment,
         )
     return result.returncode
 
 
 def source_name(codec: str) -> str:
-    suffix = "y4m" if codec == "hevc" else "avi"
+    suffix = "y4m" if codec in ("h264", "hevc") else "avi"
     return f"source-{codec}.{suffix}"
 
 
@@ -264,6 +272,23 @@ def parse_args() -> argparse.Namespace:
         "--ffedit", default=os.environ.get("GLIC_FFEDIT", "ffedit")
     )
     parser.add_argument(
+        "--x264",
+        default=os.environ.get("GLIC_X264_HOOK", "x264"),
+    )
+    parser.add_argument(
+        "--h264-entropy",
+        choices=("cabac", "cavlc", "both"),
+        default="both",
+        help="render one or both H.264 entropy-coder variants",
+    )
+    parser.add_argument(
+        "--ffmpeg-hevc-decoder",
+        default=os.environ.get(
+            "GLIC_FFMPEG_HEVC_DECODER_HOOK",
+            "ffmpeg-glic-hevc-decoder",
+        ),
+    )
+    parser.add_argument(
         "--x265",
         default=os.environ.get(
             "GLIC_X265_HOOK", os.environ.get("GLIC_X265", "x265")
@@ -273,6 +298,15 @@ def parse_args() -> argparse.Namespace:
         "--hevc-hook",
         choices=("auto", "entropy", "analysis"),
         default="auto",
+    )
+    parser.add_argument(
+        "--hevc-lane",
+        choices=("encoder", "decoder", "both"),
+        default="both",
+        help=(
+            "render x265 late-entropy encoder hooks, existing-bitstream "
+            "FFmpeg decoder hooks, or both"
+        ),
     )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
@@ -300,13 +334,24 @@ def main() -> int:
     selected_codecs = CODECS if args.codec == "all" else (args.codec,)
     ffedit = (
         require_tool(args.ffedit)
-        if any(codec != "hevc" for codec in selected_codecs)
+        if any(codec in ("mpeg2", "mpeg4_part2") for codec in selected_codecs)
         else args.ffedit
+    )
+    x264 = (
+        require_tool(args.x264)
+        if "h264" in selected_codecs
+        else args.x264
     )
     x265 = (
         require_tool(args.x265)
         if "hevc" in selected_codecs
         else args.x265
+    )
+    ffmpeg_hevc_decoder = (
+        require_tool(args.ffmpeg_hevc_decoder)
+        if "hevc" in selected_codecs
+        and args.hevc_lane in ("decoder", "both")
+        else args.ffmpeg_hevc_decoder
     )
     script_directory = Path(__file__).resolve().parent
     root = script_directory.parent
@@ -340,7 +385,7 @@ def main() -> int:
                 max_frames=args.max_frames,
                 threads=args.threads,
             )
-            if codec == "hevc"
+            if codec in ("h264", "hevc")
             else normalized_encode_command(
                 ffmpeg,
                 args.input,
@@ -361,6 +406,21 @@ def main() -> int:
             raise RuntimeError(
                 f"{codec} normalization failed; see {codec_dir / '00-normalize.log'}"
             )
+        existing_hevc = None
+        control_source = source
+        if codec == "hevc":
+            existing_hevc = codec_dir / "source-existing-hevc.hevc"
+            existing_code = run_logged(
+                x265_entropy_command(x265, source, existing_hevc),
+                codec_dir / "00-existing-hevc.log",
+                environment=clean_x265_environment(),
+            )
+            if existing_code != 0:
+                raise RuntimeError(
+                    "HEVC reference encode failed; see "
+                    f"{codec_dir / '00-existing-hevc.log'}"
+                )
+            control_source = existing_hevc
         control = codec_dir / "control.mp4"
         control_code = run_logged(
             [
@@ -371,7 +431,7 @@ def main() -> int:
                 "error",
                 "-y",
                 "-i",
-                str(source),
+                str(control_source),
                 "-an",
                 "-frames:v",
                 str(args.max_frames),
@@ -392,71 +452,114 @@ def main() -> int:
             if codec not in SUPPORTED_CODECS_BY_EFFECT[effect]:
                 continue
             for amount in args.amounts:
-                name = candidate_name(codec, effect, amount)
-                preview = codec_dir / f"{name}.mp4"
-                report = codec_dir / f"{name}.report.json"
-                log = codec_dir / f"{name}.run.log"
-                reusable = False
-                if args.resume and preview.is_file() and report.is_file():
-                    try:
-                        prior = json.loads(report.read_text(encoding="utf-8"))
-                        reusable = bool(prior.get("qualified_preview"))
-                    except (OSError, json.JSONDecodeError):
-                        reusable = False
-                if not reusable:
-                    return_code = run_logged(
-                        [
-                            sys.executable,
-                            str(runner),
-                            str(source),
-                            str(preview),
-                            "--codec",
-                            codec,
-                            "--source-mode",
-                            "normalize" if codec == "hevc" else "preserve",
-                            "--effect",
-                            effect,
-                            "--amount",
-                            str(amount),
-                            "--seed",
-                            str(args.seed),
-                            "--fps",
-                            str(args.fps),
-                            "--max-frames",
-                            str(args.max_frames),
-                            "--threads",
-                            str(args.threads),
-                            "--width",
-                            str(args.width),
-                            "--height",
-                            str(args.height),
-                            "--ffmpeg",
-                            ffmpeg,
-                            "--ffprobe",
-                            ffprobe,
-                            "--ffedit",
-                            ffedit,
-                            "--x265",
-                            x265,
-                            "--hevc-hook",
-                            args.hevc_hook,
-                            "--work-dir",
-                            str(codec_dir / f"{name}-stages"),
-                            "--report",
-                            str(report),
-                        ],
-                        log,
+                variants: tuple[tuple[str, str, Path], ...]
+                if codec == "h264":
+                    entropy_modes = (
+                        ("cabac", "cavlc")
+                        if args.h264_entropy == "both"
+                        else (args.h264_entropy,)
                     )
-                    if return_code != 0:
-                        failed_runs.append(
-                            {
-                                "name": name,
-                                "return_code": return_code,
-                                "log": str(log),
-                            }
+                    variants = tuple(
+                        (mode, "normalize", source)
+                        for mode in entropy_modes
+                    )
+                elif codec == "hevc":
+                    assert existing_hevc is not None
+                    lanes = (
+                        ("encoder", "decoder")
+                        if args.hevc_lane == "both"
+                        else (args.hevc_lane,)
+                    )
+                    variants = tuple(
+                        (
+                            lane,
+                            "normalize" if lane == "encoder" else "preserve",
+                            source if lane == "encoder" else existing_hevc,
                         )
-                        continue
-                candidates.append((name, preview, report))
+                        for lane in lanes
+                    )
+                else:
+                    variants = (("not_applicable", "preserve", source),)
+                for variant, source_mode, runner_source in variants:
+                    name = candidate_name(codec, effect, amount)
+                    if codec in ("h264", "hevc"):
+                        name = f"{name}--{variant}"
+                    preview = codec_dir / f"{name}.mp4"
+                    report = codec_dir / f"{name}.report.json"
+                    log = codec_dir / f"{name}.run.log"
+                    reusable = False
+                    if args.resume and preview.is_file() and report.is_file():
+                        try:
+                            prior = json.loads(
+                                report.read_text(encoding="utf-8")
+                            )
+                            reusable = bool(prior.get("qualified_preview"))
+                        except (OSError, json.JSONDecodeError):
+                            reusable = False
+                    if not reusable:
+                        return_code = run_logged(
+                            [
+                                sys.executable,
+                                str(runner),
+                                str(runner_source),
+                                str(preview),
+                                "--codec",
+                                codec,
+                                "--source-mode",
+                                source_mode,
+                                "--effect",
+                                effect,
+                                "--amount",
+                                str(amount),
+                                "--seed",
+                                str(args.seed),
+                                "--fps",
+                                str(args.fps),
+                                "--max-frames",
+                                str(args.max_frames),
+                                "--threads",
+                                str(args.threads),
+                                "--width",
+                                str(args.width),
+                                "--height",
+                                str(args.height),
+                                "--ffmpeg",
+                                ffmpeg,
+                                "--ffprobe",
+                                ffprobe,
+                                "--ffedit",
+                                ffedit,
+                                "--x264",
+                                x264,
+                                "--h264-entropy",
+                                (
+                                    variant
+                                    if codec == "h264"
+                                    else "cabac"
+                                ),
+                                "--ffmpeg-hevc-decoder",
+                                ffmpeg_hevc_decoder,
+                                "--x265",
+                                x265,
+                                "--hevc-hook",
+                                args.hevc_hook,
+                                "--work-dir",
+                                str(codec_dir / f"{name}-stages"),
+                                "--report",
+                                str(report),
+                            ],
+                            log,
+                        )
+                        if return_code != 0:
+                            failed_runs.append(
+                                {
+                                    "name": name,
+                                    "return_code": return_code,
+                                    "log": str(log),
+                                }
+                            )
+                            continue
+                    candidates.append((name, preview, report))
 
         if not candidates:
             continue

@@ -1,0 +1,48 @@
+diff --git a/Makefile b/Makefile
+index 2d95b38..394821c 100644
+--- a/Makefile
++++ b/Makefile
+@@ -29 +29 @@ SRCS_X = common/mc.c common/predict.c common/pixel.c common/macroblock.c \
+-         encoder/set.c encoder/macroblock.c encoder/cabac.c \
++         encoder/set.c encoder/macroblock.c encoder/glic_hook.c encoder/cabac.c \
+diff --git a/encoder/cabac.c b/encoder/cabac.c
+index 691aff5..7ddec1a 100644
+--- a/encoder/cabac.c
++++ b/encoder/cabac.c
+@@ -29,0 +30 @@
++#include "x264_glic_entropy_hook.h"
+@@ -337,0 +339,3 @@ static NOINLINE uint16_t cabac_mvd( x264_t *h, x264_cabac_t *cb, int i_list, int
++#if !RDO_SKIP_BS
++    x264_glic_mutate_mvd( h, i_list, idx, &mdx, &mdy );
++#endif
+@@ -666,0 +671,5 @@ static ALWAYS_INLINE void cabac_block_residual_internal( x264_t *h, x264_cabac_t
++    dctcoef glic_coefficients[64];
++    int glic_count = chroma422dc
++                   ? 8 : x264_count_cat_m1[ctx_block_cat] + 1;
++    l = x264_glic_mutate_coefficients(
++        h, ctx_block_cat, l, glic_count, glic_coefficients );
+diff --git a/encoder/cavlc.c b/encoder/cavlc.c
+index bdd6995..80425d1 100644
+--- a/encoder/cavlc.c
++++ b/encoder/cavlc.c
+@@ -29,0 +30 @@
++#include "x264_glic_entropy_hook.h"
+@@ -125,0 +127,5 @@ static int cavlc_block_residual_internal( x264_t *h, int ctx_block_cat, dctcoef
++#if !RDO_SKIP_BS
++    dctcoef glic_coefficients[64];
++    l = x264_glic_mutate_coefficients(
++        h, ctx_block_cat, l, count_cat[ctx_block_cat], glic_coefficients );
++#endif
+@@ -244,0 +251,2 @@ static void cavlc_mvd( x264_t *h, int i_list, int idx, int width )
++    int mdx;
++    int mdy;
+@@ -246,2 +254,7 @@ static void cavlc_mvd( x264_t *h, int i_list, int idx, int width )
+-    bs_write_se( s, h->mb.cache.mv[i_list][x264_scan8[idx]][0] - mvp[0] );
+-    bs_write_se( s, h->mb.cache.mv[i_list][x264_scan8[idx]][1] - mvp[1] );
++    mdx = h->mb.cache.mv[i_list][x264_scan8[idx]][0] - mvp[0];
++    mdy = h->mb.cache.mv[i_list][x264_scan8[idx]][1] - mvp[1];
++#if !RDO_SKIP_BS
++    x264_glic_mutate_mvd( h, i_list, idx, &mdx, &mdy );
++#endif
++    bs_write_se( s, mdx );
++    bs_write_se( s, mdy );

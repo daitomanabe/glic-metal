@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native MPEG syntax editing and HEVC encoder-hook MV injection."""
+"""Native MPEG syntax editing and H.264/HEVC encoder-hook injection."""
 
 from __future__ import annotations
 
@@ -35,10 +35,13 @@ from process_offline_packet_glitch import (
 CODECS = ("mpeg2", "mpeg4_part2", "h264", "hevc")
 SUPPORTED_CODECS_BY_EFFECT = {
     **{
-        effect: {"mpeg2", "mpeg4_part2", "hevc"}
+        effect: {"mpeg2", "mpeg4_part2", "h264", "hevc"}
         for effect in MOTION_EFFECTS
     },
-    **{effect: {"mpeg2", "hevc"} for effect in COEFFICIENT_EFFECTS},
+    **{
+        effect: {"mpeg2", "h264", "hevc"}
+        for effect in COEFFICIENT_EFFECTS
+    },
     **{effect: {"mpeg2"} for effect in QUANTIZER_EFFECTS},
 }
 DEFAULT_CODEC = "mpeg2"
@@ -56,6 +59,40 @@ X265_ENTROPY_IMPLEMENTATION_LEVEL = {
         effect: (
             "native_hevc_x265_cabac_quantized_coefficient_"
             "late_entropy_injection"
+        )
+        for effect in COEFFICIENT_EFFECTS
+    },
+}
+X264_HOOK_SCHEMA = "glic-x264-entropy-hook-build-v1"
+X264_HOOK_COMMIT = "0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee"
+X264_ENTROPY_IMPLEMENTATION_LEVEL = {
+    **{
+        effect: "native_h264_x264_mvd_late_entropy_injection"
+        for effect in MOTION_EFFECTS
+    },
+    **{
+        effect: (
+            "native_h264_x264_quantized_coefficient_"
+            "late_entropy_injection"
+        )
+        for effect in COEFFICIENT_EFFECTS
+    },
+}
+FFMPEG_HEVC_DECODER_HOOK_SCHEMA = (
+    "glic-ffmpeg-hevc-decoder-hook-build-v1"
+)
+FFMPEG_HEVC_DECODER_HOOK_COMMIT = (
+    "894da5ca7d742e4429ffb2af534fcda0103ef593"
+)
+FFMPEG_HEVC_DECODER_IMPLEMENTATION_LEVEL = {
+    **{
+        effect: "native_hevc_ffmpeg_decoder_parsed_cabac_mvd_injection"
+        for effect in MOTION_EFFECTS
+    },
+    **{
+        effect: (
+            "native_hevc_ffmpeg_decoder_parsed_cabac_quantized_"
+            "coefficient_injection"
         )
         for effect in COEFFICIENT_EFFECTS
     },
@@ -84,7 +121,7 @@ def source_contract(ffprobe: str, source: Path) -> dict:
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=codec_name,width,height,avg_frame_rate:"
+            "stream=codec_name,profile,pix_fmt,width,height,avg_frame_rate:"
             "format=format_name,duration",
             "-of",
             "json",
@@ -274,6 +311,189 @@ def x265_entropy_command(
     ]
 
 
+def x264_entropy_command(
+    x264: str,
+    source: Path,
+    destination: Path,
+    *,
+    entropy_mode: str,
+    fps: int,
+) -> list[str]:
+    if entropy_mode not in ("cabac", "cavlc"):
+        raise ValueError("x264 entropy mode must be cabac or cavlc")
+    command = [
+        x264,
+        "--demuxer",
+        "y4m",
+        "--threads",
+        "1",
+        "--lookahead-threads",
+        "1",
+        "--bframes",
+        "0",
+        "--keyint",
+        str(max(8, fps)),
+        "--preset",
+        "medium",
+        "--crf",
+        "24",
+        "--output",
+        str(destination),
+    ]
+    if entropy_mode == "cavlc":
+        command.append("--no-cabac")
+    command.append(str(source))
+    return command
+
+
+def x264_hook_marker(x264: str) -> Path:
+    binary = Path(x264).expanduser().resolve()
+    return Path(str(binary) + ".glic-hook.json")
+
+
+def load_x264_hook_contract(x264: str) -> dict | None:
+    marker = x264_hook_marker(x264)
+    if not marker.is_file():
+        return None
+    try:
+        contract = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    binary = Path(x264).expanduser().resolve()
+    if not (
+        contract.get("schema") == X264_HOOK_SCHEMA
+        and contract.get("x264_commit") == X264_HOOK_COMMIT
+        and contract.get("binary_sha256") == sha256(binary)
+        and set(contract.get("supported_entropy_modes", []))
+        == {"cabac", "cavlc"}
+    ):
+        return None
+    return contract
+
+
+def parse_x264_hook_evidence(
+    log: Path,
+    effect: str,
+    amount: float,
+    seed: int,
+    entropy_mode: str,
+) -> dict:
+    text = log.read_text(errors="replace")
+    matches = re.findall(
+        r"^\[glic-x264-hook\] effect=(\S+) candidates=(\d+) "
+        r"selected=(\d+) changed=(\d+)$",
+        text,
+        flags=re.MULTILINE,
+    )
+    if len(matches) != 1 or matches[0][0] != effect:
+        raise RuntimeError(
+            f"x264 entropy-hook evidence is missing or ambiguous; see {log}"
+        )
+    _, candidates, selected, changed = matches[0]
+    return {
+        "feature": (
+            f"h264_{entropy_mode}_mvd"
+            if effect in MOTION_EFFECTS
+            else f"h264_{entropy_mode}_quantized_coefficient"
+        ),
+        "effect": effect,
+        "seed": seed,
+        "amount": amount,
+        "entropy_mode": entropy_mode,
+        "implementation_level": X264_ENTROPY_IMPLEMENTATION_LEVEL[effect],
+        "total_syntax_candidates": int(candidates),
+        "selected_syntax_candidates": int(selected),
+        "changed_values": int(changed),
+        "late_entropy_injection": True,
+        "encoder_reconstruction_mismatch_intentional": True,
+    }
+
+
+def clean_x264_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    for name in (
+        "GLIC_X264_HOOK_EFFECT",
+        "GLIC_X264_HOOK_AMOUNT",
+        "GLIC_X264_HOOK_SEED",
+    ):
+        environment.pop(name, None)
+    return environment
+
+
+def ffmpeg_hevc_decoder_hook_marker(binary: str) -> Path:
+    resolved = Path(binary).expanduser().resolve()
+    return Path(str(resolved) + ".glic-hook.json")
+
+
+def load_ffmpeg_hevc_decoder_hook_contract(binary: str) -> dict | None:
+    marker = ffmpeg_hevc_decoder_hook_marker(binary)
+    if not marker.is_file():
+        return None
+    try:
+        contract = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    resolved = Path(binary).expanduser().resolve()
+    if not (
+        contract.get("schema") == FFMPEG_HEVC_DECODER_HOOK_SCHEMA
+        and contract.get("ffmpeg_commit")
+        == FFMPEG_HEVC_DECODER_HOOK_COMMIT
+        and contract.get("binary_sha256") == sha256(resolved)
+        and contract.get("emits_mutated_hevc_bitstream") is False
+    ):
+        return None
+    return contract
+
+
+def clean_ffmpeg_hevc_decoder_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    for name in (
+        "GLIC_FFMPEG_HEVC_HOOK_EFFECT",
+        "GLIC_FFMPEG_HEVC_HOOK_AMOUNT",
+        "GLIC_FFMPEG_HEVC_HOOK_SEED",
+    ):
+        environment.pop(name, None)
+    return environment
+
+
+def parse_ffmpeg_hevc_decoder_evidence(
+    log: Path, effect: str, amount: float, seed: int
+) -> dict:
+    text = log.read_text(errors="replace")
+    matches = re.findall(
+        r"^\[glic-ffmpeg-hevc-hook\] effect=(\S+) candidates=(\d+) "
+        r"selected=(\d+) changed=(\d+)$",
+        text,
+        flags=re.MULTILINE,
+    )
+    if len(matches) != 1 or matches[0][0] != effect:
+        raise RuntimeError(
+            "FFmpeg HEVC decoder-hook evidence is missing or ambiguous; "
+            f"see {log}"
+        )
+    _, candidates, selected, changed = matches[0]
+    return {
+        "feature": (
+            "hevc_decoder_parsed_cabac_mvd"
+            if effect in MOTION_EFFECTS
+            else "hevc_decoder_parsed_cabac_quantized_coefficient"
+        ),
+        "effect": effect,
+        "seed": seed,
+        "amount": amount,
+        "implementation_level": (
+            FFMPEG_HEVC_DECODER_IMPLEMENTATION_LEVEL[effect]
+        ),
+        "total_syntax_candidates": int(candidates),
+        "selected_syntax_candidates": int(selected),
+        "changed_values": int(changed),
+        "source_bitstream_modified": False,
+        "source_reencoded": False,
+        "decoder_reconstruction_modified": True,
+        "emits_mutated_hevc_bitstream": False,
+    }
+
+
 def x265_hook_marker(x265: str) -> Path:
     binary = Path(x265).expanduser().resolve()
     return Path(str(binary) + ".glic-hook.json")
@@ -346,8 +566,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Mutate MPEG-2/MPEG-4 Part 2 fields through FFglitch "
-            "transplication, x265 analysis-load MV injection, or the pinned "
-            "x265 late-entropy MVD/coefficient hook."
+            "transplication, or inject H.264/HEVC MVD/coefficient values "
+            "through pinned x264/x265 late-entropy hooks."
         )
     )
     parser.add_argument("input", type=Path)
@@ -361,7 +581,8 @@ def parse_args() -> argparse.Namespace:
         help=(
             "normalize encodes an FFglitch-compatible MPEG-2/AVI source; "
             "preserve edits an existing MPEG-2/AVI input without pre-encoding; "
-            "HEVC requires normalize"
+            "H.264 requires normalize; HEVC preserve directly mutates parsed "
+            "decoder syntax without re-encoding the source"
         ),
     )
     parser.add_argument("--amount", type=float, default=0.65)
@@ -381,6 +602,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ffprobe", default="ffprobe")
     parser.add_argument(
         "--ffedit", default=os.environ.get("GLIC_FFEDIT", "ffedit")
+    )
+    parser.add_argument(
+        "--x264",
+        default=os.environ.get("GLIC_X264_HOOK", "x264"),
+    )
+    parser.add_argument(
+        "--h264-entropy",
+        choices=("cabac", "cavlc"),
+        default="cabac",
+        help="select the H.264 entropy coder whose final syntax is mutated",
+    )
+    parser.add_argument(
+        "--ffmpeg-hevc-decoder",
+        default=os.environ.get(
+            "GLIC_FFMPEG_HEVC_DECODER_HOOK",
+            "ffmpeg-glic-hevc-decoder",
+        ),
+        help=(
+            "verified pinned FFmpeg decoder hook used by "
+            "--codec hevc --source-mode preserve"
+        ),
     )
     parser.add_argument(
         "--x265",
@@ -405,15 +647,11 @@ def parse_args() -> argparse.Namespace:
     if args.codec not in SUPPORTED_CODECS_BY_EFFECT[args.effect]:
         supported = ", ".join(sorted(SUPPORTED_CODECS_BY_EFFECT[args.effect]))
         parser.error(f"{args.effect} supports: {supported}")
-    if args.codec == "h264":
+    if args.codec == "h264" and args.source_mode == "preserve":
         parser.error(
-            "H.264 CAVLC/CABAC motion syntax remains fail-closed; use "
-            "mpeg2, mpeg4_part2, or HEVC motion-vector injection"
-        )
-    if args.codec == "hevc" and args.source_mode == "preserve":
-        parser.error(
-            "HEVC uses an x265 native encoder hook and requires "
-            "--source-mode normalize"
+            f"{args.codec.upper()} uses a native encoder hook and requires "
+            "--source-mode normalize; existing-bitstream input is not "
+            "silently re-encoded under preserve mode"
         )
     if not 0.0 <= args.amount <= 1.0:
         parser.error("--amount must be between 0 and 1")
@@ -424,7 +662,665 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
+def process_h264(args: argparse.Namespace) -> int:
+    ffmpeg = require_tool(args.ffmpeg)
+    ffprobe = require_tool(args.ffprobe)
+    x264 = require_tool(args.x264)
+    work = (
+        args.work_dir.expanduser().resolve()
+        if args.work_dir
+        else args.output.with_suffix(args.output.suffix + ".native-syntax-stages")
+    )
+    report_path = (
+        args.report.expanduser().resolve()
+        if args.report
+        else args.output.with_suffix(args.output.suffix + ".json")
+    )
+    work.mkdir(parents=True, exist_ok=True)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    maximum_file_bytes = args.maximum_file_mib * 1024 * 1024
+
+    hook_contract = load_x264_hook_contract(x264)
+    if hook_contract is None:
+        raise RuntimeError(
+            "H.264 native hooks require the verified custom x264 binary "
+            "from scripts/build_x264_glitch_reference.py"
+        )
+    version_result = run_isolated(
+        [x264, "--version"],
+        log=work / "00-x264-version.log",
+        timeout_seconds=min(args.timeout, 30),
+        maximum_file_bytes=maximum_file_bytes,
+        environment=clean_x264_environment(),
+    )
+    version_text = version_result.log.read_text(errors="replace")
+    if version_result.return_code != 0 or "0480cb0" not in version_text:
+        raise RuntimeError(
+            f"x264 does not report the pinned commit; see {version_result.log}"
+        )
+
+    source_probe_before = source_contract(ffprobe, args.input)
+    normalized = work / "source-h264.y4m"
+    normalize_result = run_isolated(
+        normalized_y4m_command(
+            ffmpeg,
+            args.input,
+            normalized,
+            width=args.width,
+            height=args.height,
+            fps=args.fps,
+            max_frames=args.max_frames,
+            threads=args.threads,
+        ),
+        log=work / "01-normalize-y4m.log",
+        timeout_seconds=args.timeout,
+        maximum_file_bytes=maximum_file_bytes,
+    )
+    if normalize_result.return_code != 0 or not normalized.is_file():
+        raise RuntimeError(f"Y4M normalization failed; see {normalize_result.log}")
+
+    source_bitstream = work / "source-h264.h264"
+    clean_encode_result = run_isolated(
+        x264_entropy_command(
+            x264,
+            normalized,
+            source_bitstream,
+            entropy_mode=args.h264_entropy,
+            fps=args.fps,
+        ),
+        log=work / "02-x264-clean-encode.log",
+        timeout_seconds=args.timeout,
+        maximum_file_bytes=maximum_file_bytes,
+        environment=clean_x264_environment(),
+    )
+    if clean_encode_result.return_code != 0 or not source_bitstream.is_file():
+        raise RuntimeError(
+            f"x264 clean encode failed; see {clean_encode_result.log}"
+        )
+
+    configuration = work / "x264-entropy-hook-config.json"
+    configuration.write_text(
+        json.dumps(
+            {
+                "schema": "glic-x264-entropy-hook-run-v1",
+                "effect": args.effect,
+                "amount": args.amount,
+                "seed": args.seed,
+                "entropy_mode": args.h264_entropy,
+                "x264_contract": hook_contract,
+                "runtime_constraints": {
+                    "threads": 1,
+                    "lookahead_threads": 1,
+                    "sliced_threads": False,
+                    "bit_depth": 8,
+                    "chroma_format": "420",
+                },
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    hook_environment = clean_x264_environment()
+    hook_environment.update(
+        {
+            "GLIC_X264_HOOK_EFFECT": args.effect,
+            "GLIC_X264_HOOK_AMOUNT": str(args.amount),
+            "GLIC_X264_HOOK_SEED": str(args.seed),
+        }
+    )
+    damaged = work / f"damaged-{args.effect}-h264.h264"
+    damaged_encode_result = run_isolated(
+        x264_entropy_command(
+            x264,
+            normalized,
+            damaged,
+            entropy_mode=args.h264_entropy,
+            fps=args.fps,
+        ),
+        log=work / "03-x264-late-entropy-hook.log",
+        timeout_seconds=args.timeout,
+        maximum_file_bytes=maximum_file_bytes,
+        environment=hook_environment,
+    )
+    if damaged_encode_result.return_code != 0 or not damaged.is_file():
+        raise RuntimeError(
+            f"x264 late-entropy encode failed; see {damaged_encode_result.log}"
+        )
+    mutation_evidence = parse_x264_hook_evidence(
+        damaged_encode_result.log,
+        args.effect,
+        args.amount,
+        args.seed,
+        args.h264_entropy,
+    )
+    if mutation_evidence["changed_values"] < 1:
+        raise RuntimeError(
+            "effect selected no H.264 syntax values; increase --amount or "
+            "use a source with more coded motion/residual data"
+        )
+    source_digest = sha256(source_bitstream)
+    damaged_digest = sha256(damaged)
+    if source_digest == damaged_digest:
+        raise RuntimeError("x264 hook did not change the H.264 bitstream")
+
+    salvaged = work / "salvaged.ffv1.mkv"
+    decode_result = run_isolated(
+        [
+            ffmpeg,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+            "-y",
+            "-err_detect",
+            "ignore_err",
+            "-fflags",
+            "+discardcorrupt+genpts",
+            "-threads",
+            "1",
+            "-i",
+            str(damaged),
+            "-map",
+            "0:v:0",
+            "-an",
+            "-vf",
+            f"setpts=N/({args.fps}*TB),fps={args.fps},format=yuv420p",
+            "-c:v",
+            "ffv1",
+            str(salvaged),
+        ],
+        log=work / "04-decode.log",
+        timeout_seconds=args.timeout,
+        maximum_file_bytes=maximum_file_bytes,
+    )
+    source_probe = safe_probe(ffprobe, source_bitstream)
+    damaged_probe = safe_probe(ffprobe, damaged)
+    salvage_probe = safe_probe(ffprobe, salvaged)
+    source_frames = frame_count(source_probe)
+    salvaged_frames = frame_count(salvage_probe)
+    survival = (
+        min(1.0, salvaged_frames / source_frames) if source_frames else 0.0
+    )
+    preview_result = None
+    if salvaged_frames >= 2:
+        preview_result = run_isolated(
+            [
+                ffmpeg,
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(salvaged),
+                "-i",
+                str(args.input),
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a?",
+                *preview_encoder_options(ffmpeg),
+                "-c:a",
+                "aac",
+                "-shortest",
+                "-movflags",
+                "+faststart",
+                str(args.output),
+            ],
+            log=work / "05-preview.log",
+            timeout_seconds=args.timeout,
+            maximum_file_bytes=maximum_file_bytes,
+        )
+
+    output_probe = safe_probe(ffprobe, args.output)
+    streams = output_probe.get("streams", [])
+    qualified = bool(
+        mutation_evidence["changed_values"] > 0
+        and source_digest != damaged_digest
+        and salvaged_frames >= 2
+        and args.output.is_file()
+        and preview_result is not None
+        and preview_result.return_code == 0
+    )
+    report = {
+        "schema": "glic-native-compressed-syntax-glitch-v1",
+        "execution_class": "offline_native_encoder_hook",
+        "realtime_certified": False,
+        "effect": args.effect,
+        "codec": "h264",
+        "entropy_mode": args.h264_entropy,
+        "feature": mutation_evidence["feature"],
+        "implementation_level": mutation_evidence["implementation_level"],
+        "input": str(args.input),
+        "output": str(args.output),
+        "source_mode": "normalize",
+        "amount": args.amount,
+        "seed": args.seed,
+        "target_width": args.width,
+        "target_height": args.height,
+        "target_fps": args.fps,
+        "output_fps": round(
+            parse_rate(streams[0].get("avg_frame_rate")) if streams else 0.0,
+            6,
+        ),
+        "source_frames": source_frames,
+        "salvaged_frames": salvaged_frames,
+        "decode_survival_ratio": round(survival, 6),
+        "qualified_preview": qualified,
+        "compressed_domain_edit": True,
+        "native_encoder_motion_decision_injection": False,
+        "late_entropy_syntax_injection": True,
+        "encoder_reconstruction_mismatch_intentional": True,
+        "existing_bitstream_transplication": False,
+        "decoded_pixels_modified_before_entropy_coding": False,
+        "may_produce_invalid_bitstream": False,
+        "h264_direct_support": (
+            "x264_pinned_cabac_cavlc_mvd_and_quantized_coefficient_hook"
+        ),
+        "hevc_direct_support": (
+            "x265_4_2_late_entropy_mvd_and_quantized_coefficient_hook"
+        ),
+        "x264": {
+            "binary": x264,
+            "version_log": str(version_result.log),
+            "entropy_mode": args.h264_entropy,
+            "custom_hook_contract": hook_contract,
+        },
+        "mutation_evidence": mutation_evidence,
+        "source_bitstream": {
+            "path": str(source_bitstream),
+            "bytes": source_bitstream.stat().st_size,
+            "sha256": source_digest,
+            "probe": source_probe,
+        },
+        "exported_syntax": None,
+        "mutated_syntax": {
+            "kind": "x264_late_entropy_hook_configuration",
+            "path": str(configuration),
+            "bytes": configuration.stat().st_size,
+            "sha256": sha256(configuration),
+            "process_log": str(damaged_encode_result.log),
+        },
+        "damaged_bitstream": {
+            "path": str(damaged),
+            "bytes": damaged.stat().st_size,
+            "sha256": damaged_digest,
+            "probe": damaged_probe,
+        },
+        "processes": {
+            "x264_version": result_json(version_result),
+            "normalize_y4m": result_json(normalize_result),
+            "x264_clean_encode": result_json(clean_encode_result),
+            "x264_late_entropy_hook": result_json(damaged_encode_result),
+            "decode": result_json(decode_result),
+            "preview": result_json(preview_result) if preview_result else None,
+        },
+        "input_probe": source_probe_before,
+        "output_probe": output_probe,
+    }
+    report_path.write_text(
+        json.dumps(report, indent=2) + "\n", encoding="utf-8"
+    )
+    print(
+        f"effect={args.effect} feature={mutation_evidence['feature']} "
+        f"entropy={args.h264_entropy} "
+        f"changed={mutation_evidence['changed_values']} "
+        f"survival={survival:.3f} frames={salvaged_frames}/{source_frames} "
+        f"qualified={qualified} report={report_path}"
+    )
+    return 0 if qualified else 4
+
+
+def process_hevc_decoder_hook(args: argparse.Namespace) -> int:
+    ffmpeg = require_tool(args.ffmpeg)
+    ffprobe = require_tool(args.ffprobe)
+    decoder = require_tool(args.ffmpeg_hevc_decoder)
+    contract = load_ffmpeg_hevc_decoder_hook_contract(decoder)
+    if contract is None:
+        raise RuntimeError(
+            "HEVC preserve mode requires the verified decoder-hook binary "
+            "from scripts/build_ffmpeg_hevc_glitch_reference.py"
+        )
+    work = (
+        args.work_dir.expanduser().resolve()
+        if args.work_dir
+        else args.output.with_suffix(args.output.suffix + ".native-syntax-stages")
+    )
+    report_path = (
+        args.report.expanduser().resolve()
+        if args.report
+        else args.output.with_suffix(args.output.suffix + ".json")
+    )
+    work.mkdir(parents=True, exist_ok=True)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    maximum_file_bytes = args.maximum_file_mib * 1024 * 1024
+
+    version_result = run_isolated(
+        [decoder, "-version"],
+        log=work / "00-ffmpeg-hevc-decoder-version.log",
+        timeout_seconds=min(args.timeout, 30),
+        maximum_file_bytes=maximum_file_bytes,
+        environment=clean_ffmpeg_hevc_decoder_environment(),
+    )
+    version_text = version_result.log.read_text(errors="replace")
+    if version_result.return_code != 0 or "version n8.0.1" not in version_text:
+        raise RuntimeError(
+            "HEVC decoder hook does not report pinned FFmpeg 8.0.1; see "
+            f"{version_result.log}"
+        )
+
+    source_probe_before = source_contract(ffprobe, args.input)
+    streams = source_probe_before.get("streams", [])
+    if not streams or streams[0].get("codec_name") != "hevc":
+        raise RuntimeError(
+            "--codec hevc --source-mode preserve requires an existing HEVC "
+            "video stream"
+        )
+    stream = streams[0]
+    if stream.get("pix_fmt") != "yuv420p":
+        raise RuntimeError(
+            "the pinned decoder hook currently supports HEVC Main 8-bit "
+            f"4:2:0 (yuv420p), not {stream.get('pix_fmt') or 'unknown'}"
+        )
+    width = int(stream.get("width") or 0)
+    height = int(stream.get("height") or 0)
+    if width < 2 or height < 2 or width % 2 or height % 2:
+        raise RuntimeError("HEVC source dimensions must be positive even values")
+    source_fps = parse_rate(stream.get("avg_frame_rate")) or float(args.fps)
+
+    annex_b = work / "source-existing-hevc.hevc"
+    extract_result = run_isolated(
+        [
+            ffmpeg,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(args.input),
+            "-map",
+            "0:v:0",
+            "-an",
+            "-frames:v",
+            str(args.max_frames),
+            "-c:v",
+            "copy",
+            "-bsf:v",
+            "hevc_mp4toannexb",
+            "-f",
+            "hevc",
+            str(annex_b),
+        ],
+        log=work / "01-annex-b-stream-copy.log",
+        timeout_seconds=args.timeout,
+        maximum_file_bytes=maximum_file_bytes,
+    )
+    if extract_result.return_code != 0 or not annex_b.is_file():
+        raise RuntimeError(
+            "HEVC Annex B stream-copy extraction failed without source "
+            f"re-encoding; see {extract_result.log}"
+        )
+
+    def decoder_command(destination: Path) -> list[str]:
+        return [
+            decoder,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+            "-y",
+            "-threads",
+            "1",
+            "-f",
+            "hevc",
+            "-i",
+            str(annex_b),
+            "-frames:v",
+            str(args.max_frames),
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "rawvideo",
+            "-f",
+            "rawvideo",
+            str(destination),
+        ]
+
+    clean_raw = work / "clean-decoder-reconstruction.yuv"
+    clean_decode_result = run_isolated(
+        decoder_command(clean_raw),
+        log=work / "02-clean-decoder.log",
+        timeout_seconds=args.timeout,
+        maximum_file_bytes=maximum_file_bytes,
+        environment=clean_ffmpeg_hevc_decoder_environment(),
+    )
+    if clean_decode_result.return_code != 0 or not clean_raw.is_file():
+        raise RuntimeError(
+            f"clean HEVC decoder pass failed; see {clean_decode_result.log}"
+        )
+
+    configuration = work / "ffmpeg-hevc-decoder-hook-config.json"
+    configuration.write_text(
+        json.dumps(
+            {
+                "schema": "glic-ffmpeg-hevc-decoder-hook-run-v1",
+                "effect": args.effect,
+                "amount": args.amount,
+                "seed": args.seed,
+                "decoder_contract": contract,
+                "runtime_constraints": {
+                    "decoder_threads": 1,
+                    "hardware_acceleration": False,
+                    "input_codec": "hevc",
+                    "input_pixel_format": "yuv420p",
+                },
+                "output_contract": {
+                    "mutated_hevc_bitstream": False,
+                    "mutated_decoder_reconstruction": True,
+                },
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    hook_environment = clean_ffmpeg_hevc_decoder_environment()
+    hook_environment.update(
+        {
+            "GLIC_FFMPEG_HEVC_HOOK_EFFECT": args.effect,
+            "GLIC_FFMPEG_HEVC_HOOK_AMOUNT": str(args.amount),
+            "GLIC_FFMPEG_HEVC_HOOK_SEED": str(args.seed),
+        }
+    )
+    mutated_raw = work / f"mutated-{args.effect}-reconstruction.yuv"
+    hook_decode_result = run_isolated(
+        decoder_command(mutated_raw),
+        log=work / "03-mutated-decoder.log",
+        timeout_seconds=args.timeout,
+        maximum_file_bytes=maximum_file_bytes,
+        environment=hook_environment,
+    )
+    if hook_decode_result.return_code != 0 or not mutated_raw.is_file():
+        raise RuntimeError(
+            f"mutated HEVC decoder pass failed; see {hook_decode_result.log}"
+        )
+    mutation_evidence = parse_ffmpeg_hevc_decoder_evidence(
+        hook_decode_result.log, args.effect, args.amount, args.seed
+    )
+    if mutation_evidence["changed_values"] < 1:
+        raise RuntimeError(
+            "effect selected no parsed HEVC syntax values; increase --amount "
+            "or use a source with coded motion/residual data"
+        )
+
+    frame_bytes = width * height * 3 // 2
+    if (
+        clean_raw.stat().st_size % frame_bytes
+        or mutated_raw.stat().st_size % frame_bytes
+    ):
+        raise RuntimeError("decoder output is not complete yuv420p frames")
+    source_frames = clean_raw.stat().st_size // frame_bytes
+    salvaged_frames = mutated_raw.stat().st_size // frame_bytes
+    if source_frames < 1 or salvaged_frames < 1:
+        raise RuntimeError("HEVC decoder hook produced no complete frames")
+    clean_digest = sha256(clean_raw)
+    mutated_digest = sha256(mutated_raw)
+    if clean_digest == mutated_digest:
+        raise RuntimeError(
+            "parsed syntax changed but decoder reconstruction did not"
+        )
+    survival = min(1.0, salvaged_frames / source_frames)
+
+    preview_result = run_isolated(
+        [
+            ffmpeg,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "rawvideo",
+            "-pixel_format",
+            "yuv420p",
+            "-video_size",
+            f"{width}x{height}",
+            "-framerate",
+            f"{source_fps:.8f}",
+            "-i",
+            str(mutated_raw),
+            "-i",
+            str(args.input),
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a?",
+            "-frames:v",
+            str(salvaged_frames),
+            *preview_encoder_options(ffmpeg),
+            "-c:a",
+            "aac",
+            "-shortest",
+            "-movflags",
+            "+faststart",
+            str(args.output),
+        ],
+        log=work / "04-preview.log",
+        timeout_seconds=args.timeout,
+        maximum_file_bytes=maximum_file_bytes,
+    )
+    output_probe = safe_probe(ffprobe, args.output)
+    output_streams = output_probe.get("streams", [])
+    qualified = bool(
+        mutation_evidence["changed_values"] > 0
+        and clean_digest != mutated_digest
+        and salvaged_frames >= 2
+        and args.output.is_file()
+        and preview_result.return_code == 0
+    )
+    report = {
+        "schema": "glic-native-compressed-syntax-glitch-v1",
+        "execution_class": "offline_native_decoder_hook",
+        "realtime_certified": False,
+        "effect": args.effect,
+        "codec": "hevc",
+        "feature": mutation_evidence["feature"],
+        "implementation_level": mutation_evidence["implementation_level"],
+        "input": str(args.input),
+        "output": str(args.output),
+        "source_mode": "preserve",
+        "amount": args.amount,
+        "seed": args.seed,
+        "target_width": width,
+        "target_height": height,
+        "target_fps": round(source_fps, 6),
+        "output_fps": round(
+            parse_rate(output_streams[0].get("avg_frame_rate"))
+            if output_streams
+            else 0.0,
+            6,
+        ),
+        "source_frames": source_frames,
+        "salvaged_frames": salvaged_frames,
+        "decode_survival_ratio": round(survival, 6),
+        "qualified_preview": qualified,
+        "compressed_domain_edit": True,
+        "source_reencoded": False,
+        "source_bitstream_modified": False,
+        "existing_bitstream_transplication": False,
+        "existing_bitstream_decoder_syntax_injection": True,
+        "decoder_reconstruction_modified": True,
+        "output_is_mutated_hevc_bitstream": False,
+        "decoded_pixels_modified_before_entropy_coding": False,
+        "may_produce_invalid_bitstream": False,
+        "h264_direct_support": (
+            "x264_pinned_cabac_cavlc_mvd_and_quantized_coefficient_hook"
+        ),
+        "hevc_direct_support": (
+            "ffmpeg_8_0_1_existing_bitstream_decoder_parsed_cabac_"
+            "mvd_and_quantized_coefficient_hook"
+        ),
+        "ffmpeg_hevc_decoder": {
+            "binary": decoder,
+            "version_log": str(version_result.log),
+            "custom_hook_contract": contract,
+        },
+        "mutation_evidence": mutation_evidence,
+        "source_bitstream": {
+            "path": str(annex_b),
+            "bytes": annex_b.stat().st_size,
+            "sha256": sha256(annex_b),
+            "probe": safe_probe(ffprobe, annex_b),
+            "extraction": "stream_copy_only",
+        },
+        "exported_syntax": None,
+        "mutated_syntax": {
+            "kind": "ffmpeg_hevc_decoder_hook_configuration",
+            "path": str(configuration),
+            "bytes": configuration.stat().st_size,
+            "sha256": sha256(configuration),
+            "process_log": str(hook_decode_result.log),
+        },
+        "clean_decoder_reconstruction": {
+            "path": str(clean_raw),
+            "bytes": clean_raw.stat().st_size,
+            "sha256": clean_digest,
+        },
+        "mutated_decoder_reconstruction": {
+            "path": str(mutated_raw),
+            "bytes": mutated_raw.stat().st_size,
+            "sha256": mutated_digest,
+        },
+        "damaged_bitstream": None,
+        "processes": {
+            "ffmpeg_hevc_decoder_version": result_json(version_result),
+            "annex_b_stream_copy": result_json(extract_result),
+            "clean_decoder": result_json(clean_decode_result),
+            "mutated_decoder": result_json(hook_decode_result),
+            "preview": result_json(preview_result),
+        },
+        "input_probe": source_probe_before,
+        "output_probe": output_probe,
+    }
+    report_path.write_text(
+        json.dumps(report, indent=2) + "\n", encoding="utf-8"
+    )
+    print(
+        f"effect={args.effect} feature={mutation_evidence['feature']} "
+        f"changed={mutation_evidence['changed_values']} "
+        f"survival={survival:.3f} frames={salvaged_frames}/{source_frames} "
+        f"qualified={qualified} report={report_path}"
+    )
+    return 0 if qualified else 4
+
+
 def process_hevc(args: argparse.Namespace) -> int:
+    if args.source_mode == "preserve":
+        return process_hevc_decoder_hook(args)
     ffmpeg = require_tool(args.ffmpeg)
     ffprobe = require_tool(args.ffprobe)
     x265 = require_tool(args.x265)
@@ -824,6 +1720,8 @@ def process_hevc(args: argparse.Namespace) -> int:
 
 def main() -> int:
     args = parse_args()
+    if args.codec == "h264":
+        return process_h264(args)
     if args.codec == "hevc":
         return process_hevc(args)
     ffmpeg = require_tool(args.ffmpeg)

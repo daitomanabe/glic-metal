@@ -381,6 +381,12 @@ if(BUILD_TESTING)
         add_test(NAME glic_x265_entropy_hook_contract
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_x265_entropy_hook.py")
+        add_test(NAME glic_x264_entropy_hook_contract
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${PROJECT_SOURCE_DIR}/tests/test_x264_entropy_hook.py")
+        add_test(NAME glic_ffmpeg_hevc_decoder_hook_contract
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${PROJECT_SOURCE_DIR}/tests/test_ffmpeg_hevc_decoder_hook.py")
         add_test(NAME glic_native_syntax_ranking_selftest
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/scripts/evaluate_native_syntax_glitches.py"
@@ -627,13 +633,21 @@ install(PROGRAMS scripts/process_multicodec_glitch.py
                  scripts/probe_multicodec_capabilities.py
                  scripts/build_av2_reference.py
                  scripts/build_vvc_reference.py
+                 scripts/build_ffmpeg_hevc_glitch_reference.py
+                 scripts/build_x264_glitch_reference.py
                  scripts/build_x265_glitch_reference.py
                  scripts/install_ffglitch_reference.py
                  scripts/validate_videotoolbox_fast_path.py
                  scripts/evaluate_codec_glitch_videos.py
                  tools/evaluate_effect_difference.py
         DESTINATION bin)
-install(FILES patches/x265-4.2-glic-entropy-hooks.patch
+install(FILES patches/ffmpeg-8.0.1-hevc-glic-decoder-hooks.patch
+              patches/ffmpeg_hevc_glic_decoder_hook.h
+              patches/ffmpeg_hevc_glic_decoder_hook.c
+              patches/x264-0480cb0-glic-entropy-hooks.patch
+              patches/x264_glic_entropy_hook.h
+              patches/x264_glic_entropy_hook.c
+              patches/x265-4.2-glic-entropy-hooks.patch
               patches/x265_glic_entropy_hook.h
         DESTINATION bin)
 install(DIRECTORY presets/

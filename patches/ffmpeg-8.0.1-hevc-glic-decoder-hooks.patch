@@ -1,0 +1,35 @@
+diff --git a/libavcodec/hevc/Makefile b/libavcodec/hevc/Makefile
+index 93ed4213f6..8c4c1d1a1a 100644
+--- a/libavcodec/hevc/Makefile
++++ b/libavcodec/hevc/Makefile
+@@ -7,6 +7,7 @@ OBJS-$(CONFIG_HEVC_DECODER) += \
+     hevc/dsp.o                 \
+     hevc/filter.o              \
+     hevc/hevcdec.o             \
++    hevc/glic_decoder_hook.o   \
+     hevc/mvs.o                 \
+     hevc/pred.o                \
+     hevc/refs.o                \
+diff --git a/libavcodec/hevc/cabac.c b/libavcodec/hevc/cabac.c
+index 55d5741f87..214ad10c06 100644
+--- a/libavcodec/hevc/cabac.c
++++ b/libavcodec/hevc/cabac.c
+@@ -30,0 +31 @@
++#include "ffmpeg_hevc_glic_decoder_hook.h"
+@@ -1408,6 +1409,9 @@ void ff_hevc_hls_residual_coding(HEVCLocalContext *lc, const HEVCPPS *pps,
+                 if (coeff_sign_flag >> 15)
+                     trans_coeff_level = -trans_coeff_level;
+                 coeff_sign_flag <<= 1;
++                trans_coeff_level = ff_glic_hevc_mutate_quantized_coefficient(
++                    lc, x0, y0, c_idx, y_c * trafo_size + x_c,
++                    trans_coeff_level);
+                 if(!lc->cu.cu_transquant_bypass_flag) {
+                     if (sps->scaling_list_enabled && !(transform_skip_flag && log2_trafo_size > 2)) {
+                         if(y_c || x_c || log2_trafo_size < 4) {
+@@ -1511,4 +1515,6 @@ void ff_hevc_hls_mvd_coding(HEVCLocalContext *lc, int x0, int y0, int log2_cb_si
+     case 1: lc->pu.mvd.y = mvd_sign_flag_decode(lc); break;
+     case 0: lc->pu.mvd.y = 0;                       break;
+     }
++    ff_glic_hevc_mutate_mvd(lc, x0, y0, log2_cb_size,
++                            &lc->pu.mvd.x, &lc->pu.mvd.y);
+ }
