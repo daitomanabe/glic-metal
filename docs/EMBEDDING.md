@@ -304,6 +304,12 @@ fallback. See [VIDEOTOOLBOX_FAST_PATH.md](VIDEOTOOLBOX_FAST_PATH.md).
 Display the actual processing boundary returned by
 `glic_codec_glitch_effect_implementation_level()`; do not infer native
 compressed-field access from an artistic effect name.
+The generated SDK also includes `Tools/process_video.py` beside
+`glic_codec_glitch_filter`. Codec mode defaults to raw NV12 input and the
+required NV12/Metal path, so an integrating agent can run an actual-video
+preflight without the source checkout. Require
+`codec_input_pixel_format=nv12_420v`, `codec_direct_420v_input=true`, and
+`codec_pixel_path=nv12_metal` in its JSON evidence.
 
 Run `prepare` once on a control or background queue because it creates queues,
 pixel-buffer pools, the Metal-backed post path, and the normal-stage hardware

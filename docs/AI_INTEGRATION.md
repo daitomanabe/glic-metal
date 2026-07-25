@@ -169,6 +169,10 @@ if (status == GLIC_CODEC_GLITCH_OK) {
 `nv12_metal_fast_path`、`metal_texture_cache`、`fused_metal_effects`、
 `asynchronous_metal_delivery`、`ordered_delivery`をすべて記録する。詳細は
 `docs/VIDEOTOOLBOX_FAST_PATH.md`を参照する。
+生成SDKの`Tools/process_video.py --processing-mode codec_glitch`は既定で
+`--codec-input-pixel-format nv12 --codec-pixel-path nv12`を使う。外部アプリの
+事前検証では、そのJSONに`codec_input_pixel_format=nv12_420v`、
+`codec_direct_420v_input=true`、`codec_pixel_path=nv12_metal`があることを確認する。
 
 採用済み19 presetのメニューとは別に、実験用Codec Glitchを全て表示する場合は
 `resources/integration-manifest.json`の`lanes.codec.effect_names`を参照する。
@@ -187,8 +191,9 @@ if (status == GLIC_CODEC_GLITCH_OK) {
    `GlicMetal::GlicMetal` をlinkする。
 3. 手動static library linkは、上記2方式が使用できない場合だけにする。
 
-生成SDKは`Documentation/`に全組み込み資料、`Tools/`にoffline entrypointと
-`requirements.txt`を同梱します。CMake installは`GLIC_METAL_TOOLS_DIR`と
+生成SDKは`Documentation/`に全組み込み資料、`Tools/`にNV12実動画wrapper、
+offline entrypoint、`requirements.txt`を同梱します。CMake installは
+`GLIC_METAL_TOOLS_DIR`と
 `GLIC_METAL_PYTHON_REQUIREMENTS`を公開します。これにより別アプリはsource treeへ
 依存せず、同じSDK版のlibrary、catalog、資料、offline Toolsを使用できます。
 
@@ -310,7 +315,8 @@ Codec NV12/Metal Fast Path also requires the metallib; `AUTO` may fall back to
 BGRA compatibility when it is unavailable, while `NV12_METAL` must fail closed.
 
 The generated SDK is self-contained: `Documentation/` carries the integration
-contracts and `Tools/` carries offline entrypoints plus `requirements.txt`.
+contracts and `Tools/` carries the NV12 actual-video wrapper, offline
+entrypoints, and `requirements.txt`.
 Installed CMake packages expose `GLIC_METAL_TOOLS_DIR` and
 `GLIC_METAL_PYTHON_REQUIREMENTS`. This keeps the library, catalogs,
 documentation, and file-processing tools on the same release version.
@@ -326,6 +332,11 @@ compatibility fallback is acceptable. With `AUTO`, record all five fast-path
 evidence flags from `glic_codec_glitch_stats`. A full-size 420v input reaches
 the encoder without BGRA staging; 32BGRA is converted by Metal. See
 `docs/VIDEOTOOLBOX_FAST_PATH.md`.
+The packaged `Tools/process_video.py --processing-mode codec_glitch` defaults
+to `--codec-input-pixel-format nv12 --codec-pixel-path nv12`. Its JSON must
+report `codec_input_pixel_format=nv12_420v`,
+`codec_direct_420v_input=true`, and `codec_pixel_path=nv12_metal` when used as
+the downstream preflight.
 
 The adopted 19-preset menu is separate from the complete experimental Codec
 Glitch effect list. If the host exposes every effect, read the 36 canonical

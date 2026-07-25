@@ -177,7 +177,8 @@ stream 20fps以上も満たした場合だけ`realtime_20fps_passed`をtrueに�
 最新のPhase 6検証では、Apple M5 Max上で同じ120 frame実写入力を使い、
 36 effect × H.264/HEVC/ProRes 422 × 960×540/1920×1080の216条件がすべて
 20fps / p95 50ms / reliability gateに合格しました。最も遅い条件はHEVC
-1920×1080 `generation_cascade`の52.463fps、p95 20.635msです。詳細と再実行方法は
+1920×1080 `generation_cascade`の52.043fps、p95 20.346msです。216条件は
+すべて直接420v入力を使用しています。詳細と再実行方法は
 [VIDEOTOOLBOX_FAST_PATH.md](VIDEOTOOLBOX_FAST_PATH.md)を参照してください。
 
 2026-07-23の研究版6 effect回帰計測では、Apple M5 Maxで5.53秒・166 frameの実写入力を
@@ -203,8 +204,9 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target glic_codec_glitch_filter --parallel
 ```
 
-`process_video.py`はFFmpegで入力をBGRAへdecodeし、1つのCodec Glitch engineを
-stream全体で再利用した後、元音声を戻します。
+`process_video.py`はCodec modeでFFmpegのNV12 raw出力を420v pixel bufferへ
+直接copyし、1つのCodec Glitch engineをstream全体で再利用した後、元音声を戻します。
+`--codec-input-pixel-format nv12 --codec-pixel-path nv12`が既定です。
 
 ```bash
 python3 scripts/process_video.py input.mov output-codec.mp4 \
@@ -219,13 +221,15 @@ python3 scripts/process_video.py input.mov output-codec.mp4 \
 36 effect名は`--codec-effect`へそのまま指定できます。このモードはmacOSと
 VideoToolbox hardware codecを必須とし、`--backend cpu`を拒否します。
 
-raw BGRA pipelineを組む場合は、filterを直接使えます。
+raw NV12 pipelineを組む場合は、filterを直接使えます。filter単体の入力既定は
+後方互換のBGRAなので、NV12を明示します。
 
 ```bash
-ffmpeg -i input.mov -f rawvideo -pix_fmt bgra - \
+ffmpeg -i input.mov -f rawvideo -pix_fmt nv12 - \
   | ./build/glic_codec_glitch_filter \
       --width 960 --height 540 --fps 30 \
-      --effect payload_xor --amount 0.16 --rate 0.30 --pixel-path nv12 \
+      --effect payload_xor --amount 0.16 --rate 0.30 \
+      --input-pixel-format nv12 --pixel-path nv12 \
       --stats-json codec-stats.json \
   | ffmpeg -f rawvideo -pix_fmt bgra -s 960x540 -r 30 -i - output.mp4
 ```
@@ -447,7 +451,8 @@ representative video.
 The current Phase 6 run used the same 120-frame live-action input for 36
 effects × H.264/HEVC/ProRes 422 × 960×540/1920×1080. All 216 cells passed the
 20fps, p95 50ms, and reliability gates. The slowest cell was HEVC 1920×1080
-`generation_cascade` at 52.463fps and 20.635ms p95. See
+`generation_cascade` at 52.043fps and 20.346ms p95, with direct 420v input in
+every cell. See
 [VIDEOTOOLBOX_FAST_PATH.md](VIDEOTOOLBOX_FAST_PATH.md) for the complete
 contract and reproducible runner.
 
@@ -483,6 +488,8 @@ python3 scripts/process_video.py input.mov output-codec.mp4 \
 All 36 names in the table are accepted by `--codec-effect`. Codec mode
 requires macOS and VideoToolbox hardware codec support and rejects
 `--backend cpu`.
+It defaults to `--codec-input-pixel-format nv12 --codec-pixel-path nv12`;
+select BGRA explicitly only for a compatibility comparison.
 
 Rank multiple rendered effects against an unchanged control with technical
 dry/wet, temporal, reliability, and max-min fingerprint-diversity analysis:

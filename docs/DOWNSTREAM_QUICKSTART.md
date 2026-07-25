@@ -18,7 +18,7 @@ scripts/build_macos_sdk.sh build/GlicMetalSDK
 - `GlicMetal.xcframework` — C ABI / Swift module
 - `GlicMetalResources.bundle` — Metal library、preset、machine-readable catalog
 - `Documentation/` — 人間・AI向けの自己完結した仕様書
-- `Tools/` — offline codec処理と評価CLI
+- `Tools/` — VideoToolbox実動画wrapper、offline codec処理、評価CLI
 - `SHA256SUMS` — 配布物の整合性
 
 Xcode targetへXCFrameworkとresource bundleを追加し、`README.md`に列挙されたApple
@@ -50,6 +50,11 @@ SDK:
 ```bash
 python3 -m pip install -r GlicMetalSDK/Tools/requirements.txt
 
+python3 GlicMetalSDK/Tools/process_video.py input.mov realtime.mp4 \
+  --processing-mode codec_glitch --codec-format hevc \
+  --codec-effect slice_transplant --width 960 --height 540 --fps 30 \
+  --report realtime.json --overwrite
+
 python3 GlicMetalSDK/Tools/process_codec_lab.py input.mov output.mp4 \
   --effect motion_vector_vortex --codec hevc
 
@@ -74,6 +79,9 @@ Packet、Syntax、structured、transport、metadata、AV1 / AV2 / VP9 / VVC /
 Theora / Dirac処理はホストのcapture/render callbackから
 呼びません。別processとして実行し、JSON reportを完了通知として扱います。
 `codec-lab-effects.json`と`offline-codec-effects.json`にない名前はfail-closedします。
+`process_video.py`のCodec modeは既定でNV12 raw入力と必須NV12/Metal pathを使います。
+互換比較だけ`--codec-input-pixel-format bgra`または`--codec-pixel-path bgra`を
+明示してください。
 
 ### 4. 組み込み完了条件
 
@@ -116,6 +124,11 @@ The generated SDK also contains a self-contained `Tools/` directory:
 
 ```bash
 python3 -m pip install -r GlicMetalSDK/Tools/requirements.txt
+python3 GlicMetalSDK/Tools/process_video.py input.mov realtime.mp4 \
+  --processing-mode codec_glitch --codec-format hevc \
+  --codec-effect slice_transplant --width 960 --height 540 --fps 30 \
+  --report realtime.json --overwrite
+
 python3 GlicMetalSDK/Tools/process_codec_lab.py input.mov output.mp4 \
   --effect motion_vector_vortex --codec hevc
 
@@ -142,6 +155,8 @@ and MPEG-4 Part 2 MV operations and invokes the separately installed GPL
 FFglitch executable. H.264/HEVC direct requests fail closed. The adjacent
 batch evaluator provides resumable, token-free actual-video difference and
 diversity ranking.
+Codec mode in `Tools/process_video.py` defaults to raw NV12 input and the
+required NV12/Metal path. Select BGRA explicitly only for compatibility tests.
 
 `AI_INTEGRATION.md` and `integration-manifest.json` remain the normative
 human-readable and machine-readable contracts. See

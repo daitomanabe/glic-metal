@@ -6,7 +6,8 @@ Contents:
 - `GlicMetalResources.bundle` — Metal kernels, presets, and license notices;
 - `AI_INTEGRATION.md` — first-read contract for coding agents;
 - `Documentation/` — self-contained integration and codec-lab documentation;
-- `Tools/` — offline codec, packet, evaluation, and search entrypoints;
+- `Tools/` — realtime VideoToolbox video wrapper plus offline codec, packet,
+  evaluation, and search entrypoints;
 - `SHA256SUMS` — checksums for the packaged files.
 
 Add the XCFramework and resource bundle to the Xcode application target. Link
@@ -52,6 +53,10 @@ decoded pixel buffers;
 neither mutates or reuses a compressed payload.
 Query `glic_codec_glitch_effect_implementation_level()` instead of inferring
 native compressed-field access from an effect name.
+`Tools/process_video.py --processing-mode codec_glitch` is the packaged
+actual-video wrapper. It defaults to FFmpeg NV12 raw output, copies that data
+directly into IOSurface-backed 420v buffers, and requests the NV12/Metal path.
+Use `--codec-input-pixel-format bgra` only for compatibility comparison.
 
 Set `glic_codec_glitch_config.pixel_path` before prepare. `AUTO` prefers the
 NV12/IOSurface/Metal path and permits BGRA compatibility fallback;
@@ -85,8 +90,9 @@ filter requires at least 960x540, at least 120 frames, preserved frame count,
 hardware encode/decode, 20 fps with p95 at or below 50 ms, and zero fallback,
 codec errors, watchdog recovery, backpressure, or output-queue drops.
 `Tools/validate_videotoolbox_fast_path.py` reproduces the 36-effect ×
-three-codec × two-resolution matrix. `Tools/evaluate_codec_glitch_videos.py`
-uses its normalized reports for actual-video difference and diversity ranking.
+three-codec × two-resolution matrix and requires direct 420v input in every
+cell. `Tools/evaluate_codec_glitch_videos.py` uses its normalized reports for
+actual-video difference and diversity ranking.
 
 Resolve the runtime files from `GlicMetalResources.bundle` and pass their paths
 through `glic_metal_config.preset_directory` and

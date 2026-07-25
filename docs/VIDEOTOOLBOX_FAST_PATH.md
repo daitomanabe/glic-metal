@@ -111,21 +111,22 @@ raw-video filterまたはC++ APIを使います。
 必須gateは960×540以上、20fps以上、p95 50ms以下、hardware encoder/decoder、
 frame数維持、GPU timeout 0、非意図的fallback/error/drop 0です。
 
-2026-07-25のApple M5 Max実測では、120 frameの同一実写入力を使い、
+2026-07-25のApple M5 Max実測では、FFmpegのNV12 raw出力を420vへ直接入れ、
+120 frameの同一実写入力を使い、
 36 effect × H.264/HEVC/ProRes 422 × 960×540/1920×1080の216条件がすべて
 合格しました。
 
 | codec / resolution | 36 effect中の最低processing fps | 最大p95 |
 |---|---:|---:|
-| H.264 / 960×540 | 103.836 | 12.152ms |
-| H.264 / 1920×1080 | 54.278 | 19.421ms |
-| HEVC / 960×540 | 101.049 | 11.893ms |
-| HEVC / 1920×1080 | 52.463 | 20.635ms |
-| ProRes 422 / 960×540 | 184.491 | 8.507ms |
-| ProRes 422 / 1920×1080 | 96.996 | 11.772ms |
+| H.264 / 960×540 | 102.375 | 13.640ms |
+| H.264 / 1920×1080 | 53.806 | 19.393ms |
+| HEVC / 960×540 | 99.013 | 12.171ms |
+| HEVC / 1920×1080 | 52.043 | 20.346ms |
+| ProRes 422 / 960×540 | 175.728 | 6.366ms |
+| ProRes 422 / 1920×1080 | 99.149 | 11.130ms |
 
-最も遅い条件はHEVC 1920×1080の`generation_cascade`で52.463fps、
-p95 20.635msでした。これはこのmachineと入力での測定値であり、別Macやhost全体の
+最も遅い条件はHEVC 1920×1080の`generation_cascade`で52.043fps、
+p95 20.346msでした。これはこのmachineと入力での測定値であり、別Macやhost全体の
 保証値ではありません。
 
 再検証:
@@ -137,8 +138,14 @@ python3 scripts/validate_videotoolbox_fast_path.py input.mov \
 ```
 
 runnerは途中結果を再利用でき、`--force`で再レンダーします。各cellのMP4、JSON、
-logと、全体の`summary.json` / `summary.md`を残します。visual diversityは同じreportを
+logと、全体の`summary.json` / `summary.md`を残します。各reportは
+`input_pixel_format=nv12_420v`と`direct_420v_input=true`も必須にします。
+visual diversityは同じreportを
 `scripts/evaluate_codec_glitch_videos.py`へ渡して評価できます。
+
+`process_video.py --processing-mode codec_glitch`も既定でこの直接NV12入口を
+使います。raw filter単体では後方互換のためBGRAが既定なので、直接経路は
+`--input-pixel-format nv12 --pixel-path nv12`を明示します。
 
 ### SDK組み込みチェック
 
@@ -189,13 +196,14 @@ alone does not prove that the fast path remained active.
 ### Validation
 
 The deterministic Phase 6 runner renders MP4/report/log evidence for 36 effects,
-three codecs, and two resolutions. Its hard gates are at least 20 processing
-fps, p95 at or below 50ms, preserved frame count, hardware encode/decode, zero
-GPU timeout, and zero unintended fallback/error/drop.
+three codecs, and two resolutions. It feeds FFmpeg raw NV12 directly into 420v
+pixel buffers. Its hard gates are direct 420v input, at least 20 processing fps,
+p95 at or below 50ms, preserved frame count, hardware encode/decode, zero GPU
+timeout, and zero unintended fallback/error/drop.
 
 On the Apple M5 Max validation run dated 2026-07-25, all 216 cells passed. The
-slowest cell was HEVC 1920×1080 `generation_cascade` at 52.463 processing fps
-and 20.635ms p95. Treat this as machine/input evidence, not a guarantee for a
+slowest cell was HEVC 1920×1080 `generation_cascade` at 52.043 processing fps
+and 20.346ms p95. Treat this as machine/input evidence, not a guarantee for a
 different Mac or an integrated host.
 
 Run:
@@ -211,3 +219,6 @@ Keep `glic_realtime.metallib` in the application bundle, submit IOSurface-backed
 input drop rather than a reason to block, record the runtime path flags, and
 flush before destroying the context. Re-measure the 20fps/50ms gate inside the
 actual host with capture, presentation, and its other processing enabled.
+`process_video.py --processing-mode codec_glitch` uses this direct NV12 input by
+default. The standalone raw filter retains BGRA as its compatibility default;
+pass `--input-pixel-format nv12 --pixel-path nv12` to request the direct path.

@@ -145,6 +145,15 @@ semantic versioning for tagged releases.
 
 ### Changed
 
+- Codec video processing now defaults to FFmpeg raw NV12 input copied directly
+  into IOSurface-backed 420v buffers and the required NV12/Metal path. The raw
+  filter retains BGRA compatibility and adds an explicit
+  `--input-pixel-format nv12|bgra` boundary.
+- The Phase 6 matrix report schema is now v2 and requires
+  `input_pixel_format=nv12_420v` plus `direct_420v_input=true` for every one of
+  its 216 cells. The generated SDK now includes `Tools/process_video.py` so
+  downstream agents can reproduce the same actual-video path without a source
+  checkout.
 - The machine-readable integration and codec-lab catalogs now describe 420v
   direct input, BGRA Metal conversion, NV12 plane mapping, fused dispatch,
   ordered asynchronous delivery, compatibility fallback, and the complete

@@ -181,7 +181,7 @@ open "build/GLIC Webcam Preview.app"
 
 ### 動画処理
 
-`process_video.py` はFFmpegで動画をBGRAフレームへデコードし、1つのリアルタイムbackendを全フレームで再利用します。処理後は元動画の音声を戻し、H.264 MP4とJSON性能レポートを出力します。
+`process_video.py` はFFmpegで動画をraw frameへデコードし、1つのリアルタイムbackendを全フレームで再利用します。Original / SpatialはBGRA、Codec Glitchは既定でNV12を使います。処理後は元動画の音声を戻し、H.264 MP4とJSON性能レポートを出力します。
 
 ```bash
 python3 scripts/process_video.py input.mov output.mp4 \
@@ -226,6 +226,10 @@ python3 scripts/process_video.py input.mov output-codec.mp4 \
   --report output-codec.json --overwrite
 ```
 
+Codec modeは既定でFFmpegのNV12 raw出力を420v `CVPixelBuffer`へ直接入れ、
+`--codec-pixel-path nv12`を使います。BGRA互換比較は
+`--codec-input-pixel-format bgra`または`--codec-pixel-path bgra`を明示します。
+
 36 effectは`qp_pump`、`bitrate_crush`、`slice_dropout`、
 `slice_transplant`、`pframe_loss`、`idr_starvation`、`payload_xor`、
 `reference_timewarp`、`codec_feedback`、`generation_cascade`、
@@ -268,8 +272,9 @@ backpressure drop、output queue dropがすべて0の場合だけtrueです。le
 960×540以上、120 frame以上、frame数維持、hardware codec、実測/stream 20fps以上、
 p95 50ms以下が必要です。
 Apple M5 MaxでのPhase 6実動画matrixは36 effect × 3 codec × 2解像度の216条件が
-すべて合格し、最も遅いHEVC 1920×1080 `generation_cascade`でも52.463fps、
-p95 20.635msでした。別machineや組み込み後のhost全体に対する保証値ではありません。
+すべて直接420v入力で合格し、最も遅いHEVC 1920×1080
+`generation_cascade`でも52.043fps、p95 20.346msでした。別machineや
+組み込み後のhost全体に対する保証値ではありません。
 複数effectの動画比較と非類似rankingには
 `scripts/evaluate_codec_glitch_videos.py`を使います。
 詳細とC APIは[Codec Glitch](docs/CODEC_GLITCH.md)と
@@ -794,7 +799,7 @@ Strict.
 
 ### Video processing
 
-`process_video.py` uses FFmpeg to decode a video into BGRA frames and reuses one realtime backend across the complete stream. It restores the source audio after processing and writes both an H.264 MP4 and a JSON performance report.
+`process_video.py` uses FFmpeg to decode a video into raw frames and reuses one realtime backend across the complete stream. Original and Spatial use BGRA; Codec Glitch defaults to NV12. It restores the source audio after processing and writes both an H.264 MP4 and a JSON performance report.
 
 ```bash
 python3 scripts/process_video.py input.mov output.mp4 \
@@ -865,6 +870,11 @@ python3 scripts/process_video.py input.mov output-codec.mp4 \
   --report output-codec.json --overwrite
 ```
 
+Codec mode defaults to FFmpeg raw NV12 copied into a 420v pixel buffer and
+requests `--codec-pixel-path nv12`. Select
+`--codec-input-pixel-format bgra` or `--codec-pixel-path bgra` only for
+compatibility comparison.
+
 The 36 effects include `qp_pump`, `bitrate_crush`, `slice_dropout`,
 `slice_transplant`, `pframe_loss`, `idr_starvation`, `payload_xor`,
 `reference_timewarp`, `codec_feedback`, `generation_cascade`,
@@ -910,8 +920,9 @@ The 20 fps pass also requires at least 960×540, at least 120 frames, preserved
 frame count, hardware encode/decode, processing and stream rates of at least
 20 fps, and p95 at or below 50 ms. The Apple M5 Max Phase 6 matrix passed all
 216 cells (36 effects × three codecs × two resolutions); its slowest cell was
-HEVC 1920×1080 `generation_cascade` at 52.463fps and 20.635ms p95. This is
-machine/input evidence, not a host-wide guarantee. See
+HEVC 1920×1080 `generation_cascade` at 52.043fps and 20.346ms p95. Every
+matrix cell used direct 420v input. This is machine/input evidence, not a
+host-wide guarantee. See
 [Codec Glitch](docs/CODEC_GLITCH.md) and the
 [VideoToolbox Fast Path](docs/VIDEOTOOLBOX_FAST_PATH.md), the
 [multi-codec guide](docs/MULTICODEC_GLITCH.md), plus the
