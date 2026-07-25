@@ -20,7 +20,7 @@ import threading
 from typing import Any, Sequence
 
 
-SCHEMA = "glic-videotoolbox-fast-path-validation-v1"
+SCHEMA = "glic-videotoolbox-fast-path-validation-v2"
 EFFECTS = (
     "qp_pump",
     "bitrate_crush",
@@ -145,6 +145,8 @@ def completed_cell(video: Path, stats: Path, expected_frames: int) -> bool:
         return False
     return (
         report.get("frames") == expected_frames
+        and report.get("input_pixel_format") == "nv12_420v"
+        and report.get("direct_420v_input") is True
         and report.get("pixel_path") == "nv12_metal"
         and report.get("fused_metal_effects") is True
         and report.get("asynchronous_metal_delivery") is True
@@ -230,13 +232,14 @@ def render_cell(
         ffmpeg, "-hide_banner", "-loglevel", "error",
         "-i", str(input_path), "-an",
         "-vf", f"fps={fps},scale={cell.width}:{cell.height}:flags=lanczos",
-        "-frames:v", str(frames), "-f", "rawvideo", "-pix_fmt", "bgra", "-",
+        "-frames:v", str(frames), "-f", "rawvideo", "-pix_fmt", "nv12", "-",
     ]
     filter_command = [
         filter_bin,
         "--width", str(cell.width), "--height", str(cell.height),
         "--fps", str(fps), "--codec", cell.codec,
-        "--pixel-path", "nv12", "--effect", cell.effect,
+        "--input-pixel-format", "nv12", "--pixel-path", "nv12",
+        "--effect", cell.effect,
         "--amount", "0.78", "--rate", "0.64", "--feedback", "0.72",
         "--seed", "0x474c4943434f4445", "--stats-json", str(stats_path),
     ]
@@ -312,6 +315,10 @@ def summarize(
             reasons.append("p95_latency")
         if int(stats.get("gpu_timeouts", 0)) != 0:
             reasons.append("gpu_timeout")
+        if stats.get("input_pixel_format") != "nv12_420v":
+            reasons.append("input_pixel_format")
+        if stats.get("direct_420v_input") is not True:
+            reasons.append("direct_420v_input")
         for key in (
             "nv12_metal_fast_path",
             "metal_texture_cache",
@@ -331,6 +338,8 @@ def summarize(
                 "effect": cell.effect,
                 "codec": cell.codec,
                 "resolution": cell.resolution,
+                "input_pixel_format": stats.get("input_pixel_format"),
+                "direct_420v_input": stats.get("direct_420v_input"),
                 "video": str(video),
                 "stats": str(stats_path),
                 "processing_fps": stats.get("processing_fps"),
@@ -356,6 +365,8 @@ def summarize(
             "maximum_p95_ms": maximum_p95_ms,
             "reliability_required": True,
             "gpu_timeouts_allowed": 0,
+            "input_pixel_format": "nv12_420v",
+            "direct_420v_input_required": True,
         },
         "passed_runs": passed,
         "failed_runs": len(runs) - passed,
