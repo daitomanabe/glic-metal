@@ -30,12 +30,18 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
+enum class InputPixelFormat {
+  Bgra,
+  Nv12VideoRange,
+};
+
 struct Options {
   int width = 960;
   int height = 540;
   int framesPerSecond = 30;
   glic::CodecGlitchCodec codec = glic::CodecGlitchCodec::H264;
   glic::CodecGlitchPixelPath pixelPath = glic::CodecGlitchPixelPath::Auto;
+  InputPixelFormat inputPixelFormat = InputPixelFormat::Bgra;
   glic::CodecGlitchControls controls;
   std::string statsPath;
   bool checkOnly = false;
@@ -111,6 +117,14 @@ Options parseOptions(int argc, const char *argv[]) {
         options.pixelPath = glic::CodecGlitchPixelPath::BgraCompatibility;
       else
         failUsage("unknown pixel path: " + std::string(name));
+    } else if (argument == "--input-pixel-format") {
+      const std::string_view name(value("--input-pixel-format"));
+      if (name == "bgra")
+        options.inputPixelFormat = InputPixelFormat::Bgra;
+      else if (name == "nv12" || name == "420v")
+        options.inputPixelFormat = InputPixelFormat::Nv12VideoRange;
+      else
+        failUsage("unknown input pixel format: " + std::string(name));
     } else if (argument == "--effect") {
       const char *name = value("--effect");
       if (!glic::codecGlitchEffectFromName(name, options.controls.effect))
@@ -144,10 +158,11 @@ Options parseOptions(int argc, const char *argv[]) {
     else if (argument == "--check")
       options.checkOnly = true;
     else if (argument == "--help") {
-      std::cout << "Usage: glic_codec_glitch_filter [options] < BGRA > BGRA\n"
+      std::cout << "Usage: glic_codec_glitch_filter [options] < RAW > BGRA\n"
                 << "  --width N --height N --fps N\n"
                 << "  --codec h264|hevc|prores_422\n"
                 << "  --pixel-path auto|nv12|bgra\n"
+                << "  --input-pixel-format bgra|nv12 (default: bgra)\n"
                 << "  --effect NAME --amount 0..1 --rate 0..1 --feedback 0..1\n"
                 << "  --seed N --stats-json PATH --check\n";
       std::exit(0);
@@ -157,6 +172,9 @@ Options parseOptions(int argc, const char *argv[]) {
   }
   if (options.width <= 0 || options.height <= 0 || options.framesPerSecond <= 0)
     failUsage("width, height, and fps must be positive");
+  if (options.inputPixelFormat == InputPixelFormat::Nv12VideoRange &&
+      ((options.width & 1) != 0 || (options.height & 1) != 0))
+    failUsage("NV12 input requires even width and height");
   return options;
 }
 
@@ -170,7 +188,7 @@ bool readExact(int descriptor, uint8_t *destination, std::size_t size,
     if (count == 0) {
       cleanEndOfFile = offset == 0;
       if (!cleanEndOfFile)
-        std::cerr << "error: input ended in the middle of a BGRA frame\n";
+        std::cerr << "error: input ended in the middle of a raw frame\n";
       return false;
     }
     if (count < 0) {
@@ -211,8 +229,12 @@ double percentile(std::vector<double> values, double probability) {
   return values[lower] + (values[upper] - values[lower]) * fraction;
 }
 
-bool copyRawToPixelBuffer(const std::vector<uint8_t> &input,
-                          CVPixelBufferRef pixelBuffer, int width, int height) {
+bool copyBgraToPixelBuffer(const std::vector<uint8_t> &input,
+                           CVPixelBufferRef pixelBuffer, int width, int height) {
+  if (CVPixelBufferGetPixelFormatType(pixelBuffer) !=
+          kCVPixelFormatType_32BGRA ||
+      CVPixelBufferIsPlanar(pixelBuffer))
+    return false;
   if (CVPixelBufferLockBaseAddress(pixelBuffer, 0) != kCVReturnSuccess)
     return false;
   auto *destination =
@@ -226,6 +248,97 @@ bool copyRawToPixelBuffer(const std::vector<uint8_t> &input,
                 sourceStride);
   CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
   return true;
+}
+
+bool copyNv12ToPixelBuffer(const std::vector<uint8_t> &input,
+                           CVPixelBufferRef pixelBuffer, int width, int height) {
+  if (CVPixelBufferGetPixelFormatType(pixelBuffer) !=
+          kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
+      !CVPixelBufferIsPlanar(pixelBuffer) ||
+      CVPixelBufferGetPlaneCount(pixelBuffer) != 2)
+    return false;
+  if (CVPixelBufferLockBaseAddress(pixelBuffer, 0) != kCVReturnSuccess)
+    return false;
+
+  const std::size_t lumaStride = static_cast<std::size_t>(width);
+  const std::size_t lumaBytes = lumaStride * static_cast<std::size_t>(height);
+  auto *lumaDestination =
+      static_cast<uint8_t *>(CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0));
+  auto *chromaDestination =
+      static_cast<uint8_t *>(CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 1));
+  const std::size_t destinationLumaStride =
+      CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0);
+  const std::size_t destinationChromaStride =
+      CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 1);
+  const std::size_t chromaHeight =
+      CVPixelBufferGetHeightOfPlane(pixelBuffer, 1);
+  bool copied = lumaDestination != nullptr && chromaDestination != nullptr &&
+                destinationLumaStride >= lumaStride &&
+                destinationChromaStride >= lumaStride &&
+                input.size() == lumaBytes + lumaStride * chromaHeight;
+  if (copied) {
+    for (int y = 0; y < height; ++y)
+      std::memcpy(lumaDestination + static_cast<std::size_t>(y) *
+                                        destinationLumaStride,
+                  input.data() + static_cast<std::size_t>(y) * lumaStride,
+                  lumaStride);
+    const uint8_t *chromaSource = input.data() + lumaBytes;
+    for (std::size_t y = 0; y < chromaHeight; ++y)
+      std::memcpy(chromaDestination + y * destinationChromaStride,
+                  chromaSource + y * lumaStride, lumaStride);
+  }
+  CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
+  return copied;
+}
+
+bool copyRawToPixelBuffer(const std::vector<uint8_t> &input,
+                          CVPixelBufferRef pixelBuffer, const Options &options) {
+  if (options.inputPixelFormat == InputPixelFormat::Nv12VideoRange)
+    return copyNv12ToPixelBuffer(input, pixelBuffer, options.width,
+                                 options.height);
+  return copyBgraToPixelBuffer(input, pixelBuffer, options.width,
+                               options.height);
+}
+
+std::size_t rawFrameBytes(const Options &options) {
+  const std::size_t pixelCount =
+      static_cast<std::size_t>(options.width) *
+      static_cast<std::size_t>(options.height);
+  if (options.inputPixelFormat == InputPixelFormat::Nv12VideoRange)
+    return pixelCount + pixelCount / 2u;
+  return pixelCount * 4u;
+}
+
+void fillCheckPattern(std::vector<uint8_t> &input, const Options &options) {
+  if (options.inputPixelFormat == InputPixelFormat::Nv12VideoRange) {
+    const std::size_t lumaBytes =
+        static_cast<std::size_t>(options.width) * options.height;
+    for (int y = 0; y < options.height; ++y) {
+      for (int x = 0; x < options.width; ++x) {
+        input[static_cast<std::size_t>(y) * options.width + x] =
+            static_cast<uint8_t>(16 + ((x + y) % 220));
+      }
+    }
+    for (int y = 0; y < options.height / 2; ++y) {
+      for (int x = 0; x < options.width; x += 2) {
+        const std::size_t offset =
+            lumaBytes + static_cast<std::size_t>(y) * options.width + x;
+        input[offset] = static_cast<uint8_t>(96 + ((x / 2) % 64));
+        input[offset + 1] = static_cast<uint8_t>(96 + (y % 64));
+      }
+    }
+    return;
+  }
+  for (int y = 0; y < options.height; ++y) {
+    for (int x = 0; x < options.width; ++x) {
+      const std::size_t offset =
+          (static_cast<std::size_t>(y) * options.width + x) * 4u;
+      input[offset + 0] = static_cast<uint8_t>((x + y) & 255);
+      input[offset + 1] = static_cast<uint8_t>((y * 3) & 255);
+      input[offset + 2] = static_cast<uint8_t>((x * 5) & 255);
+      input[offset + 3] = 255;
+    }
+  }
 }
 
 bool writePixelBuffer(CVPixelBufferRef pixelBuffer, int width, int height) {
@@ -296,6 +409,15 @@ void writeStats(const Options &options,
          << "  \"codec\": \"" << glic::codecGlitchCodecName(options.codec)
          << "\",\n"
          << "  \"codec_backend\": \"videotoolbox\",\n"
+         << "  \"input_pixel_format\": \""
+         << (options.inputPixelFormat == InputPixelFormat::Nv12VideoRange
+                 ? "nv12_420v"
+                 : "bgra")
+         << "\",\n"
+         << "  \"direct_420v_input\": "
+         << jsonBool(options.inputPixelFormat ==
+                     InputPixelFormat::Nv12VideoRange)
+         << ",\n"
          << "  \"pixel_path\": \""
          << (statistics.nv12MetalFastPath ? "nv12_metal"
                                           : "bgra_compatibility")
@@ -427,8 +549,12 @@ int main(int argc, const char *argv[]) {
       }
       engine->setControls(options.controls);
 
+      const OSType inputPixelFormat =
+          options.inputPixelFormat == InputPixelFormat::Nv12VideoRange
+              ? kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+              : kCVPixelFormatType_32BGRA;
       NSDictionary *attributes = @{
-        (id)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
+        (id)kCVPixelBufferPixelFormatTypeKey : @(inputPixelFormat),
         (id)kCVPixelBufferWidthKey : @(options.width),
         (id)kCVPixelBufferHeightKey : @(options.height),
         (id)kCVPixelBufferBytesPerRowAlignmentKey : @64,
@@ -453,28 +579,16 @@ int main(int argc, const char *argv[]) {
             outputState->condition.notify_one();
           });
 
-      const std::size_t frameBytes =
-          static_cast<std::size_t>(options.width) * options.height * 4u;
-      std::vector<uint8_t> input(frameBytes);
+      std::vector<uint8_t> input(rawFrameBytes(options));
       if (options.checkOnly) {
-        for (int y = 0; y < options.height; ++y) {
-          for (int x = 0; x < options.width; ++x) {
-            const std::size_t offset =
-                (static_cast<std::size_t>(y) * options.width + x) * 4u;
-            input[offset + 0] = static_cast<uint8_t>((x + y) & 255);
-            input[offset + 1] = static_cast<uint8_t>((y * 3) & 255);
-            input[offset + 2] = static_cast<uint8_t>((x * 5) & 255);
-            input[offset + 3] = 255;
-          }
-        }
+        fillCheckPattern(input, options);
         CVPixelBufferRef probe = nullptr;
         const bool allocated =
             CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool,
                                                &probe) == kCVReturnSuccess &&
             probe != nullptr;
         if (!allocated ||
-            !copyRawToPixelBuffer(input, probe, options.width,
-                                  options.height) ||
+            !copyRawToPixelBuffer(input, probe, options) ||
             !engine->submit(probe, 0, CMTimeMake(0, options.framesPerSecond),
                             error)) {
           if (probe != nullptr)
@@ -531,8 +645,7 @@ int main(int argc, const char *argv[]) {
         CVPixelBufferRef pixelBuffer = nullptr;
         if (CVPixelBufferPoolCreatePixelBuffer(
                 kCFAllocatorDefault, pool, &pixelBuffer) != kCVReturnSuccess ||
-            !copyRawToPixelBuffer(input, pixelBuffer, options.width,
-                                  options.height)) {
+            !copyRawToPixelBuffer(input, pixelBuffer, options)) {
           if (pixelBuffer != nullptr)
             CFRelease(pixelBuffer);
           std::cerr << "error: input pixel-buffer allocation/copy failed\n";
@@ -577,9 +690,16 @@ int main(int argc, const char *argv[]) {
                    frame->repeatedPreviousFrame)
             ++fallbackFrames;
         } else {
-          ioSucceeded = writeExact(STDOUT_FILENO, input.data(), input.size());
-          ++fallbackFrames;
-          latencies.push_back(650.0);
+          if (options.inputPixelFormat == InputPixelFormat::Bgra) {
+            ioSucceeded =
+                writeExact(STDOUT_FILENO, input.data(), input.size());
+            ++fallbackFrames;
+            latencies.push_back(650.0);
+          } else {
+            std::cerr
+                << "error: codec output timed out for direct NV12 input\n";
+            ioSucceeded = false;
+          }
         }
         ++frameIndex;
       }
