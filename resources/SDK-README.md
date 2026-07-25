@@ -34,16 +34,23 @@ the separate syntax/analysis workflows. Their exit status and JSON report are
 the completion contract; do not call them from a capture or render callback.
 `Tools/process_native_syntax_glitch.py` provides true MPEG-2 MV/qDCT/qscale
 and MPEG-4 Part 2 MV transplication through a separately installed FFglitch
-`ffedit`. It also provides four HEVC MVD and four quantized-coefficient
-effects through the separately built pinned x265 4.2 late-entropy hook.
-`Tools/build_x265_glitch_reference.py` builds and verifies that external GPL
-CLI; stock x265 remains an analysis-load motion fallback. The HEVC source is
-re-encoded, so this is not existing-bitstream CABAC transplication.
+`ffedit`. It provides four MVD and four quantized-coefficient effects for
+H.264 CABAC/CAVLC through pinned x264, and for HEVC through pinned x265 4.2.
+`Tools/build_x264_glitch_reference.py` and
+`Tools/build_x265_glitch_reference.py` build and verify that external GPL
+CLI pair; stock x265 remains an analysis-load motion fallback. These encoder
+lanes re-encode their normalized source.
+`Tools/build_ffmpeg_hevc_glitch_reference.py` builds a separate pinned
+LGPL FFmpeg decoder hook. With `--codec hevc --source-mode preserve`, it reads
+an existing HEVC stream without source re-encoding or bitstream modification
+and changes parsed MVD/coefficient values. Its output is a mutated decoder
+reconstruction, never a mutated HEVC bitstream.
 `Tools/evaluate_native_syntax_glitches.py` renders and
 diversity-ranks all supported variants using actual-video metrics.
 `Tools/install_ffglitch_reference.py` installs the checksum-pinned Apple
 Silicon reference build into a cache; FFglitch is not bundled with this SDK.
-H.264 CAVLC/CABAC editing fails closed.
+None of the generated x264/x265/FFmpeg hook binaries are bundled with this SDK;
+the builders, patches, hook source, and verification contracts are bundled.
 Structured NAL/OBU, transport, and metadata workflows have dedicated Tools
 entrypoints. See `Documentation/GLITCH_EXPANSION.md` for the complete catalog,
 implementation-level labels, and actual-video validation.

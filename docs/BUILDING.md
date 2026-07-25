@@ -35,6 +35,19 @@ keeps the result in the ignored cache. GLIC Metal does not link or bundle
 x265. A stock x265 4.2 CLI can still run the weaker analysis-load fallback for
 the four motion effects.
 
+H.264 CABAC/CAVLC and existing-HEVC decoder-side syntax hooks use two more
+separate pinned executables:
+
+```bash
+python3 scripts/build_x264_glitch_reference.py
+python3 scripts/build_ffmpeg_hevc_glitch_reference.py
+```
+
+The x264 CLI is GPL-2.0-or-later. The minimal FFmpeg 8.0.1 CLI uses its
+LGPL-2.1-or-later configuration. Neither generated binary is linked into GLIC
+Metal or bundled in the SDK. The SDK carries the builders, patches, source
+hooks, and hash-verification contract.
+
 ## Clone and build
 
 ```bash

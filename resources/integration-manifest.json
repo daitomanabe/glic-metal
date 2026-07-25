@@ -198,7 +198,7 @@
       "realtime_claim": false
     },
     "native_compressed_syntax_lab": {
-      "execution": "offline_external_transplication_and_native_encoder_hook",
+      "execution": "offline_external_transplication_encoder_and_decoder_hooks",
       "entrypoint": "scripts/process_native_syntax_glitch.py",
       "sdk_entrypoint": "Tools/process_native_syntax_glitch.py",
       "helper": "scripts/native_syntax_glitch.py",
@@ -207,17 +207,23 @@
       "sdk_hevc_helper": "Tools/x265_analysis_glitch.py",
       "hevc_entropy_builder": "scripts/build_x265_glitch_reference.py",
       "sdk_hevc_entropy_builder": "Tools/build_x265_glitch_reference.py",
+      "h264_entropy_builder": "scripts/build_x264_glitch_reference.py",
+      "sdk_h264_entropy_builder": "Tools/build_x264_glitch_reference.py",
+      "hevc_decoder_builder": "scripts/build_ffmpeg_hevc_glitch_reference.py",
+      "sdk_hevc_decoder_builder": "Tools/build_ffmpeg_hevc_glitch_reference.py",
       "installer": "scripts/install_ffglitch_reference.py",
       "sdk_installer": "Tools/install_ffglitch_reference.py",
       "ranking_entrypoint": "scripts/evaluate_native_syntax_glitches.py",
       "sdk_ranking_entrypoint": "Tools/evaluate_native_syntax_glitches.py",
       "catalog": "resources/codec-lab-effects.json",
       "effect_count": 12,
-      "codec_effect_variant_count": 24,
-      "codecs": ["mpeg2", "mpeg4_part2", "hevc"],
-      "containers": ["avi", "raw_hevc", "mp4_preview"],
+      "codec_effect_variant_count": 48,
+      "codecs": ["mpeg2", "mpeg4_part2", "h264", "hevc"],
+      "containers": ["avi", "raw_h264", "raw_hevc", "mp4_preview"],
       "dependencies": [
         "external_FFglitch_ffedit_0.10.2_GPL-2.0-or-later",
+        "external_pinned_x264_0480cb0_with_GPL_late_entropy_hook",
+        "external_pinned_FFmpeg_8.0.1_with_LGPL_HEVC_decoder_hook",
         "external_pinned_x265_e444744_with_GPL_late_entropy_hook"
       ],
       "persistent_evidence": [
@@ -228,6 +234,12 @@
         "x265_mutated_analysis_load_binary",
         "x265_late_entropy_hook_configuration",
         "x265_late_entropy_hook_log",
+        "x264_late_entropy_hook_configuration",
+        "x264_late_entropy_hook_log",
+        "ffmpeg_hevc_decoder_hook_configuration",
+        "ffmpeg_hevc_decoder_hook_log",
+        "clean_decoder_reconstruction",
+        "mutated_decoder_reconstruction",
         "damaged_bitstream",
         "salvaged_intermediate",
         "ffedit_logs",
@@ -237,8 +249,9 @@
         "actual_video_difference_ranking"
       ],
       "token_free_ranking": true,
-      "h264_direct_support": "not_implemented_fail_closed",
-      "hevc_direct_support": "x265_4_2_late_entropy_mvd_and_quantized_coefficient_hook",
+      "h264_direct_support": "x264_pinned_cabac_cavlc_mvd_and_quantized_coefficient_hook",
+      "hevc_direct_support": "x265_encoder_hook_and_ffmpeg_existing_bitstream_decoder_parsed_syntax_hook",
+      "existing_hevc_output_contract": "mutated_decoder_reconstruction_not_mutated_hevc_bitstream",
       "realtime_claim": false
     },
     "analysis_and_evolutionary_lab": {
@@ -338,7 +351,8 @@
     "do_not_run_offline_packet_glitches_inside_realtime_callbacks",
     "do_not_decode_damaged_bitstreams_in_the_host_process",
     "do_not_claim_decoded_reconstruction_proxies_are_native_codec_syntax_hooks",
-    "do_not_route_direct_h264_or_hevc_entropy_edits_to_the_mpeg2_ffglitch_lane",
+    "require_verified_sidecars_for_x264_x265_and_ffmpeg_syntax_hooks",
+    "do_not_claim_hevc_decoder_hook_output_is_a_mutated_hevc_bitstream",
     "do_not_substitute_av1_for_av2_when_avm_is_unavailable",
     "do_not_claim_pixel_exact_equivalence_with_processing_glic"
   ],

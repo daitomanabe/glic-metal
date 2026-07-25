@@ -107,3 +107,35 @@ x265 Copyright (c) 2013-2025 MulticoreWare, Inc. and x265 contributors.
 The builder retains the complete upstream source and license in its cache.
 The hook source carries the same GPL-2.0-or-later license because it is
 compiled into that external executable.
+
+## x264
+
+The optional H.264 late-entropy workflow builds
+[x264](https://code.videolan.org/videolan/x264) from pinned commit
+`0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee` and applies the separately
+distributed GLIC CABAC/CAVLC MVD/coefficient hook. The resulting CLI is an
+external GPL-2.0-or-later executable. It is cached locally and is not included
+in this repository, linked into the MIT-licensed GLIC Metal library, or
+bundled in the SDK.
+
+x264 is Copyright (c) 2003-2025 x264 project contributors.
+
+The builder retains the complete upstream source and license in its cache.
+The hook source is GPL-2.0-or-later because it is compiled into that external
+executable.
+
+## FFmpeg HEVC decoder hook
+
+The optional existing-HEVC workflow builds
+[FFmpeg](https://github.com/FFmpeg/FFmpeg) 8.0.1 from pinned commit
+`894da5ca7d742e4429ffb2af534fcda0103ef593` and applies the separately
+distributed GLIC decoder-side MVD/coefficient hook. The minimal external CLI
+uses FFmpeg's LGPL-2.1-or-later configuration. It is cached locally and is not
+included in this repository, linked into the MIT-licensed GLIC Metal library,
+or bundled in the SDK.
+
+FFmpeg is Copyright (c) 2000-2025 the FFmpeg developers.
+
+The builder retains the complete upstream source and license in its cache.
+The hook changes parsed HEVC syntax during reconstruction; it does not modify
+or emit an HEVC bitstream.

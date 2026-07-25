@@ -11,7 +11,7 @@ GLIC Metalはcodec系グリッチを、次の安全境界へ分けます。
 | Realtime Codec Glitch | 36 | VideoToolbox clean encode/decode + GPU再構成 | 960×540・20fps gate |
 | Offline Packet Lab | 8 | FFmpeg bitstream filter + 隔離救済decode | 非対応 |
 | Offline Syntax / Analysis Lab | 21 | 実codec cycle + 復号再構成・解析・探索 | 非対応 |
-| Native Compressed Syntax Lab | 12 / 24 variants | FFglitch MPEG-2 `mv` / `q_dct` / `qscale`、MPEG-4 Part 2 `mv`、x265 HEVC MVD / 量子化係数hook | 非対応 |
+| Native Compressed Syntax Lab | 12 / 48 variants | FFglitch MPEG、x264 H.264 CABAC/CAVLC、x265 HEVC encoder、FFmpeg既存HEVC decoder syntax hook | 非対応 |
 | Structured / Transport / Metadata | 11 | NAL/OBU、TS/HLS/RTP model、VUI/SEI | 非対応 |
 
 ### Realtime Crossbreed
@@ -82,7 +82,9 @@ MPEG-4 Part 2/AVIの`mv`をFFglitch `ffedit`でexportし、値を直接変更し
 entropy syntaxへtransplicateします。既存Syntax Labのdecoded reconstruction
 proxyとは別workflowです。HEVCの4 MVD effectと4量子化係数effectは、pinned
 x265 4.2の最終CABAC出力直前へ注入します。通常x265はMV analysis-load
-fallbackとして利用できます。
+fallbackとして利用できます。H.264の同じ8 effectはpinned x264のCABAC/CAVLC
+出力へ注入します。既存HEVCはpinned FFmpeg decoder hookでsourceを再encodeせず
+parsed MVD/係数へ作用できます。
 
 ```bash
 FFEDIT="$(python3 scripts/install_ffglitch_reference.py --print-ffedit)"
@@ -92,10 +94,11 @@ python3 scripts/process_native_syntax_glitch.py input.mov output.mp4 \
 ```
 
 source/damaged bitstream、変更前後syntax JSON、SHA-256、probe、log、救済decodeを
-保持します。HEVC経路はsourceを再encodeし、既存bitstreamのCABACをtransplicate
-しません。H.264 direct syntaxと既存HEVC CABAC transplicationはfail-closedします。
+保持します。x264/x265 encoder経路はsourceを再encodeします。既存HEVC decoder
+経路はsourceを変更しませんが、変異HEVC bitstreamではなく変異reconstructionを
+出力します。
 詳細は[NATIVE_SYNTAX_GLITCH.md](NATIVE_SYNTAX_GLITCH.md)を参照してください。
-`evaluate_native_syntax_glitches.py`は24 codec-effect variantを一括処理し、実動画
+`evaluate_native_syntax_glitches.py`は48 default variantを一括処理し、実動画
 差分と非類似性をtoken-freeでrankingします。
 
 ### Semantic / Analysis Lab
@@ -160,10 +163,12 @@ not as a native bitstream syntax hook. The separate Native Compressed Syntax
 Lab uses FFglitch transplication to edit MPEG-2 encoded motion vectors and
 quantized DCT coefficients or quantizer scales directly, and supports the four
 MV effects on MPEG-4 Part 2. It also injects four HEVC MVD and four quantized-
-coefficient effects through a pinned x265 4.2 late-entropy hook. Its token-free
-batch evaluator ranks all 24 codec-effect variants using actual-video
-difference and diversity. H.264 direct syntax and existing-bitstream HEVC
-CABAC transplication fail closed. AV2 processing uses the pinned
+coefficient effects through a pinned x265 4.2 late-entropy hook. The same
+eight effects are available for H.264 CABAC/CAVLC through pinned x264.
+Existing HEVC can use a pinned FFmpeg decoder hook without source re-encoding;
+that lane emits a mutated reconstruction, not a mutated HEVC bitstream. Its
+token-free batch evaluator ranks all 48 default variants using actual-video
+difference and diversity. AV2 processing uses the pinned
 official AVM tools and fails closed when unavailable.
 
 The evolutionary search is deterministic, resumable, and token-free. It

@@ -29,11 +29,14 @@ semantic versioning for tagged releases.
   Stock x265 retains an analysis-load fallback for HEVC motion. It uses
   checksum-pinned external FFglitch 0.10.2 transplication for MPEG, retains
   before/after syntax and bitstream evidence, supports preserved AVI input,
-  and fails closed for H.264 syntax and existing-bitstream HEVC CABAC
-  transplication.
+  adds all eight MVD/coefficient effects for both H.264 CABAC and CAVLC through
+  pinned x264, and adds a pinned FFmpeg decoder hook that acts on parsed
+  MVD/coefficient values from an existing HEVC stream without re-encoding or
+  modifying that source. The decoder hook intentionally emits a mutated
+  reconstruction rather than a mutated HEVC bitstream.
 - A token-free native-syntax batch evaluator with resumable rendering,
   actual-video difference metrics, decode-survival checks, and deterministic
-  quality/diversity ranking across all 24 codec-effect variants.
+  quality/diversity ranking across all 48 default codec/lane variants.
 - Eight decoded-history/CoreImage-Metal realtime effects with an implementation
   level API and 960x540 actual-video performance/difference/technical-QA
   evidence.

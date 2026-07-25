@@ -66,7 +66,15 @@ foreach(tool IN ITEMS
     process_native_syntax_glitch.py
     native_syntax_glitch.py
     x265_analysis_glitch.py
+    build_ffmpeg_hevc_glitch_reference.py
+    build_x264_glitch_reference.py
     build_x265_glitch_reference.py
+    ffmpeg-8.0.1-hevc-glic-decoder-hooks.patch
+    ffmpeg_hevc_glic_decoder_hook.h
+    ffmpeg_hevc_glic_decoder_hook.c
+    x264-0480cb0-glic-entropy-hooks.patch
+    x264_glic_entropy_hook.h
+    x264_glic_entropy_hook.c
     x265-4.2-glic-entropy-hooks.patch
     x265_glic_entropy_hook.h
     evaluate_native_syntax_glitches.py

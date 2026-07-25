@@ -229,8 +229,9 @@ subprocessとして起動し、`resources/offline-codec-effects.json`で対応co
 異なるframe数のpreview比較には`scripts/evaluate_offline_packet_glitches.py`を使います。
 詳細は`docs/OFFLINE_PACKET_GLITCH.md`を参照してください。
 
-Syntax/解析系21 workflow、MPEG-2/MPEG-4 Part 2圧縮syntax直接編集と
-HEVC native encoder MVD/量子化係数注入を合わせた12 effect・24 codec-effect variant、
+Syntax/解析系21 workflow、MPEG-2/MPEG-4 Part 2圧縮syntax直接編集、H.264
+CABAC/CAVLC、HEVC encoder/既存stream decoder hookを合わせた12 effect・
+48 codec/lane variant、
 structured/transport/metadata系11 operationも
 リアルタイムC ABIへ混在させません。
 `scripts/process_codec_lab.py`、`scripts/process_native_syntax_glitch.py`、
@@ -238,10 +239,21 @@ structured/transport/metadata系11 operationも
 `scripts/evolutionary_codec_search.py`をfile単位で実行し、
 `implementation_level`を必ず確認します。decoded reconstruction proxyを
 native codec syntax hookとして表示してはいけません。FFglitch transplicationは
-catalogにあるMPEG-2/MPEG-4 Part 2対応だけを許可します。HEVC MVD/量子化係数は
-pinned x265 4.2のlate-entropy hookとしてsourceを再encodeし、H.264 direct
-syntaxと既存HEVC bitstream CABAC transplicationはfail-closedします。正規一覧は
+catalogにあるMPEG-2/MPEG-4 Part 2対応だけを許可します。H.264/HEVC encoder
+hookはpinned x264/x265としてsourceを再encodeします。既存HEVC decoder hookは
+sourceを再encode・変更せずparsed MVD/係数へ作用しますが、変異HEVC bitstreamを
+出力しません。正規一覧は
 `resources/codec-lab-effects.json`、詳細は`docs/CODEC_LAB.md`です。
+
+AI agentはnative syntax toolを組み込む前に同梱
+`resources/integration-manifest.json`の
+`offline_workflows.native_compressed_syntax_lab`を読みます。H.264は
+`Tools/build_x264_glitch_reference.py`、HEVC encoderは
+`Tools/build_x265_glitch_reference.py`、既存HEVC decoderは
+`Tools/build_ffmpeg_hevc_glitch_reference.py`で外部binaryを作り、sidecarと
+binary SHAが一致しない実行ファイルを拒否します。既存HEVC reportでは
+`source_reencoded == false`、`source_bitstream_modified == false`、
+`output_is_mutated_hevc_bitstream == false`を同時に検証します。
 
 ### リソースパス
 
@@ -370,10 +382,21 @@ Read `codec-lab-effects.json`; launch `process_codec_lab.py`,
 process; and retain the declared
 `implementation_level`. Never present a decoded reconstruction proxy as a
 native bitstream syntax hook. See `docs/CODEC_LAB.md`.
-The direct compressed-syntax lane is limited to catalogued MPEG-2
+The direct compressed-syntax lane includes catalogued MPEG-2
 `mv`/`q_dct`/`qscale` and MPEG-4 Part 2 `mv` transplication through external
-FFglitch, plus four HEVC MVD and four quantized-coefficient effects through
-the pinned external x265 4.2 late-entropy hook. H.264 direct syntax and
-existing-bitstream HEVC CABAC transplication must fail closed. Use the
+FFglitch, eight H.264 effects in CABAC and CAVLC through pinned x264, and
+eight HEVC effects through pinned x265. The existing-HEVC decoder hook acts on
+parsed CABAC MVD/coefficient values without source re-encoding, but emits a
+mutated reconstruction rather than a mutated HEVC stream. Use the
 token-free evaluator for actual-video difference and diversity ranking across
-all 24 variants.
+all 48 default variants.
+
+Before integrating this lane, an agent must read
+`offline_workflows.native_compressed_syntax_lab` from the packaged
+`integration-manifest.json`. Build external binaries with
+`Tools/build_x264_glitch_reference.py`,
+`Tools/build_x265_glitch_reference.py`, and
+`Tools/build_ffmpeg_hevc_glitch_reference.py`; reject a binary whose sidecar
+or SHA does not verify. For existing HEVC, require all three report fields:
+`source_reencoded == false`, `source_bitstream_modified == false`, and
+`output_is_mutated_hevc_bitstream == false`.

@@ -119,13 +119,14 @@
   },
   "native_compressed_syntax_lab": {
     "entrypoint": "scripts/process_native_syntax_glitch.py",
-    "execution_class": "offline_external_transplication_and_native_encoder_hook",
+    "execution_class": "offline_external_transplication_encoder_and_decoder_hooks",
     "realtime_certified": false,
-    "codecs": ["mpeg2", "mpeg4_part2", "hevc"],
+    "codecs": ["mpeg2", "mpeg4_part2", "h264", "hevc"],
     "containers": {
       "mpeg2": "avi",
       "mpeg4_part2": "avi",
-      "hevc": "raw_hevc_with_mp4_preview"
+      "h264": "raw_h264_with_mp4_preview",
+      "hevc": "raw_hevc_or_existing_hevc_with_mp4_preview"
     },
     "dependency": {
       "name": "FFglitch ffedit",
@@ -142,11 +143,29 @@
       "license": "GPL-2.0-or-later",
       "fallback": "stock_x265_4.2_analysis_load_for_motion_only"
     },
+    "h264_dependency": {
+      "name": "pinned GLIC x264 CABAC/CAVLC late-entropy CLI",
+      "required_commit": "0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee",
+      "bundled": false,
+      "builder": "scripts/build_x264_glitch_reference.py",
+      "license": "GPL-2.0-or-later",
+      "entropy_modes": ["cabac", "cavlc"]
+    },
+    "hevc_decoder_dependency": {
+      "name": "pinned GLIC FFmpeg HEVC decoder-syntax CLI",
+      "required_commit": "894da5ca7d742e4429ffb2af534fcda0103ef593",
+      "bundled": false,
+      "builder": "scripts/build_ffmpeg_hevc_glitch_reference.py",
+      "license": "LGPL-2.1-or-later",
+      "source_reencoded": false,
+      "source_bitstream_modified": false,
+      "output_is_mutated_hevc_bitstream": false
+    },
     "may_produce_invalid_bitstream": false,
     "decoded_pixels_modified_before_transplication": false,
     "decoded_pixels_modified_before_entropy_coding": false,
-    "h264_direct_support": "not_implemented_fail_closed",
-    "hevc_direct_support": "x265_4_2_late_entropy_mvd_and_quantized_coefficient_hook",
+    "h264_direct_support": "x264_pinned_cabac_cavlc_mvd_and_quantized_coefficient_hook",
+    "hevc_direct_support": "x265_encoder_hook_and_ffmpeg_existing_bitstream_decoder_parsed_syntax_hook",
     "effect_names": [
       "compressed_motion_vector_vortex",
       "compressed_motion_vector_mirror",
@@ -182,6 +201,16 @@
         "compressed_motion_vector_quantizer",
         "compressed_motion_vector_freeze"
       ],
+      "h264": [
+        "compressed_motion_vector_vortex",
+        "compressed_motion_vector_mirror",
+        "compressed_motion_vector_quantizer",
+        "compressed_motion_vector_freeze",
+        "compressed_coefficient_sign_flip",
+        "compressed_coefficient_band_gate",
+        "compressed_coefficient_transplant",
+        "compressed_coefficient_scan_fold"
+      ],
       "hevc": [
         "compressed_motion_vector_vortex",
         "compressed_motion_vector_mirror",
@@ -216,13 +245,26 @@
       "mpeg4_part2": {
         "motion": "native_mpeg4_part2_ffglitch_motion_vector_entropy_transplication"
       },
+      "h264": {
+        "motion": "native_h264_x264_mvd_late_entropy_injection",
+        "coefficient": "native_h264_x264_quantized_coefficient_late_entropy_injection",
+        "entropy_modes": ["cabac", "cavlc"],
+        "existing_bitstream_transplication": false,
+        "native_encoder_hook": true,
+        "encoder_reconstruction_mismatch_intentional": true
+      },
       "hevc": {
         "motion": "native_hevc_x265_cabac_mvd_late_entropy_injection",
         "coefficient": "native_hevc_x265_cabac_quantized_coefficient_late_entropy_injection",
         "stock_x265_motion_fallback": "native_hevc_x265_analysis_motion_vector_injection_before_cabac",
         "existing_bitstream_transplication": false,
         "native_encoder_hook": true,
-        "encoder_reconstruction_mismatch_intentional": true
+        "encoder_reconstruction_mismatch_intentional": true,
+        "existing_bitstream_decoder_motion": "native_hevc_ffmpeg_decoder_parsed_cabac_mvd_injection",
+        "existing_bitstream_decoder_coefficient": "native_hevc_ffmpeg_decoder_parsed_cabac_quantized_coefficient_injection",
+        "existing_bitstream_decoder_source_reencoded": false,
+        "existing_bitstream_decoder_source_modified": false,
+        "existing_bitstream_decoder_emits_mutated_hevc_bitstream": false
       }
     },
     "ranking_entrypoint": "scripts/evaluate_native_syntax_glitches.py",

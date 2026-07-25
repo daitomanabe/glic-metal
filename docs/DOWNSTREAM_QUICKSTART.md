@@ -63,6 +63,20 @@ FFEDIT="$(python3 GlicMetalSDK/Tools/install_ffglitch_reference.py \
 python3 GlicMetalSDK/Tools/process_native_syntax_glitch.py input.mov direct.mp4 \
   --effect compressed_motion_vector_vortex --ffedit "$FFEDIT"
 
+X264_GLIC="$(python3 GlicMetalSDK/Tools/build_x264_glitch_reference.py \
+  --print-x264)"
+FFMPEG_HEVC_GLIC="$(
+  python3 GlicMetalSDK/Tools/build_ffmpeg_hevc_glitch_reference.py \
+    --print-ffmpeg
+)"
+python3 GlicMetalSDK/Tools/process_native_syntax_glitch.py input.mov h264.mp4 \
+  --codec h264 --h264-entropy cabac \
+  --effect compressed_coefficient_sign_flip --x264 "$X264_GLIC"
+python3 GlicMetalSDK/Tools/process_native_syntax_glitch.py existing-hevc.mov \
+  hevc-decoder.mp4 --codec hevc --source-mode preserve \
+  --effect compressed_motion_vector_vortex \
+  --ffmpeg-hevc-decoder "$FFMPEG_HEVC_GLIC"
+
 python3 GlicMetalSDK/Tools/evaluate_native_syntax_glitches.py input.mov \
   --output-dir search-runs/native-syntax --codec all --ffedit "$FFEDIT"
 
@@ -137,6 +151,20 @@ FFEDIT="$(python3 GlicMetalSDK/Tools/install_ffglitch_reference.py \
 python3 GlicMetalSDK/Tools/process_native_syntax_glitch.py input.mov direct.mp4 \
   --effect compressed_coefficient_sign_flip --amount 1.0 --ffedit "$FFEDIT"
 
+X264_GLIC="$(python3 GlicMetalSDK/Tools/build_x264_glitch_reference.py \
+  --print-x264)"
+FFMPEG_HEVC_GLIC="$(
+  python3 GlicMetalSDK/Tools/build_ffmpeg_hevc_glitch_reference.py \
+    --print-ffmpeg
+)"
+python3 GlicMetalSDK/Tools/process_native_syntax_glitch.py input.mov h264.mp4 \
+  --codec h264 --h264-entropy cavlc \
+  --effect compressed_motion_vector_mirror --x264 "$X264_GLIC"
+python3 GlicMetalSDK/Tools/process_native_syntax_glitch.py existing-hevc.mov \
+  hevc-decoder.mp4 --codec hevc --source-mode preserve \
+  --effect compressed_coefficient_scan_fold \
+  --ffmpeg-hevc-decoder "$FFMPEG_HEVC_GLIC"
+
 python3 GlicMetalSDK/Tools/evaluate_native_syntax_glitches.py input.mov \
   --output-dir search-runs/native-syntax --codec all --ffedit "$FFEDIT"
 
@@ -152,10 +180,11 @@ exit status and JSON report as the completion contract.
 
 The direct compressed-syntax tool supports catalogued MPEG-2 MV/qDCT/qscale
 and MPEG-4 Part 2 MV operations and invokes the separately installed GPL
-FFglitch executable. Four HEVC MVD and four quantized-coefficient operations
-use the separately built pinned x265 4.2 late-entropy hook and re-encode the
-source. H.264 direct requests and existing-bitstream CABAC transplication fail
-closed. The adjacent
+FFglitch executable. H.264 CABAC/CAVLC and HEVC encoder operations use the
+separately built pinned x264/x265 hooks and re-encode the normalized source.
+The pinned FFmpeg HEVC decoder hook accepts an existing HEVC stream without
+source re-encoding or modification, and emits a mutated reconstruction rather
+than a mutated HEVC bitstream. The adjacent
 batch evaluator provides resumable, token-free actual-video difference and
 diversity ranking.
 Codec mode in `Tools/process_video.py` defaults to raw NV12 input and the

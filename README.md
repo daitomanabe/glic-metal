@@ -316,7 +316,8 @@ token-free自動探索は[Codec Lab](docs/CODEC_LAB.md)へ分離しています�
 12 effectと、MPEG-4 Part 2の圧縮MVを直接変更する4 variantは、独立した
 FFglitch transplication経路です。HEVCでは同じ4種類のMV effectを、x265 4.2の
 late-entropy MVD hookとして実装し、さらに4種類の量子化係数effectもCABAC出力
-直前へ注入します。通常x265ではMVだけanalysis-save/loadへfallbackします。
+直前へ注入します。H.264では同じ8 effectをpinned x264のCABAC/CAVLC出力へ
+注入します。通常x265ではMVだけanalysis-save/loadへfallbackします。
 
 ```bash
 FFEDIT="$(python3 scripts/install_ffglitch_reference.py --print-ffedit)"
@@ -327,13 +328,18 @@ X265_GLIC="$(python3 scripts/build_x265_glitch_reference.py --print-x265)"
 python3 scripts/process_native_syntax_glitch.py input.mov hevc-direct.mp4 \
   --codec hevc --effect compressed_coefficient_sign_flip \
   --x265 "$X265_GLIC" --hevc-hook entropy
+
+X264_GLIC="$(python3 scripts/build_x264_glitch_reference.py --print-x264)"
+python3 scripts/process_native_syntax_glitch.py input.mov h264-direct.mp4 \
+  --codec h264 --h264-entropy cavlc \
+  --effect compressed_motion_vector_mirror --x264 "$X264_GLIC"
 ```
 
-H.264 CAVLC/CABACのMV・係数編集は未実装でfail-closedします。HEVCはMVDと
-量子化係数のencoder-hook注入に対応しますが、既存bitstreamのCABAC
-transplicationではなくsourceを再encodeします。詳細と証跡契約は
+既存HEVCはpinned FFmpeg decoder hookにより、sourceを再encode・変更せず
+parsed MVD／量子化係数へ作用できます。これは変異decoder reconstructionを
+出力し、変異HEVC bitstreamを出力しません。詳細と証跡契約は
 [Native Compressed Syntax Glitch](docs/NATIVE_SYNTAX_GLITCH.md)を参照してください。
-全24 codec-effect variantの実動画差分と非類似性rankingは次で自動生成できます。
+全48 default variantの実動画差分と非類似性rankingは次で自動生成できます。
 
 ```bash
 python3 scripts/evaluate_native_syntax_glitches.py input.mov \
@@ -976,9 +982,10 @@ a separate offline process with retained syntax JSON and before/after
 bitstreams; it is not a decoded reconstruction proxy. HEVC adds the same four
 MV effects plus four quantized-coefficient effects through a pinned x265 4.2
 late-entropy hook. A token-free batch tool ranks actual-video difference and
-diversity across all 24 variants. H.264 CAVLC/CABAC editing remains
-fail-closed; HEVC re-encodes the source and does not transplicate an existing
-HEVC bitstream. See
+diversity across 48 default variants. H.264 adds all eight effects in both
+CABAC and CAVLC through pinned x264. A pinned FFmpeg decoder hook acts on
+parsed syntax from existing HEVC without re-encoding or modifying the source;
+it emits a mutated reconstruction rather than a mutated HEVC stream. See
 [Native Compressed Syntax Glitch](docs/NATIVE_SYNTAX_GLITCH.md).
 
 ### Glitch difference QA

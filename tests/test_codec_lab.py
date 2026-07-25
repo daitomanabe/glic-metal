@@ -77,6 +77,9 @@ def main() -> int:
     assert set(
         catalog["native_compressed_syntax_lab"]["codec_support"]["hevc"]
     ) == set(native_syntax.MOTION_EFFECTS + native_syntax.COEFFICIENT_EFFECTS)
+    assert set(
+        catalog["native_compressed_syntax_lab"]["codec_support"]["h264"]
+    ) == set(native_syntax.MOTION_EFFECTS + native_syntax.COEFFICIENT_EFFECTS)
     assert (
         catalog["native_compressed_syntax_lab"][
             "decoded_pixels_modified_before_entropy_coding"

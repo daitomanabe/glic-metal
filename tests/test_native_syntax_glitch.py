@@ -203,7 +203,7 @@ def main() -> int:
         assert "mpeg2video" in str(error)
         assert "mpeg4" in str(error)
     else:
-        raise AssertionError("H.264 compressed-syntax mutation did not fail")
+        raise AssertionError("FFglitch JSON helper accepted unsupported H.264")
 
     print("PASS deterministic native compressed-syntax mutation helpers")
     return 0

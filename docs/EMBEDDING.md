@@ -137,11 +137,15 @@ search are also offline-only. Launch `scripts/process_codec_lab.py` or
 Direct MPEG-2 MV/qDCT/qscale and MPEG-4 Part 2 MV editing is a third offline lane. Launch
 `scripts/process_native_syntax_glitch.py` with the separately installed
 FFglitch `ffedit` executable and preserve its bitstream/syntax evidence.
-The same entrypoint supports four HEVC MVD and four quantized-coefficient
-effects through the pinned x265 4.2 late-entropy hook. Build that external GPL
-CLI with `scripts/build_x265_glitch_reference.py`. It re-encodes the source
-and does not transplicate an existing HEVC bitstream. H.264 CAVLC/CABAC
-editing fails closed. See
+The same entrypoint supports four MVD and four quantized-coefficient effects
+for H.264 CABAC/CAVLC through pinned x264 and for HEVC through pinned x265 4.2.
+Build those external GPL CLIs with `scripts/build_x264_glitch_reference.py`
+and `scripts/build_x265_glitch_reference.py`; both encoder lanes re-encode
+their normalized source. A third builder,
+`scripts/build_ffmpeg_hevc_glitch_reference.py`, creates the external LGPL
+decoder hook used by `--codec hevc --source-mode preserve`. It does not
+re-encode or modify the existing HEVC source and outputs a mutated decoder
+reconstruction, not a mutated HEVC bitstream. See
 [NATIVE_SYNTAX_GLITCH.md](NATIVE_SYNTAX_GLITCH.md).
 Use `scripts/evaluate_native_syntax_glitches.py` to render, measure, resume,
 and diversity-rank all catalogued codec-effect variants.
