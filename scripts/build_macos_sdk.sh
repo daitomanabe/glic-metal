@@ -93,6 +93,9 @@ run cmake -E copy_if_different \
 run cmake -E copy_if_different \
   "${install_dir}/lib/glic/glic_realtime.metallib" \
   "${tools_dir}/glic_realtime.metallib"
+run cmake -E copy_if_different \
+  "${install_dir}/bin/glic_process_video" \
+  "${tools_dir}/process_video.py"
 for tool in \
   process_multicodec_glitch.py \
   process_offline_packet_glitch.py \

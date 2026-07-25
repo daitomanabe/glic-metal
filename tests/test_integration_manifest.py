@@ -96,6 +96,11 @@ def main() -> int:
     }
     fast_path = lanes["codec"]["fast_path"]
     assert fast_path["direct_host_input"] == "420v_without_bgra_staging"
+    assert fast_path["video_wrapper"] == "Tools/process_video.py"
+    assert fast_path["video_wrapper_default_input"] == "nv12_420v"
+    assert fast_path["raw_filter_input_switch"].startswith(
+        "--input-pixel-format"
+    )
     assert fast_path["decoded_plane_mapping"].startswith("CVMetalTextureCache")
     assert fast_path["delivery"] == (
         "asynchronous_and_ordered_by_accepted_submission"
@@ -122,6 +127,9 @@ def main() -> int:
     assert manifest["runtime_resources"]["codec-lab-effects.json"]
     matrix = manifest["realtime_acceptance"]["codec_fast_path_matrix"]
     assert matrix["runs"] == 36 * 3 * 2 == 216
+    assert matrix["required_input_pixel_format"] == "nv12_420v"
+    assert matrix["direct_420v_input_required"] is True
+    assert matrix["report_schema"].endswith("-v2")
     assert matrix["zero_gpu_timeouts"] is True
     assert (
         manifest["offline_workflows"]["codec_syntax_lab"]["effect_count"]

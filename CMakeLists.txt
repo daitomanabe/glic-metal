@@ -583,9 +583,6 @@ if(APPLE)
     install(TARGETS glic_codec_glitch_filter RUNTIME DESTINATION bin)
     install(TARGETS glic_webcam_preview BUNDLE DESTINATION .)
 endif()
-install(PROGRAMS scripts/process_video.py
-        DESTINATION bin
-        RENAME glic_process_video)
 install(PROGRAMS scripts/run_search_supervisor.sh scripts/build_search_catalog.py
         scripts/analyze_search_images.py scripts/perceptual_image_features.py
         scripts/rank_search_results.py scripts/select_novel_moderate_presets.py
@@ -597,6 +594,9 @@ install(PROGRAMS scripts/run_search_supervisor.sh scripts/build_search_catalog.p
         scripts/build_fast_match_allowlist.py
         DESTINATION bin)
 endif()
+install(PROGRAMS scripts/process_video.py
+        DESTINATION bin
+        RENAME glic_process_video)
 if(APPLE AND NOT GLIC_BUILD_STANDALONE)
     install(TARGETS glic_codec_glitch_filter RUNTIME DESTINATION bin)
 endif()

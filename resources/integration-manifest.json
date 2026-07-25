@@ -87,6 +87,9 @@
         "encode_pixel_format": "420v",
         "direct_host_input": "420v_without_bgra_staging",
         "bgra_host_input": "metal_bgra_to_420v_conversion",
+        "video_wrapper": "Tools/process_video.py",
+        "video_wrapper_default_input": "nv12_420v",
+        "raw_filter_input_switch": "--input-pixel-format nv12|bgra",
         "decoded_plane_mapping": "CVMetalTextureCache_no_decoded_pixel_copy",
         "post_processing": "one_fused_metal_compute_dispatch_per_output",
         "delivery": "asynchronous_and_ordered_by_accepted_submission",
@@ -307,6 +310,9 @@
       "runs": 216,
       "minimum_processing_fps": 20,
       "maximum_p95_frame_milliseconds": 50,
+      "required_input_pixel_format": "nv12_420v",
+      "direct_420v_input_required": true,
+      "report_schema": "glic-videotoolbox-fast-path-validation-v2",
       "zero_gpu_timeouts": true,
       "zero_unintentional_fallback": true
     }
