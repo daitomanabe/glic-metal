@@ -136,9 +136,11 @@ search are also offline-only. Launch `scripts/process_codec_lab.py` or
 
 Direct MPEG-2 MV/qDCT/qscale and MPEG-4 Part 2 MV editing is a third offline lane. Launch
 `scripts/process_native_syntax_glitch.py` with the separately installed
-FFglitch `ffedit` executable and preserve its bitstream/syntax evidence. Do not
-route H.264 or HEVC to this lane; those direct entropy edits are not
-implemented and fail closed. See
+FFglitch `ffedit` executable and preserve its bitstream/syntax evidence.
+The same entrypoint supports four HEVC MV effects by passing x265 4.2
+analysis-save data through a native encoder hook before CABAC coding; it
+re-encodes the source and does not transplicate an existing HEVC bitstream.
+H.264 CAVLC/CABAC editing and HEVC coefficient editing fail closed. See
 [NATIVE_SYNTAX_GLITCH.md](NATIVE_SYNTAX_GLITCH.md).
 Use `scripts/evaluate_native_syntax_glitches.py` to render, measure, resume,
 and diversity-rank all catalogued codec-effect variants.

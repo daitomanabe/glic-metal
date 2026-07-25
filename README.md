@@ -314,7 +314,8 @@ motion/residual/reference、semantic/depth/audio、実multi-decoder合成、異�
 token-free自動探索は[Codec Lab](docs/CODEC_LAB.md)へ分離しています。
 さらにMPEG-2の圧縮motion vector、量子化DCT係数、quantizer scaleを直接変更する
 12 effectと、MPEG-4 Part 2の圧縮MVを直接変更する4 variantは、独立した
-FFglitch transplication経路です。
+FFglitch transplication経路です。HEVCでは同じ4種類のMV effectを、x265 4.2の
+analysis-save/loadを使うnative encoder hookとしてCABAC符号化前に注入します。
 
 ```bash
 FFEDIT="$(python3 scripts/install_ffglitch_reference.py --print-ffedit)"
@@ -322,9 +323,11 @@ python3 scripts/process_native_syntax_glitch.py input.mov direct.mp4 \
   --effect compressed_motion_vector_vortex --ffedit "$FFEDIT"
 ```
 
-H.264/HEVCのentropy field直接編集は未実装でfail-closedします。詳細と証跡契約は
+H.264 CAVLC/CABACのMV・係数編集は未実装でfail-closedします。HEVCはMVの
+encoder-hook注入のみ対応し、既存bitstreamのCABAC transplicationとtransform
+coefficient編集は未実装です。詳細と証跡契約は
 [Native Compressed Syntax Glitch](docs/NATIVE_SYNTAX_GLITCH.md)を参照してください。
-全16 variantの実動画差分と非類似性rankingは次で自動生成できます。
+全20 codec-effect variantの実動画差分と非類似性rankingは次で自動生成できます。
 
 ```bash
 python3 scripts/evaluate_native_syntax_glitches.py input.mov \
@@ -964,9 +967,12 @@ Twelve effects directly mutate MPEG-2 encoded motion vectors, quantized DCT
 coefficients, or quantizer scales through FFglitch transplication. Four
 additional codec-effect variants apply the MV family to MPEG-4 Part 2. This is
 a separate offline process with retained syntax JSON and before/after
-bitstreams; it is not a decoded reconstruction proxy. A token-free batch tool
-ranks actual-video difference and diversity across all 16 variants.
-H.264/HEVC entropy-field editing is not implemented and fails closed. See
+bitstreams; it is not a decoded reconstruction proxy. HEVC adds the same four
+MV effects through an x265 4.2 analysis-save/load encoder hook before CABAC
+coding. A token-free batch tool ranks actual-video difference and diversity
+across all 20 variants. H.264 CAVLC/CABAC editing remains fail-closed; HEVC
+transform-coefficient editing and existing-bitstream CABAC transplication are
+not implemented. See
 [Native Compressed Syntax Glitch](docs/NATIVE_SYNTAX_GLITCH.md).
 
 ### Glitch difference QA

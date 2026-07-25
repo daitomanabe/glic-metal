@@ -9,16 +9,19 @@ FFglitch 0.10.2の`ffedit`を使い、MPEG-2/AVIの圧縮motion vector、量子�
 （`q_dct`）、quantizer scale（`qscale`）、またはMPEG-4 Part 2/AVIの圧縮motion
 vectorをexportし、値を変更してentropy syntaxへtransplicateします。変更前後の
 bitstream、syntax JSON、SHA-256、probe、全log、救済decode、閲覧用MP4を保持します。
+HEVCではx265 4.2の`analysis-save`から参照番号とmotion vectorを取り出して変更し、
+`analysis-load`でencoderへ戻します。変更したMVはCABAC符号化より前のnative encoder
+decisionとして注入されます。
 処理はofflineでありrealtimeを主張しません。
 
 ### 対応effect
 
 | Feature | Codec | Effect |
 |---|---|---|
-| `mv` | MPEG-2 / MPEG-4 Part 2 | `compressed_motion_vector_vortex` |
-| `mv` | MPEG-2 / MPEG-4 Part 2 | `compressed_motion_vector_mirror` |
-| `mv` | MPEG-2 / MPEG-4 Part 2 | `compressed_motion_vector_quantizer` |
-| `mv` | MPEG-2 / MPEG-4 Part 2 | `compressed_motion_vector_freeze` |
+| `mv` / `x265_analysis_mv` | MPEG-2 / MPEG-4 Part 2 / HEVC | `compressed_motion_vector_vortex` |
+| `mv` / `x265_analysis_mv` | MPEG-2 / MPEG-4 Part 2 / HEVC | `compressed_motion_vector_mirror` |
+| `mv` / `x265_analysis_mv` | MPEG-2 / MPEG-4 Part 2 / HEVC | `compressed_motion_vector_quantizer` |
+| `mv` / `x265_analysis_mv` | MPEG-2 / MPEG-4 Part 2 / HEVC | `compressed_motion_vector_freeze` |
 | `q_dct` | MPEG-2 | `compressed_coefficient_sign_flip` |
 | `q_dct` | MPEG-2 | `compressed_coefficient_band_gate` |
 | `q_dct` | MPEG-2 | `compressed_coefficient_transplant` |
@@ -41,6 +44,8 @@ export GLIC_FFEDIT="$FFEDIT"
 
 別のOSでは[FFglitch公式Download](https://ffglitch.org/download/)から
 `ffedit`を導入し、`--ffedit /absolute/path/to/ffedit`を指定してください。
+HEVC MV laneにはx265 CLI 4.2.xが必要です。analysis fileは公開された安定ABIでは
+ないため、別versionは推測で処理せずfail-closedします。
 
 ### 任意の入力を処理
 
@@ -68,6 +73,20 @@ python3 scripts/process_native_syntax_glitch.py source.avi output.mp4 \
   --amount 1.0
 ```
 
+HEVCをx265 native encoder hookで処理する場合:
+
+```bash
+python3 scripts/process_native_syntax_glitch.py input.mov output-hevc.mp4 \
+  --codec hevc \
+  --effect compressed_motion_vector_mirror \
+  --amount 1.0 \
+  --x265 /opt/homebrew/bin/x265
+```
+
+HEVCでは任意入力をYUV4MPEGへ正規化し、同じ入力とencoder設定でanalysis-save /
+MV mutation / analysis-loadを行います。`--source-mode preserve`は、既存HEVCの
+CABACを直接書き戻すと誤解させないため受け付けません。
+
 成功reportでは次を全て確認してください。
 
 - `compressed_domain_edit: true`
@@ -82,6 +101,9 @@ frameを復号し、16/16 codec-effect variantで変更値とbitstream hash変�
 確認しました。代表的なMV vortexとqDCT sign flipは45/45 frame、
 差分判定`VISIBLE`、video-render-qaのdecode/motion/exposure/color/complexity/
 lightingをPASSし、repeated/frozen pairは0でした。
+HEVC mirrorの実動画検証ではx265 analysis内の8,144値を変更し、24/24 frameを
+復号、bitstream hash差を確認しました。無加工controlとの差はMAE 4.96、
+10階調以上の変化17.1%、luma SSIM 0.8883で、差分判定は`SUBTLE`でした。
 
 ### 一括生成と非類似ranking
 
@@ -101,12 +123,12 @@ python3 scripts/evaluate_native_syntax_glitches.py input.mov \
 
 ### H.264 / HEVCの境界
 
-このlaneはMPEG-2とMPEG-4 Part 2の対応featureだけを扱います。H.264の
-CAVLC/CABAC、HEVCのCABAC内部へmotion vectorやtransform coefficientを安全に
-再挿入するencoder hookは実装していません。`--codec h264`または`--codec hevc`は
-fail-closedします。生のVCL byte flipを直接編集と表示しません。H.264/HEVCの
-既存`motion_vector_*`、`residual_*` effectは、引き続き明記されたdecoded
-reconstruction proxyです。
+H.264のCAVLC/CABAC MV・係数編集は未実装で、`--codec h264`はfail-closedします。
+HEVCは4種類のMV effectだけをx265 encoder hookで実装しています。既存HEVC
+bitstreamのCABACをtransplicateする経路ではなく、sourceを再encodeします。
+HEVC transform coefficient直接編集も未実装です。生のVCL byte flipを直接編集と
+表示しません。既存`motion_vector_*`、`residual_*` effectは、引き続き明記された
+decoded reconstruction proxyです。
 
 ## English
 
@@ -118,6 +140,12 @@ back into the entropy syntax. The source and changed bitstreams, original and
 changed syntax JSON, hashes, probes, process logs, salvage decode, and review
 MP4 remain available as evidence.
 
+For HEVC motion effects, x265 4.2 writes reference indices and motion vectors
+with `analysis-save`. GLIC Metal mutates valid referenced MVs and passes the
+binary analysis back through `analysis-load`, injecting native encoder motion
+decisions before CABAC coding. This path re-encodes the source; it does not
+rewrite an existing HEVC bitstream.
+
 Install the checksum-pinned Apple Silicon reference build with
 `install_ffglitch_reference.py`, or provide an independently installed
 `ffedit` through `GLIC_FFEDIT` / `--ffedit`. FFglitch is not bundled with GLIC
@@ -127,21 +155,28 @@ The default `normalize` mode accepts a general video and first makes an
 FFglitch-compatible MPEG-2/AVI or MPEG-4 Part 2/AVI source whose syntax is then
 edited. It uses I/P frames to avoid an FFglitch 0.10.2 abort on short streams
 ending inside a B-frame GOP. Use `--source-mode preserve` to edit a compatible
-AVI without that pre-encode. This lane is offline and makes no realtime claim.
+AVI without that pre-encode. HEVC always uses normalized Y4M input and requires
+x265 CLI 4.2.x because the analysis binary is an internal, versioned ABI. This
+lane is offline and makes no realtime claim.
 
 Actual-video smoke testing retained 24/24 frames and changed the bitstream hash
-for all 16 codec-effect variants: 12 MPEG-2 effects and four MPEG-4 Part 2 MV
-effects. Representative MV-vortex and qDCT-sign-flip outputs retained 45/45
+for all 16 FFglitch codec-effect variants: 12 MPEG-2 effects and four MPEG-4
+Part 2 MV effects. Representative MV-vortex and qDCT-sign-flip outputs retained 45/45
 frames, were both classified `VISIBLE`, and passed decode, motion, exposure,
 color, complexity, and lighting QA with no repeated or frozen pairs.
+The HEVC mirror smoke test changed 8,144 analysis values, decoded 24/24 frames,
+and changed the bitstream hash. Against the control it measured MAE 4.96,
+17.1% of pixels changing by at least 10 levels, and luma SSIM 0.8883
+(`SUBTLE`).
 
 The token-free batch evaluator renders every supported variant, measures
 actual-video difference and decode survival, and produces a deterministic
 quality/diversity ranking. It supports resumable searches and retains every
 preview and compressed-syntax evidence file.
 
-H.264 CAVLC/CABAC and HEVC CABAC reinsertion are not implemented.
-`--codec h264` and `--codec hevc` fail closed. Raw VCL byte corruption is not
-reported as motion-vector or coefficient editing, and the older H.264/HEVC
-motion/residual effects remain explicitly labeled decoded reconstruction
-proxies.
+H.264 CAVLC/CABAC MV and coefficient editing remains unimplemented and fails
+closed. HEVC supports the four MV effects only through the x265 encoder hook;
+HEVC transform-coefficient editing and existing-bitstream CABAC
+transplication remain unavailable. Raw VCL byte corruption is not reported as
+motion-vector or coefficient editing, and older H.264/HEVC motion/residual
+effects remain explicitly labeled decoded reconstruction proxies.

@@ -198,25 +198,32 @@
       "realtime_claim": false
     },
     "native_compressed_syntax_lab": {
-      "execution": "offline_external_transplication",
+      "execution": "offline_external_transplication_and_native_encoder_hook",
       "entrypoint": "scripts/process_native_syntax_glitch.py",
       "sdk_entrypoint": "Tools/process_native_syntax_glitch.py",
       "helper": "scripts/native_syntax_glitch.py",
       "sdk_helper": "Tools/native_syntax_glitch.py",
+      "hevc_helper": "scripts/x265_analysis_glitch.py",
+      "sdk_hevc_helper": "Tools/x265_analysis_glitch.py",
       "installer": "scripts/install_ffglitch_reference.py",
       "sdk_installer": "Tools/install_ffglitch_reference.py",
       "ranking_entrypoint": "scripts/evaluate_native_syntax_glitches.py",
       "sdk_ranking_entrypoint": "Tools/evaluate_native_syntax_glitches.py",
       "catalog": "resources/codec-lab-effects.json",
       "effect_count": 12,
-      "codec_effect_variant_count": 16,
-      "codecs": ["mpeg2", "mpeg4_part2"],
-      "container": "avi",
-      "dependency": "external_FFglitch_ffedit_0.10.2_GPL-2.0-or-later",
+      "codec_effect_variant_count": 20,
+      "codecs": ["mpeg2", "mpeg4_part2", "hevc"],
+      "containers": ["avi", "raw_hevc", "mp4_preview"],
+      "dependencies": [
+        "external_FFglitch_ffedit_0.10.2_GPL-2.0-or-later",
+        "external_x265_CLI_4.2.x"
+      ],
       "persistent_evidence": [
         "source_bitstream",
         "exported_syntax_json",
         "mutated_syntax_json",
+        "x265_analysis_save_binary",
+        "x265_mutated_analysis_load_binary",
         "damaged_bitstream",
         "salvaged_intermediate",
         "ffedit_logs",
@@ -226,7 +233,8 @@
         "actual_video_difference_ranking"
       ],
       "token_free_ranking": true,
-      "h264_hevc_direct_support": "not_implemented_fail_closed",
+      "h264_direct_support": "not_implemented_fail_closed",
+      "hevc_direct_support": "x265_4_2_analysis_mv_encoder_hook",
       "realtime_claim": false
     },
     "analysis_and_evolutionary_lab": {

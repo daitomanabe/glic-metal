@@ -23,6 +23,11 @@ FFglitch is GPL-2.0-or-later and is neither linked into nor bundled with the
 MIT-licensed GLIC Metal library. See
 [NATIVE_SYNTAX_GLITCH.md](NATIVE_SYNTAX_GLITCH.md).
 
+The HEVC MV encoder-hook lane additionally requires x265 CLI 4.2.x. GLIC Metal
+does not bundle x265. The tool pins the accepted version prefix because the
+analysis-save binary is an internal ABI rather than a stable interchange
+format.
+
 ## Clone and build
 
 ```bash

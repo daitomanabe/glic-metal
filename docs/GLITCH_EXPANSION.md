@@ -49,7 +49,7 @@ lightingがPASSでした。`plane_time_split`と`asymmetric_plane_codec`は広�
 
 | 系統 | Effect / codec | 実装境界 | realtime |
 |---|---|---|---|
-| Native syntax | MPEG-2 MV/qDCT/qscale 12 effect、MPEG-4 Part 2 MV 4 variant | FFglitch entropy transplication | なし |
+| Native syntax | MPEG-2 MV/qDCT/qscale 12 effect、MPEG-4 Part 2 MV 4 variant、HEVC MV 4 variant | FFglitch entropy transplication + x265 encoder hook | なし |
 | Structured AV1 | tile group、film grain seed、reference slot | traceで対応付けたOBU/field操作 | なし |
 | Structured HEVC | temporal layer dropout / reorder | `nuh_temporal_id`単位のdrop/reorder | なし |
 | Cross stream | H.264 / HEVC / AV1 unit transplant | 圧縮frame unit移植 | なし |
@@ -72,7 +72,8 @@ metadata-aware previewだけを安全なdisplay rangeへ正規化しました。
 証跡自体は表示用正規化より前に保持されます。
 
 Native syntaxはFFglitch 0.10.2のMPEG-2 `mv` / `q_dct` / `qscale`と
-MPEG-4 Part 2 `mv`のexport/importを使います。
+MPEG-4 Part 2 `mv`のexport/importを使います。HEVC MVはx265 4.2の
+analysis-save/loadを使い、encoder decisionをCABAC符号化前に注入します。
 2026-07-24の実動画45 frame評価では、motion-vector vortexとqDCT sign flipの
 両方が45/45 frameを保持し、source/damaged SHA-256が変化しました。同一MPEG-2
 controlとの差分はそれぞれVISIBLE（MAE 20.72、changed>=10 40.8%）とVISIBLE
@@ -81,7 +82,9 @@ motion、露出、色、複雑度、lightingをPASSし、repeat/frozen pairは0�
 MPEG-2 12 effectとMPEG-4 Part 2 4 MV variantの追加スモークも、16/16で
 24/24 frameとbitstream hash変化を保持しました。全16候補の自動差分rankingでは
 5候補がSTRONG、11候補がVISIBLE、失敗0でした。
-H.264/HEVC直接entropy編集は未実装でfail-closedします。
+HEVC mirrorの追加検証は8,144 analysis値を変更して24/24 frameを復号し、
+control差はMAE 4.96、changed>=10 17.1%、SSIM 0.8883（SUBTLE）でした。
+H.264 direct syntax、HEVC係数、既存HEVC CABAC transplicationはfail-closedします。
 
 ### 外部アプリから使う
 
@@ -139,7 +142,8 @@ proxy labels mean the operation is performed on decoder-exported data or
 pixels. The RTP effect is an offline RFC 6184 packet model, not a live capture.
 
 The Native Compressed Syntax Lab uses FFglitch 0.10.2 transplication for 12
-MPEG-2 MV/qDCT/qscale effects and four MPEG-4 Part 2 MV variants. Actual-video
+MPEG-2 MV/qDCT/qscale effects and four MPEG-4 Part 2 MV variants, plus four
+HEVC MV variants through an x265 4.2 encoder hook before CABAC. Actual-video
 validation retained 45/45 frames for both representative paths; motion-vector
 vortex measured MAE 20.72 with 40.8% of pixels changed by at least 10, and qDCT
 sign flip measured MAE 11.58 with 38.3% changed. Both were `VISIBLE`, passed
@@ -147,7 +151,10 @@ decode, motion, exposure, color, complexity, and lighting QA, and had zero
 repeated/frozen pairs. An additional all-variant smoke retained 24/24 frames
 and changed the bitstream hash for 16/16 variants. Automated difference
 ranking classified five as `STRONG`, eleven as `VISIBLE`, and had zero failed
-runs. H.264/HEVC direct entropy edits remain unavailable and fail closed.
+runs. The HEVC mirror smoke changed 8,144 analysis values, retained 24/24
+frames, and measured MAE 4.96, changed>=10 17.1%, and SSIM 0.8883 (`SUBTLE`).
+H.264 direct syntax, HEVC coefficients, and existing-bitstream HEVC CABAC
+transplication remain unavailable and fail closed.
 
 Actual-video QA caught and led to fixes for a VC-2 partial-slice neutral-frame
 collapse and excessive clipping in metadata-aware review previews. The final

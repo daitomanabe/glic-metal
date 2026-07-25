@@ -119,10 +119,14 @@
   },
   "native_compressed_syntax_lab": {
     "entrypoint": "scripts/process_native_syntax_glitch.py",
-    "execution_class": "offline_external_transplication",
+    "execution_class": "offline_external_transplication_and_native_encoder_hook",
     "realtime_certified": false,
-    "codecs": ["mpeg2", "mpeg4_part2"],
-    "container": "avi",
+    "codecs": ["mpeg2", "mpeg4_part2", "hevc"],
+    "containers": {
+      "mpeg2": "avi",
+      "mpeg4_part2": "avi",
+      "hevc": "raw_hevc_with_mp4_preview"
+    },
     "dependency": {
       "name": "FFglitch ffedit",
       "version": "0.10.2",
@@ -130,9 +134,16 @@
       "bundled": false,
       "installer": "scripts/install_ffglitch_reference.py"
     },
+    "hevc_dependency": {
+      "name": "x265 CLI",
+      "required_version_prefix": "4.2",
+      "bundled": false,
+      "reason": "analysis-save binary layout is an internal versioned ABI"
+    },
     "may_produce_invalid_bitstream": false,
     "decoded_pixels_modified_before_transplication": false,
-    "h264_hevc_direct_support": "not_implemented_fail_closed",
+    "h264_direct_support": "not_implemented_fail_closed",
+    "hevc_direct_support": "x265_4_2_analysis_mv_encoder_hook",
     "effect_names": [
       "compressed_motion_vector_vortex",
       "compressed_motion_vector_mirror",
@@ -167,6 +178,12 @@
         "compressed_motion_vector_mirror",
         "compressed_motion_vector_quantizer",
         "compressed_motion_vector_freeze"
+      ],
+      "hevc": [
+        "compressed_motion_vector_vortex",
+        "compressed_motion_vector_mirror",
+        "compressed_motion_vector_quantizer",
+        "compressed_motion_vector_freeze"
       ]
     },
     "implementation_levels": {
@@ -191,6 +208,11 @@
       },
       "mpeg4_part2": {
         "motion": "native_mpeg4_part2_ffglitch_motion_vector_entropy_transplication"
+      },
+      "hevc": {
+        "motion": "native_hevc_x265_analysis_motion_vector_injection_before_cabac",
+        "existing_bitstream_transplication": false,
+        "native_encoder_hook": true
       }
     },
     "ranking_entrypoint": "scripts/evaluate_native_syntax_glitches.py",

@@ -152,7 +152,10 @@ exit status and JSON report as the completion contract.
 
 The direct compressed-syntax tool supports catalogued MPEG-2 MV/qDCT/qscale
 and MPEG-4 Part 2 MV operations and invokes the separately installed GPL
-FFglitch executable. H.264/HEVC direct requests fail closed. The adjacent
+FFglitch executable. HEVC MV operations use a separately installed x265 4.2
+CLI analysis-save/load encoder hook and re-encode the source. H.264 direct
+requests, HEVC coefficient edits, and existing-bitstream CABAC
+transplication fail closed. The adjacent
 batch evaluator provides resumable, token-free actual-video difference and
 diversity ranking.
 Codec mode in `Tools/process_video.py` defaults to raw NV12 input and the

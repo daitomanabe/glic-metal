@@ -169,11 +169,15 @@ def main() -> int:
         "network_capture"
     ] is False
     direct = manifest["offline_workflows"]["native_compressed_syntax_lab"]
-    assert direct["codecs"] == ["mpeg2", "mpeg4_part2"]
+    assert direct["codecs"] == ["mpeg2", "mpeg4_part2", "hevc"]
     assert direct["effect_count"] == 12
-    assert direct["codec_effect_variant_count"] == 16
+    assert direct["codec_effect_variant_count"] == 20
     assert direct["token_free_ranking"] is True
-    assert direct["h264_hevc_direct_support"] == "not_implemented_fail_closed"
+    assert direct["h264_direct_support"] == "not_implemented_fail_closed"
+    assert (
+        direct["hevc_direct_support"]
+        == "x265_4_2_analysis_mv_encoder_hook"
+    )
     assert (
         codec_lab_catalog["native_compressed_syntax_lab"][
             "decoded_pixels_modified_before_transplication"
