@@ -55,7 +55,10 @@ source-difference plus spatial-complexity score. Technical QA records decoded
 frame count, source difference, changed-pixel ratio, motion, frozen-frame
 ratio, luminance, and entropy. A weak or nearly static result is labeled
 `WARN`; a failed processor or undecodable result is never replaced with a
-passthrough clip.
+passthrough clip. The final site also measures all three poster pairs per
+algorithm and records their minimum/mean MAE under `variant_diversity`; a
+minimum below 1.0 is labeled `WEAK` instead of silently presenting visually
+identical variants.
 
 To change only the public delivery mix or duration contract without rerunning
 the expensive codec processors, reuse each task's retained `raw.mp4`:

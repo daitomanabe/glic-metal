@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import hashlib
 import html
+from itertools import combinations
 import json
 import math
 import os
@@ -1401,8 +1402,65 @@ def format_parameters(parameters: dict[str, Any]) -> str:
     )
 
 
+def add_variant_diversity(
+    manifest: dict[str, Any], site: Path
+) -> None:
+    distinct = 0
+    weak = 0
+    missing = 0
+    for algorithm in manifest["algorithms"]:
+        images: list[tuple[str, np.ndarray]] = []
+        for variant in algorithm["variants"]:
+            relative = variant.get("thumbnail")
+            if not relative:
+                continue
+            image = cv2.imread(str(site / relative), cv2.IMREAD_COLOR)
+            if image is not None:
+                images.append((variant["id"], image.astype(np.float32)))
+        if len(images) != len(VARIANT_NAMES):
+            algorithm["variant_diversity"] = {
+                "status": "MISSING",
+                "minimum_pair_mae": None,
+                "mean_pair_mae": None,
+                "pairs": [],
+            }
+            missing += 1
+            continue
+        pairs = [
+            {
+                "left": left_id,
+                "right": right_id,
+                "poster_mae": round(
+                    float(np.mean(np.abs(left_image - right_image))), 4
+                ),
+            }
+            for (left_id, left_image), (right_id, right_image) in combinations(
+                images, 2
+            )
+        ]
+        distances = [pair["poster_mae"] for pair in pairs]
+        minimum = min(distances)
+        status = "DISTINCT" if minimum >= 1.0 else "WEAK"
+        algorithm["variant_diversity"] = {
+            "status": status,
+            "minimum_pair_mae": round(minimum, 4),
+            "mean_pair_mae": round(float(np.mean(distances)), 4),
+            "pairs": pairs,
+        }
+        if status == "DISTINCT":
+            distinct += 1
+        else:
+            weak += 1
+    manifest["variant_diversity_counts"] = {
+        "DISTINCT": distinct,
+        "WEAK": weak,
+        "MISSING": missing,
+    }
+
+
 def render_site(manifest: dict[str, Any], site: Path) -> None:
     site.mkdir(parents=True, exist_ok=True)
+    add_variant_diversity(manifest, site)
     (site / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -1446,6 +1504,7 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
         "realtime": "REALTIME",
         "offline": "OFFLINE",
         "implementation": "IMPLEMENTATION",
+        "variant-diversity": "VARIANT DIVERSITY",
         "parameters": "PARAMETERS",
         "qa": "TECHNICAL QA",
         "source-note": (
@@ -1524,6 +1583,12 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
             if algorithm.get("codec")
             else ""
         )
+        diversity = algorithm["variant_diversity"]
+        diversity_value = (
+            "—"
+            if diversity["minimum_pair_mae"] is None
+            else f"{diversity['minimum_pair_mae']:.2f}"
+        )
         cards.append(
             f"""
             <section class="algorithm" data-family="{html.escape(algorithm["family"])}" data-search="{html.escape(searchable)}">
@@ -1534,7 +1599,7 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
                 </div>
                 <div class="badges">{codec_badge}<span class="badge" data-i18n="{realtime_key}">{'REALTIME' if realtime_key == 'realtime' else 'OFFLINE'}</span></div>
               </header>
-              <div class="implementation"><span data-i18n="implementation">IMPLEMENTATION</span> / {html.escape(algorithm["implementation_level"])}</div>
+              <div class="implementation"><span data-i18n="implementation">IMPLEMENTATION</span> / {html.escape(algorithm["implementation_level"])} · <span data-i18n="variant-diversity">VARIANT DIVERSITY</span> / min Δ {diversity_value} ({html.escape(diversity["status"])})</div>
               <div class="variants">{''.join(variants_html)}</div>
             </section>
             """
