@@ -255,6 +255,14 @@ def algorithm_row(
     realtime: bool = False,
 ) -> dict[str, Any]:
     identifier = f"{family}:{effect}" if codec is None else f"{family}:{codec}:{effect}"
+    presets = preset_rows(effect, family)
+    if family == "generation" and codec == "av2":
+        # One official AVM encode/decode pass already costs several minutes for
+        # this five-second gallery source. The three looks remain distinct by
+        # amount/rate/feedback; generation depth is held at one so every AV2
+        # algorithm can finish without substituting a different codec.
+        for preset in presets:
+            preset["parameters"]["generations"] = 1
     return {
         "id": identifier,
         "family": family,
@@ -267,7 +275,7 @@ def algorithm_row(
             family, effect, codec, codec_catalog
         ),
         "realtime_certified": realtime,
-        "presets": preset_rows(effect, family),
+        "presets": presets,
     }
 
 
@@ -642,9 +650,13 @@ def processor_command(
     codec = algorithm.get("codec")
     python = sys.executable
     reference_fps = {"av2": 6, "vvc": 12}
+    uses_reference_rate = (
+        family == "generation"
+        or (family == "codec_lab" and effect == "av2_optical_flow_wound")
+    )
     processing_fps = (
         reference_fps[codec]
-        if family == "generation" and codec in reference_fps
+        if uses_reference_rate and codec in reference_fps
         else FPS
     )
     common_dimensions = [
@@ -787,7 +799,14 @@ def processor_command(
         "transport",
         "metadata",
     }:
-        command.extend(["--max-frames", str(MAX_FRAMES), "--timeout", "300"])
+        maximum_frames = (
+            30
+            if family == "codec_lab" and effect == "av2_optical_flow_wound"
+            else MAX_FRAMES
+        )
+        command.extend(
+            ["--max-frames", str(maximum_frames), "--timeout", "300"]
+        )
     if family in {
         "codec_lab",
         "native_syntax",

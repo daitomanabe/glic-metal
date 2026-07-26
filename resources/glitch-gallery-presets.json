@@ -7692,7 +7692,7 @@
             "feedback": 0.433,
             "scale": 0.514,
             "strength": 1.086,
-            "generations": 2,
+            "generations": 1,
             "seed": 951824540
           }
         },
@@ -7709,7 +7709,7 @@
             "feedback": 0.714,
             "scale": 0.812,
             "strength": 1.568,
-            "generations": 3,
+            "generations": 1,
             "seed": 2755774129
           }
         }
@@ -7756,7 +7756,7 @@
             "feedback": 0.626,
             "scale": 0.508,
             "strength": 1.092,
-            "generations": 2,
+            "generations": 1,
             "seed": 3672413022
           }
         },
@@ -7773,7 +7773,7 @@
             "feedback": 0.848,
             "scale": 0.824,
             "strength": 1.556,
-            "generations": 3,
+            "generations": 1,
             "seed": 116749919
           }
         }
@@ -7820,7 +7820,7 @@
             "feedback": 0.425,
             "scale": 0.529,
             "strength": 1.071,
-            "generations": 2,
+            "generations": 1,
             "seed": 977588710
           }
         },
@@ -7837,7 +7837,7 @@
             "feedback": 0.729,
             "scale": 0.782,
             "strength": 1.598,
-            "generations": 3,
+            "generations": 1,
             "seed": 1635885049
           }
         }
@@ -7884,7 +7884,7 @@
             "feedback": 0.431,
             "scale": 0.517,
             "strength": 1.083,
-            "generations": 2,
+            "generations": 1,
             "seed": 3219117844
           }
         },
@@ -7901,7 +7901,7 @@
             "feedback": 0.717,
             "scale": 0.806,
             "strength": 1.574,
-            "generations": 3,
+            "generations": 1,
             "seed": 3145015842
           }
         }

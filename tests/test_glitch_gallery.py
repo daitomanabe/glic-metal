@@ -62,6 +62,12 @@ def main() -> int:
         for codec in source_catalog["generation_codecs"]["codecs"]
         for effect in source_catalog["generation_codecs"]["effect_names"]
     }
+    assert all(
+        preset["parameters"]["generations"] == 1
+        for row in generation_rows
+        if row["codec"] == "av2"
+        for preset in row["presets"]
+    )
     selected_original = {
         item["effect"]
         for item in json.loads(
