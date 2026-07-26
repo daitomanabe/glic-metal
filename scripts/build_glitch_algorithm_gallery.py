@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INPUT = ROOT / "assets" / "test-video.mp4"
 DEFAULT_OUTPUT = ROOT / "output" / "glitch-algorithm-gallery"
 DEFAULT_CATALOG = ROOT / "resources" / "glitch-gallery-presets.json"
+DEFAULT_REVIEW = ROOT / "resources" / "glic-metal-gallery-review.json"
 WIDTH = 480
 HEIGHT = 270
 FPS = 24
@@ -1458,7 +1459,46 @@ def add_variant_diversity(
     }
 
 
-def render_site(manifest: dict[str, Any], site: Path) -> None:
+def curated_decisions(
+    review_data: dict[str, Any] | None,
+    review_items: list[dict[str, Any]],
+) -> dict[str, str]:
+    if review_data is None:
+        return {}
+    if review_data.get("schema") != "glic-metal-gallery-review-v1":
+        raise ValueError("gallery review schema mismatch")
+    rows = review_data.get("items")
+    if not isinstance(rows, list):
+        raise ValueError("gallery review must contain an items array")
+    decisions: dict[str, str] = {}
+    for row in rows:
+        key = row.get("key")
+        decision = row.get("decision")
+        if not isinstance(key, str) or not key:
+            raise ValueError("gallery review contains an invalid key")
+        if key in decisions:
+            raise ValueError(f"duplicate gallery review key: {key}")
+        if decision not in {"adopt", "reject", "pending"}:
+            raise ValueError(f"invalid gallery review decision: {decision}")
+        decisions[key] = decision
+    visible_keys = {item["key"] for item in review_items}
+    missing = sorted(visible_keys - decisions.keys())
+    if missing:
+        raise ValueError(
+            "gallery review is missing rendered keys: " + ", ".join(missing[:3])
+        )
+    return {
+        key: decision
+        for key, decision in decisions.items()
+        if key in visible_keys and decision != "pending"
+    }
+
+
+def render_site(
+    manifest: dict[str, Any],
+    site: Path,
+    review_data: dict[str, Any] | None = None,
+) -> None:
     site.mkdir(parents=True, exist_ok=True)
     add_variant_diversity(manifest, site)
     (site / "manifest.json").write_text(
@@ -1502,14 +1542,14 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
         "filter-all": "ALL FAMILIES",
         "search-label": "SEARCH ALGORITHMS",
         "search-placeholder": "effect, codec, implementation…",
-        "review-filter-all": "ALL DECISIONS",
+        "review-filter-all": "SHOW ALL",
         "review-filter-pending": "PENDING",
         "review-filter-adopt": "ADOPTED",
         "review-filter-reject": "REJECTED",
         "review-title": "PRESET REVIEW",
         "review-lead": (
-            "Classify each rendered preset as adopted or rejected. "
-            "Decisions are stored in this browser."
+            "Adopted presets are shown by default. Clear the decision filter "
+            "to inspect rejected and pending variants."
         ),
         "review-adopted": "ADOPTED",
         "review-rejected": "REJECTED",
@@ -1523,8 +1563,10 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
         "review-copy-all": "COPY ALL DECISIONS",
         "review-download-adopted": "DOWNLOAD ADOPTED JSON",
         "review-download-all": "DOWNLOAD ALL DECISIONS",
-        "review-reset": "RESET REVIEW",
-        "review-message-ready": "Selections are saved automatically.",
+        "review-reset": "RESTORE CURATED REVIEW",
+        "review-message-ready": (
+            "The curated review is loaded. Local changes are saved automatically."
+        ),
         "realtime": "REALTIME",
         "offline": "OFFLINE",
         "implementation": "IMPLEMENTATION",
@@ -1669,6 +1711,31 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
             """
         )
 
+    initial_decisions = curated_decisions(review_data, review_items)
+    curated_counts = {
+        "adopted": sum(value == "adopt" for value in initial_decisions.values()),
+        "rejected": sum(value == "reject" for value in initial_decisions.values()),
+        "pending": len(review_items) - len(initial_decisions),
+    }
+    curation_revision = hashlib.sha256(
+        json.dumps(initial_decisions, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:16]
+    manifest["curation"] = {
+        "schema": "glic-metal-gallery-review-v1",
+        "revision": curation_revision,
+        "default_filter": "adopt",
+        "counts": curated_counts,
+        "realtime_adopted": sum(
+            initial_decisions.get(item["key"]) == "adopt"
+            and item["realtime_certified"]
+            for item in review_items
+        ),
+    }
+    (site / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
     family_options = [
         '<option value="all" data-i18n="filter-all">全ファミリー</option>'
     ]
@@ -1752,16 +1819,16 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
       <select id="family-filter" aria-label="Filter family">{''.join(family_options)}</select>
       <input id="search" type="search" data-i18n-placeholder="search-placeholder" placeholder="effect、codec、implementationを検索">
       <select id="review-filter" aria-label="Filter review decision">
-        <option value="all" data-i18n="review-filter-all">全判定</option>
+        <option value="all" data-i18n="review-filter-all">全て表示</option>
         <option value="pending" data-i18n="review-filter-pending">未判定</option>
-        <option value="adopt" data-i18n="review-filter-adopt">採用</option>
+        <option value="adopt" selected data-i18n="review-filter-adopt">採用</option>
         <option value="reject" data-i18n="review-filter-reject">不採用</option>
       </select>
     </div>
     <aside class="review-panel" aria-labelledby="review-title">
       <div>
         <h2 id="review-title" data-i18n="review-title">PRESET REVIEW</h2>
-        <p data-i18n="review-lead">各動画を採用／不採用に分類します。判定はこのブラウザーへ自動保存されます。</p>
+        <p data-i18n="review-lead">採用済みプリセットだけを初期表示します。判定フィルタを外すと、不採用・未判定も確認できます。</p>
       </div>
       <div class="review-summary" aria-live="polite">
         <div class="review-count adopted"><strong id="adopt-count">0</strong><span data-i18n="review-adopted">採用</span></div>
@@ -1773,8 +1840,8 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
         <button type="button" id="copy-all" data-i18n="review-copy-all">全判定をコピー</button>
         <button type="button" id="download-adopted" data-i18n="review-download-adopted">採用JSONを保存</button>
         <button type="button" id="download-all" data-i18n="review-download-all">全判定を保存</button>
-        <button type="button" id="reset-review" data-i18n="review-reset">判定をリセット</button>
-        <p id="review-message" data-i18n="review-message-ready">選択は自動保存されます。</p>
+        <button type="button" id="reset-review" data-i18n="review-reset">選定結果に戻す</button>
+        <p id="review-message" data-i18n="review-message-ready">選定結果を読み込みました。ローカル変更は自動保存されます。</p>
       </div>
     </aside>
     <div id="algorithms">{''.join(cards)}</div>
@@ -1786,6 +1853,8 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
   <script>window.__I18N = {json.dumps(translations, ensure_ascii=False)};</script>
   <script>
     window.__GLIC_REVIEW_ITEMS = {json.dumps(review_items, ensure_ascii=False)};
+    window.__GLIC_CURATED_DECISIONS = {json.dumps(initial_decisions, ensure_ascii=False)};
+    window.__GLIC_CURATION_REVISION = {json.dumps(curation_revision)};
     window.__GLIC_GALLERY_REVISION = {json.dumps(manifest.get("glic_metal_revision"))};
   </script>
   <script src="../scripts/i18n.js"></script>
@@ -1797,15 +1866,27 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
     const cards = [...document.querySelectorAll('.algorithm')];
     const variants = [...document.querySelectorAll('.variant')];
     const reviewItems = window.__GLIC_REVIEW_ITEMS || [];
-    const storageKey = 'glic-metal-gallery-review-v1';
+    const curatedDecisions = window.__GLIC_CURATED_DECISIONS || {{}};
+    const curationRevision = window.__GLIC_CURATION_REVISION || 'uncurated';
+    const storageKey = 'glic-metal-gallery-review-v2';
     const validKeys = new Set(reviewItems.map(item => item.key));
     let decisions = {{}};
     try {{
-      const saved = JSON.parse(localStorage.getItem(storageKey) || '{{}}');
+      const savedRaw = localStorage.getItem(storageKey);
+      const savedEnvelope = savedRaw === null
+        ? null
+        : JSON.parse(savedRaw || '{{}}');
+      const saved = savedEnvelope &&
+        savedEnvelope.curation_revision === curationRevision &&
+        savedEnvelope.decisions
+        ? savedEnvelope.decisions
+        : curatedDecisions;
       Object.entries(saved).forEach(([key, value]) => {{
         if (validKeys.has(key) && (value === 'adopt' || value === 'reject')) decisions[key] = value;
       }});
-    }} catch (_) {{}}
+    }} catch (_) {{
+      decisions = {{...curatedDecisions}};
+    }}
     const decisionFor = key => decisions[key] || 'pending';
     const counts = () => {{
       const adopted = Object.values(decisions).filter(value => value === 'adopt').length;
@@ -1845,7 +1926,10 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
       }});
     }};
     const persist = () => {{
-      localStorage.setItem(storageKey, JSON.stringify(decisions));
+      localStorage.setItem(storageKey, JSON.stringify({{
+        curation_revision: curationRevision,
+        decisions,
+      }}));
       variants.forEach(updateVariant);
       updateSummary();
       apply();
@@ -1916,10 +2000,10 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
     document.querySelector('#download-adopted').addEventListener('click', () => downloadJSON('adopted'));
     document.querySelector('#download-all').addEventListener('click', () => downloadJSON('all'));
     document.querySelector('#reset-review').addEventListener('click', () => {{
-      if (!window.confirm('このブラウザーに保存した全判定をリセットしますか？')) return;
-      decisions = {{}};
+      if (!window.confirm('このブラウザーの判定を、採用済み選定結果へ戻しますか？')) return;
+      decisions = {{...curatedDecisions}};
       persist();
-      setMessage('全判定をリセットしました。');
+      setMessage('採用済み選定結果へ戻しました。');
     }});
     const load = video => {{
       if (!video.src && video.dataset.src) {{ video.src = video.dataset.src; video.load(); }}
@@ -1972,6 +2056,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("input", nargs="?", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--catalog-out", type=Path, default=DEFAULT_CATALOG)
+    parser.add_argument(
+        "--review-json",
+        type=Path,
+        default=DEFAULT_REVIEW,
+        help="Canonical gallery review used for the initial decision state",
+    )
     parser.add_argument("--catalog-only", action="store_true")
     parser.add_argument("--build-site-only", action="store_true")
     parser.add_argument(
@@ -2130,7 +2220,12 @@ def main(argv: list[str] | None = None) -> int:
     manifest = public_manifest(
         selected_catalog, states, source_digest, revision
     )
-    render_site(manifest, output_root / "site")
+    review_data = (
+        read_json(args.review_json.expanduser().resolve())
+        if args.review_json
+        else None
+    )
+    render_site(manifest, output_root / "site", review_data)
     print(
         json.dumps(
             {

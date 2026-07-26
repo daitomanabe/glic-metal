@@ -116,16 +116,48 @@ def main() -> int:
     }
     with tempfile.TemporaryDirectory() as temporary:
         site = Path(temporary)
-        gallery.render_site(manifest, site)
+        review_keys = [
+            f"{algorithm['id']}::{variant['id']}"
+            for variant in algorithm["variants"]
+        ]
+        review_data = {
+            "schema": "glic-metal-gallery-review-v1",
+            "scope": "all",
+            "counts": {"adopted": 1, "rejected": 1, "pending": 1},
+            "items": [
+                {"key": review_keys[0], "decision": "adopt"},
+                {"key": review_keys[1], "decision": "reject"},
+                {"key": review_keys[2], "decision": "pending"},
+            ],
+        }
+        gallery.render_site(manifest, site, review_data)
         page = (site / "index.html").read_text()
+        rendered_manifest = json.loads((site / "manifest.json").read_text())
         assert page.count('data-review-key="') == 3
         assert "glic-metal-gallery-review-v1" in page
         assert "window.__GLIC_REVIEW_ITEMS" in page
+        assert "window.__GLIC_CURATED_DECISIONS" in page
         assert 'id="copy-adopted"' in page
         assert 'id="download-all"' in page
         assert 'id="review-filter"' in page
+        assert '<option value="adopt" selected' in page
+        assert "glic-metal-gallery-review-v2" in page
+        assert "savedEnvelope.curation_revision === curationRevision" in page
+        assert "catch (_) {\n      decisions = {...curatedDecisions};" in page
+        assert "decisions = {...curatedDecisions}" in page
         assert "localStorage.setItem(storageKey" in page
         assert "glic-metal-adopted-presets.json" in page
+        assert rendered_manifest["curation"]["schema"] == (
+            "glic-metal-gallery-review-v1"
+        )
+        assert len(rendered_manifest["curation"]["revision"]) == 16
+        assert rendered_manifest["curation"]["default_filter"] == "adopt"
+        assert rendered_manifest["curation"]["counts"] == {
+            "adopted": 1,
+            "rejected": 1,
+            "pending": 1,
+        }
+        assert rendered_manifest["curation"]["realtime_adopted"] == 1
     print("PASS glitch gallery catalog: 147 algorithms, 441 videos")
     return 0
 
