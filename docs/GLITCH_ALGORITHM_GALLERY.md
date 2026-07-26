@@ -18,13 +18,16 @@ This produces 147 algorithm entries and three deterministic variants per entry,
 or 441 videos. The three variants are not a generic low/medium/high slider.
 Effect-name-aware profiles choose decode-safe damage, motion-field, color-plane,
 history, quantization, or source-mixing ranges, then apply a deterministic
-per-algorithm offset.
+per-algorithm offset. The public presets also declare an explicit 62%, 82%,
+and 100% dry/wet mix. This preserves the real algorithm output while keeping
+the three gallery looks distinct when an original codec recipe quantizes
+different parameter values to the same internal state.
 
 ## Generate the preset catalog
 
 ```bash
 python3 scripts/build_glitch_algorithm_gallery.py --catalog-only
-python3 Tests/test_glitch_gallery.py
+python3 tests/test_glitch_gallery.py
 ```
 
 The machine-readable result is
@@ -44,13 +47,25 @@ and render contract. It writes processor reports and logs beneath
 `output/glitch-algorithm-gallery/work/`, then creates the publishable static
 bundle beneath `output/glitch-algorithm-gallery/site/`.
 
-Each public clip is normalized to 480×270, 24 fps, H.264 `yuv420p`, muted, and
-fast-start enabled. WebP posters are selected by a deterministic
+Each public clip is normalized to exactly five seconds / 120 frames at 480×270,
+24 fps, H.264 `yuv420p`, muted, and fast-start enabled. Short damaged streams
+hold their final decoded frame instead of shortening the gallery card. WebP
+posters are selected by a deterministic
 source-difference plus spatial-complexity score. Technical QA records decoded
 frame count, source difference, changed-pixel ratio, motion, frozen-frame
 ratio, luminance, and entropy. A weak or nearly static result is labeled
 `WARN`; a failed processor or undecodable result is never replaced with a
 passthrough clip.
+
+To change only the public delivery mix or duration contract without rerunning
+the expensive codec processors, reuse each task's retained `raw.mp4`:
+
+```bash
+python3 scripts/build_glitch_algorithm_gallery.py \
+  /Users/daitomacm5/development/sandbox/glic-metal/assets/test-video.mp4 \
+  --rebuild-web-only \
+  --workers 8
+```
 
 The official AVM AV2 paths (including `av2_optical_flow_wound`) and VVenC
 reference implementation process the complete five-second source at 2 fps

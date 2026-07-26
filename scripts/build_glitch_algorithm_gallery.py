@@ -221,6 +221,12 @@ def effect_profile(effect: str, family: str, index: int) -> dict[str, Any]:
         "feedback": clamp(feedback + jitter * 0.5),
         "scale": clamp(scale - jitter),
         "strength": clamp(strength + jitter, 0.0, 2.0),
+        # The gallery mix is deliberately explicit. Some original GLIC recipes
+        # quantize multiple strength values to the same codec state, while some
+        # syntax mutations are necessarily discrete. A dry/wet stage preserves
+        # the actual algorithm output and guarantees that the three documented
+        # looks remain visually distinguishable.
+        "wet_mix": (0.62, 0.82, 1.0)[index],
         "generations": generations,
         "seed": stable_int(f"glic-gallery:{family}:{effect}:{index}"),
     }
@@ -892,10 +898,29 @@ def probe_video(path: Path, ffprobe: str) -> dict[str, Any]:
     return json.loads(completed.stdout)
 
 
-def web_transcode(raw: Path, destination: Path, ffmpeg: str, log: Path) -> None:
+def web_transcode(
+    source: Path,
+    raw: Path,
+    destination: Path,
+    ffmpeg: str,
+    log: Path,
+    wet_mix: float,
+) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.stem + ".tmp.mp4")
     temporary.unlink(missing_ok=True)
+    wet = clamp(float(wet_mix))
+    dry = round(1.0 - wet, 3)
+    filters = (
+        f"[0:v]scale={WIDTH}:{HEIGHT}:flags=lanczos,fps={FPS},"
+        "tpad=stop_mode=clone:stop_duration=5,trim=duration=5,"
+        "setpts=PTS-STARTPTS[src];"
+        f"[1:v]scale={WIDTH}:{HEIGHT}:flags=lanczos,fps={FPS},"
+        "tpad=stop_mode=clone:stop_duration=5,trim=duration=5,"
+        "setpts=PTS-STARTPTS[effect];"
+        f"[src][effect]blend=all_expr='A*{dry}+B*{wet}':shortest=1,"
+        "format=yuv420p[out]"
+    )
     run_command(
         [
             ffmpeg,
@@ -905,12 +930,16 @@ def web_transcode(raw: Path, destination: Path, ffmpeg: str, log: Path) -> None:
             "error",
             "-y",
             "-i",
+            str(source),
+            "-i",
             str(raw),
             "-map",
-            "0:v:0",
+            "[out]",
             "-an",
-            "-vf",
-            f"scale={WIDTH}:{HEIGHT}:flags=lanczos,fps={FPS},format=yuv420p",
+            "-filter_complex",
+            filters,
+            "-t",
+            "5",
             "-c:v",
             "libx264",
             "-preset",
@@ -1136,10 +1165,12 @@ def render_task(
         if not raw.is_file():
             raise RuntimeError("processor produced no preview video")
         web_transcode(
+            source,
             raw,
             video,
             dependencies["ffmpeg"],
             task_dir / "web-transcode.log",
+            float(effective_preset["parameters"]["wet_mix"]),
         )
         probe = probe_video(video, dependencies["ffprobe"])
         metrics = analyze_video(source, video, thumbnail)
@@ -1176,6 +1207,100 @@ def render_task(
                 "elapsed_seconds": round(time.monotonic() - started, 3),
             }
         )
+    state_path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return state
+
+
+def rebuild_web_task(
+    task: RenderTask,
+    *,
+    source: Path,
+    source_digest: str,
+    revision: str,
+    output_root: Path,
+    dependencies: dict[str, str],
+) -> dict[str, Any]:
+    task_dir = output_root / "work" / "tasks" / task.slug
+    state_path = task_dir / "state.json"
+    raw = task_dir / "raw.mp4"
+    video = output_root / "site" / "media" / f"{task.slug}.mp4"
+    thumbnail = output_root / "site" / "thumbs" / f"{task.slug}.webp"
+    state: dict[str, Any] = (
+        read_json(state_path)
+        if state_path.is_file()
+        else {
+            "schema": "glic-gallery-render-state-v1",
+            "algorithm_id": task.algorithm["id"],
+            "preset_id": task.preset["id"],
+        }
+    )
+    started = time.monotonic()
+    try:
+        if not raw.is_file():
+            raise RuntimeError(f"raw processor output is missing: {raw}")
+        requested = dict(
+            state.get("requested_parameters", task.preset["parameters"])
+        )
+        effective = dict(
+            state.get("effective_parameters", task.preset["parameters"])
+        )
+        requested["wet_mix"] = task.preset["parameters"]["wet_mix"]
+        effective["wet_mix"] = task.preset["parameters"]["wet_mix"]
+        web_transcode(
+            source,
+            raw,
+            video,
+            dependencies["ffmpeg"],
+            task_dir / "web-rebuild.log",
+            float(effective["wet_mix"]),
+        )
+        probe = probe_video(video, dependencies["ffprobe"])
+        metrics = analyze_video(source, video, thumbnail)
+        stream = probe["streams"][0]
+        if (
+            stream.get("codec_name") != "h264"
+            or int(stream.get("width", 0)) != WIDTH
+            or int(stream.get("height", 0)) != HEIGHT
+            or stream.get("pix_fmt") != "yuv420p"
+        ):
+            raise RuntimeError(f"web output contract mismatch: {stream}")
+        state.update(
+            {
+                "fingerprint": task_fingerprint(
+                    task, source_digest, revision
+                ),
+                "status": metrics["status"],
+                "warnings": metrics["warnings"],
+                "requested_parameters": requested,
+                "effective_parameters": effective,
+                "delivery_wet_mix": effective["wet_mix"],
+                "video": f"media/{video.name}",
+                "thumbnail": f"thumbs/{thumbnail.name}",
+                "video_bytes": video.stat().st_size,
+                "video_sha256": sha256(video),
+                "thumbnail_bytes": thumbnail.stat().st_size,
+                "probe": probe,
+                "metrics": metrics,
+                "delivery_rebuild_seconds": round(
+                    time.monotonic() - started, 3
+                ),
+            }
+        )
+        state.pop("error", None)
+    except Exception as exc:
+        state.update(
+            {
+                "status": "FAIL",
+                "error": str(exc),
+                "delivery_rebuild_seconds": round(
+                    time.monotonic() - started, 3
+                ),
+            }
+        )
+    task_dir.mkdir(parents=True, exist_ok=True)
     state_path.write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -1263,6 +1388,7 @@ def public_manifest(
 def format_parameters(parameters: dict[str, Any]) -> str:
     preferred = (
         "strength",
+        "wet_mix",
         "amount",
         "rate",
         "feedback",
@@ -1559,6 +1685,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--catalog-out", type=Path, default=DEFAULT_CATALOG)
     parser.add_argument("--catalog-only", action="store_true")
     parser.add_argument("--build-site-only", action="store_true")
+    parser.add_argument(
+        "--rebuild-web-only",
+        action="store_true",
+        help=(
+            "Reuse existing raw processor outputs and rebuild the five-second "
+            "dry/wet web delivery, thumbnails, and technical metrics."
+        ),
+    )
     parser.add_argument("--family", action="append", choices=tuple(FAMILY_INFO))
     parser.add_argument("--algorithm", action="append")
     parser.add_argument("--variant", action="append", choices=VARIANT_NAMES)
@@ -1618,11 +1752,47 @@ def main(argv: list[str] | None = None) -> int:
     revision = git_revision()
     states: list[dict[str, Any]] = []
 
+    if args.build_site_only and args.rebuild_web_only:
+        raise RuntimeError(
+            "--build-site-only and --rebuild-web-only are mutually exclusive"
+        )
+
     if args.build_site_only:
         for task in tasks:
             state_path = output_root / "work" / "tasks" / task.slug / "state.json"
             if state_path.is_file():
                 states.append(read_json(state_path))
+    elif args.rebuild_web_only:
+        print(
+            f"Rebuilding {len(tasks)} web videos from existing processor "
+            f"outputs with {max(1, args.workers)} worker(s).",
+            flush=True,
+        )
+        with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
+            future_tasks = {
+                executor.submit(
+                    rebuild_web_task,
+                    task,
+                    source=source,
+                    source_digest=source_digest,
+                    revision=revision,
+                    output_root=output_root,
+                    dependencies=dependencies,
+                ): task
+                for task in tasks
+            }
+            completed = 0
+            for future in as_completed(future_tasks):
+                task = future_tasks[future]
+                state = future.result()
+                states.append(state)
+                completed += 1
+                print(
+                    f"[{completed:04d}/{len(tasks):04d}] "
+                    f"{state['status']:4s} {task.key} "
+                    f"({state.get('delivery_rebuild_seconds', 0):.1f}s)",
+                    flush=True,
+                )
     else:
         print(
             f"Rendering {len(tasks)} videos from {len(algorithms)} algorithms "

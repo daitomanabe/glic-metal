@@ -44,6 +44,7 @@ def main() -> int:
         and 0.0 <= preset["parameters"]["feedback"] <= 1.0
         and 0.0 <= preset["parameters"]["scale"] <= 1.0
         and 0.0 <= preset["parameters"]["strength"] <= 2.0
+        and preset["parameters"]["wet_mix"] in {0.62, 0.82, 1.0}
         and preset["parameters"]["generations"] in {1, 2, 3}
         for row in catalog["algorithms"]
         for preset in row["presets"]
@@ -67,6 +68,13 @@ def main() -> int:
         for row in generation_rows
         if row["codec"] == "av2"
         for preset in row["presets"]
+    )
+    assert all(
+        tuple(
+            preset["parameters"]["wet_mix"] for preset in row["presets"]
+        )
+        == (0.62, 0.82, 1.0)
+        for row in catalog["algorithms"]
     )
     selected_original = {
         item["effect"]
