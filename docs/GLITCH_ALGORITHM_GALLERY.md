@@ -53,9 +53,10 @@ ratio, luminance, and entropy. A weak or nearly static result is labeled
 passthrough clip.
 
 The official AVM AV2 and VVenC reference implementations process the complete
-five-second source at 12 fps (60 coded frames) to keep the exhaustive gallery
-finite; the web delivery is normalized back to 24 fps. This is recorded in the
-catalog and is not presented as a realtime performance claim.
+five-second source at 6 fps (30 coded frames) and 12 fps (60 coded frames),
+respectively, to keep the exhaustive gallery finite; the web delivery is
+normalized back to 24 fps. This is recorded in the catalog and is not
+presented as a realtime performance claim.
 
 The pinned FFglitch, AVM, and VVenC dependencies must exist in `.cache/`.
 Build missing AV2 or VVC tools with `scripts/build_av2_reference.py` and

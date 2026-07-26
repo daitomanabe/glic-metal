@@ -442,7 +442,7 @@ def build_catalog() -> dict[str, Any]:
             "height": HEIGHT,
             "fps": FPS,
             "reference_codec_processing_fps": {
-                "av2": 12,
+                "av2": 6,
                 "vvc": 12,
             },
             "variants_per_algorithm": 3,
@@ -641,9 +641,10 @@ def processor_command(
     effect = algorithm["effect"]
     codec = algorithm.get("codec")
     python = sys.executable
+    reference_fps = {"av2": 6, "vvc": 12}
     processing_fps = (
-        12
-        if family == "generation" and codec in {"av2", "vvc"}
+        reference_fps[codec]
+        if family == "generation" and codec in reference_fps
         else FPS
     )
     common_dimensions = [
@@ -823,7 +824,13 @@ def processor_command(
             ]
         )
         if codec in {"av1", "av2", "vp9", "vvc", "theora", "dirac"}:
-            maximum_frames = 60 if codec in {"av2", "vvc"} else MAX_FRAMES
+            maximum_frames = (
+                30
+                if codec == "av2"
+                else 60
+                if codec == "vvc"
+                else MAX_FRAMES
+            )
             command.extend(["--max-frames", str(maximum_frames)])
     return command
 

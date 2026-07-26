@@ -13,7 +13,7 @@
     "height": 270,
     "fps": 24,
     "reference_codec_processing_fps": {
-      "av2": 12,
+      "av2": 6,
       "vvc": 12
     },
     "variants_per_algorithm": 3,
