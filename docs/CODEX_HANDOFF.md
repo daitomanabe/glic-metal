@@ -115,6 +115,8 @@ git clone /path/to/handoff/git/glic-metal.git.bundle glic-metal
 cd glic-metal
 git switch codex/videotoolbox-fast-path
 git bundle verify /path/to/handoff/git/glic-metal.git.bundle
+git remote set-url origin https://github.com/daitomanabe/glic-metal.git
+git remote set-url --push origin git@github.com:daitomanabe/glic-metal.git
 ```
 
 If network access is available, restore the submodule normally:
