@@ -53,13 +53,15 @@ ratio, luminance, and entropy. A weak or nearly static result is labeled
 passthrough clip.
 
 The official AVM AV2 paths (including `av2_optical_flow_wound`) and VVenC
-reference implementation process the complete five-second source at 6 fps
-(30 coded frames) and 12 fps (60 coded frames), respectively, to keep the
+reference implementation process the complete five-second source at 2 fps
+(10 coded frames) and 12 fps (60 coded frames), respectively, to keep the
 exhaustive gallery finite; the web delivery is normalized back to 24 fps.
 This is recorded in the catalog and is not presented as a realtime performance
 claim. AV2 gallery variants hold the generation count at one and vary amount,
 rate, and feedback; this keeps the official AVM path for all three looks
-without multiplying the multi-minute reference encode depth.
+without multiplying the multi-minute reference encode depth. AVM v1.0.0 only
+exposes the Good Quality usage profile, so the reduced temporal sampling is
+explicit instead of being mislabeled as a realtime AV2 implementation.
 
 The pinned FFglitch, AVM, and VVenC dependencies must exist in `.cache/`.
 Build missing AV2 or VVC tools with `scripts/build_av2_reference.py` and

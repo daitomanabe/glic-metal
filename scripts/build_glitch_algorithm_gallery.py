@@ -649,7 +649,11 @@ def processor_command(
     effect = algorithm["effect"]
     codec = algorithm.get("codec")
     python = sys.executable
-    reference_fps = {"av2": 6, "vvc": 12}
+    # AVM v1.0.0 exposes only its non-realtime Good Quality profile. Sampling
+    # the complete five-second source at 2 fps keeps every gallery entry on the
+    # official AV2 encode/decode path without turning 15 previews into a
+    # multi-hour render. Delivery is normalized back to 24 fps below.
+    reference_fps = {"av2": 2, "vvc": 12}
     uses_reference_rate = (
         family == "generation"
         or (family == "codec_lab" and effect == "av2_optical_flow_wound")
@@ -800,7 +804,7 @@ def processor_command(
         "metadata",
     }:
         maximum_frames = (
-            30
+            10
             if family == "codec_lab" and effect == "av2_optical_flow_wound"
             else MAX_FRAMES
         )
@@ -844,7 +848,7 @@ def processor_command(
         )
         if codec in {"av1", "av2", "vp9", "vvc", "theora", "dirac"}:
             maximum_frames = (
-                30
+                10
                 if codec == "av2"
                 else 60
                 if codec == "vvc"
