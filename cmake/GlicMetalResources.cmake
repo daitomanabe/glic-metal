@@ -33,6 +33,10 @@ function(glic_metal_copy_resources)
     message(FATAL_ERROR
             "GLIC Metal codec lab catalog is missing: ${GLIC_METAL_CODEC_LAB_EFFECTS_JSON}")
   endif()
+  if(NOT EXISTS "${GLIC_METAL_GLITCH_GALLERY_PRESETS_JSON}")
+    message(FATAL_ERROR
+            "GLIC Metal gallery preset catalog is missing: ${GLIC_METAL_GLITCH_GALLERY_PRESETS_JSON}")
+  endif()
 
   add_custom_command(TARGET "${GLIC_RESOURCE_TARGET}" POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E make_directory
@@ -52,6 +56,9 @@ function(glic_metal_copy_resources)
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${GLIC_METAL_CODEC_LAB_EFFECTS_JSON}"
             "${GLIC_RESOURCE_DESTINATION}/codec-lab-effects.json"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${GLIC_METAL_GLITCH_GALLERY_PRESETS_JSON}"
+            "${GLIC_RESOURCE_DESTINATION}/glitch-gallery-presets.json"
     VERBATIM)
 
   if(APPLE)

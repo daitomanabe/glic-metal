@@ -29,6 +29,9 @@ set(GLIC_METAL_OFFLINE_CODEC_EFFECTS_JSON
 set(GLIC_METAL_CODEC_LAB_EFFECTS_JSON
     "${PROJECT_SOURCE_DIR}/resources/codec-lab-effects.json" CACHE FILEPATH
     "Realtime and offline codec-lab effect catalog")
+set(GLIC_METAL_GLITCH_GALLERY_PRESETS_JSON
+    "${PROJECT_SOURCE_DIR}/resources/glitch-gallery-presets.json" CACHE FILEPATH
+    "Three-variant preset catalog for every gallery algorithm")
 include(cmake/GlicMetalResources.cmake)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -241,6 +244,7 @@ if(APPLE)
         "${PROJECT_SOURCE_DIR}/resources/integration-manifest.json"
         "${PROJECT_SOURCE_DIR}/resources/offline-codec-effects.json"
         "${PROJECT_SOURCE_DIR}/resources/codec-lab-effects.json"
+        "${PROJECT_SOURCE_DIR}/resources/glitch-gallery-presets.json"
         "${PROJECT_SOURCE_DIR}/LICENSE"
         "${PROJECT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md")
     add_custom_command(TARGET glic_webcam_preview POST_BUILD
@@ -267,6 +271,9 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${PROJECT_SOURCE_DIR}/resources/codec-lab-effects.json"
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/codec-lab-effects.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/resources/glitch-gallery-presets.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/glitch-gallery-presets.json"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${PROJECT_SOURCE_DIR}/LICENSE"
             "$<TARGET_BUNDLE_CONTENT_DIR:glic_webcam_preview>/Resources/LICENSE"
@@ -658,6 +665,7 @@ install(FILES resources/selected-presets.json
               resources/integration-manifest.json
               resources/offline-codec-effects.json
               resources/codec-lab-effects.json
+              resources/glitch-gallery-presets.json
               requirements-qa.txt
         DESTINATION ${CMAKE_INSTALL_DATADIR}/glic-metal)
 install(FILES README.md LICENSE THIRD_PARTY_NOTICES.md
@@ -667,6 +675,7 @@ install(FILES README.md LICENSE THIRD_PARTY_NOTICES.md
               docs/OFFLINE_PACKET_GLITCH.md docs/CODEC_LAB.md
               docs/NATIVE_SYNTAX_GLITCH.md
               docs/GLITCH_EXPANSION.md
+              docs/GLITCH_ALGORITHM_GALLERY.md
               docs/DOWNSTREAM_QUICKSTART.md
         DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/glic-metal)
 if(APPLE)

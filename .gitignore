@@ -72,3 +72,6 @@ __pycache__/
 output/*
 !output/preset-gallery/
 !output/preset-gallery/**
+
+# The algorithm video gallery is generated and published separately.
+output/glitch-algorithm-gallery/

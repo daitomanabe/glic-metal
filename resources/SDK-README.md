@@ -26,6 +26,10 @@ machine-readable contract for downstream coding agents. The adjacent
 `AI_INTEGRATION.md` is its normative implementation checklist.
 `offline-codec-effects.json` and `codec-lab-effects.json` describe the separate
 offline packet/syntax/analysis workflows and the realtime Crossbreed subset.
+`glitch-gallery-presets.json` provides three deterministic, effect-aware
+parameter recipes for all 147 gallery algorithms. It is a portable preset
+catalog, not a realtime certification claim. See
+`Documentation/GLITCH_ALGORITHM_GALLERY.md`.
 The XCFramework realtime ABI does not decode damaged bitstreams. Install
 `Tools/requirements.txt`, run `Tools/process_offline_packet_glitch.py` in an
 isolated process, and follow `Documentation/OFFLINE_PACKET_GLITCH.md`.

@@ -16,6 +16,8 @@ set_and_check(GLIC_METAL_OFFLINE_CODEC_EFFECTS_JSON
               "@PACKAGE_CMAKE_INSTALL_DATADIR@/glic-metal/offline-codec-effects.json")
 set_and_check(GLIC_METAL_CODEC_LAB_EFFECTS_JSON
               "@PACKAGE_CMAKE_INSTALL_DATADIR@/glic-metal/codec-lab-effects.json")
+set_and_check(GLIC_METAL_GLITCH_GALLERY_PRESETS_JSON
+              "@PACKAGE_CMAKE_INSTALL_DATADIR@/glic-metal/glitch-gallery-presets.json")
 set_and_check(GLIC_METAL_TOOLS_DIR "@PACKAGE_CMAKE_INSTALL_BINDIR@")
 set_and_check(GLIC_METAL_PYTHON_REQUIREMENTS
               "@PACKAGE_CMAKE_INSTALL_DATADIR@/glic-metal/requirements-qa.txt")

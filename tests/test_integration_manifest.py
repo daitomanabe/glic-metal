@@ -125,6 +125,7 @@ def main() -> int:
     }
     assert manifest["runtime_resources"]["offline-codec-effects.json"]
     assert manifest["runtime_resources"]["codec-lab-effects.json"]
+    assert manifest["runtime_resources"]["glitch-gallery-presets.json"]
     matrix = manifest["realtime_acceptance"]["codec_fast_path_matrix"]
     assert matrix["runs"] == 36 * 3 * 2 == 216
     assert matrix["required_input_pixel_format"] == "nv12_420v"

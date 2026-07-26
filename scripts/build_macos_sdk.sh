@@ -75,6 +75,9 @@ run cmake -E copy_if_different \
   "${install_dir}/share/glic-metal/codec-lab-effects.json" \
   "${resource_bundle}/Contents/Resources/codec-lab-effects.json"
 run cmake -E copy_if_different \
+  "${install_dir}/share/glic-metal/glitch-gallery-presets.json" \
+  "${resource_bundle}/Contents/Resources/glitch-gallery-presets.json"
+run cmake -E copy_if_different \
   "${install_dir}/lib/glic/glic_realtime.metallib" \
   "${resource_bundle}/Contents/Resources/glic_realtime.metallib"
 run cmake -E copy_if_different "$repo_root/LICENSE" \
@@ -146,6 +149,7 @@ for document in \
   OFFLINE_PACKET_GLITCH.md \
   CODEC_LAB.md \
   NATIVE_SYNTAX_GLITCH.md \
+  GLITCH_ALGORITHM_GALLERY.md \
   GLITCH_EXPANSION.md; do
   run cmake -E copy_if_different \
     "${install_dir}/share/doc/glic-metal/${document}" \
