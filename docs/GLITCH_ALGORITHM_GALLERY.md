@@ -37,7 +37,7 @@ The machine-readable result is
 
 ```bash
 python3 scripts/build_glitch_algorithm_gallery.py \
-  /Users/daitomacm5/development/sandbox/glic-metal/assets/test-video.mp4 \
+  assets/test-video.mp4 \
   --workers 2 \
   --resume
 ```
@@ -65,7 +65,7 @@ the expensive codec processors, reuse each task's retained `raw.mp4`:
 
 ```bash
 python3 scripts/build_glitch_algorithm_gallery.py \
-  /Users/daitomacm5/development/sandbox/glic-metal/assets/test-video.mp4 \
+  assets/test-video.mp4 \
   --rebuild-web-only \
   --workers 8
 ```

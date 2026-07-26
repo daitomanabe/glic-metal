@@ -7,7 +7,9 @@ active development; no stable binary release has been tagged yet.
 
 Canonical repository: <https://github.com/daitomanabe/glic-metal>
 
+[Live algorithm gallery](https://projects.daito.ws/glic-metal-gallery/) ·
 [Build guide](docs/BUILDING.md) ·
+[Gallery generation and QA](docs/GLITCH_ALGORITHM_GALLERY.md) ·
 [Downstream quick start](docs/DOWNSTREAM_QUICKSTART.md) ·
 [Embedding guide](docs/EMBEDDING.md) ·
 [AI integration contract](docs/AI_INTEGRATION.md) ·

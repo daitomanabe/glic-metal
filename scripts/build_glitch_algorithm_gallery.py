@@ -1497,7 +1497,7 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
         ),
         "stat-algorithms": "ALGORITHMS",
         "stat-videos": "VIDEOS",
-        "stat-pass": "TECHNICAL PASS",
+        "stat-qa": "TECHNICAL QA",
         "filter-all": "ALL FAMILIES",
         "search-label": "SEARCH ALGORITHMS",
         "search-placeholder": "effect, codec, implementation…",
@@ -1671,7 +1671,7 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
       <div class="stats">
         <div class="stat"><strong>{manifest["algorithm_count"]}</strong><span data-i18n="stat-algorithms">ALGORITHMS</span></div>
         <div class="stat"><strong>{manifest["rendered_video_count"]}/{manifest["expected_video_count"]}</strong><span data-i18n="stat-videos">VIDEOS</span></div>
-        <div class="stat"><strong>{status.get("PASS", 0)}</strong><span data-i18n="stat-pass">TECHNICAL PASS</span></div>
+        <div class="stat"><strong>{status.get("PASS", 0)}P / {status.get("WARN", 0)}W</strong><span data-i18n="stat-qa">TECHNICAL QA</span></div>
       </div>
     </header>
     <div class="toolbar">
