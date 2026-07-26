@@ -1296,6 +1296,7 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
     translations: dict[str, str] = {
         "gallery-kicker": "GLIC METAL / COMPLETE ALGORITHM INDEX",
         "gallery-title": "Glitch Algorithm Gallery",
+        "back-projects": "← PROJECTS",
         "gallery-lead": (
             "Every executable glitch algorithm is rendered from the same "
             "five-second source with three deliberately different parameter presets."
@@ -1428,7 +1429,9 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
     body{{margin:0;background:radial-gradient(circle at 78% -20%,#35110a 0,transparent 33rem),var(--bg)}}
     a{{color:inherit}} .shell{{width:min(1680px,100%);margin:auto;padding:28px clamp(16px,3vw,54px) 96px}}
     .topbar{{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:18px}}
-    .brand{{font-size:11px;letter-spacing:.18em;color:var(--muted)}} [data-i18n-toggle-slot]{{min-height:28px}}
+    .topbar-left{{display:flex;align-items:center;gap:22px}} .brand{{font-size:11px;letter-spacing:.18em;color:var(--muted)}}
+    #back-to-projects{{font-size:10px;letter-spacing:.12em;text-decoration:none;color:#b5b5ad}} #back-to-projects:hover{{color:var(--accent)}}
+    [data-i18n-toggle-slot]{{min-height:28px}}
     .hero{{padding:clamp(70px,11vw,180px) 0 74px}} .kicker,.family{{font-size:10px;letter-spacing:.18em;color:var(--accent);text-transform:uppercase}}
     h1{{font:500 clamp(48px,9vw,138px)/.86 Helvetica,Arial,sans-serif;letter-spacing:-.07em;max-width:1200px;margin:22px 0 30px}}
     .lead{{max-width:820px;color:#c5c5bd;font:400 clamp(16px,2vw,25px)/1.48 Helvetica,Arial,sans-serif}}
@@ -1456,7 +1459,10 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
 </head>
 <body>
   <main class="shell">
-    <div class="topbar"><span class="brand">GLIC METAL / 2026</span><div data-i18n-toggle-slot></div></div>
+    <div class="topbar">
+      <div class="topbar-left"><a id="back-to-projects" href="../#generative" data-i18n="back-projects">← PROJECTS</a><span class="brand">GLIC METAL / 2026</span></div>
+      <div data-i18n-toggle-slot></div>
+    </div>
     <header class="hero">
       <p class="kicker" data-i18n="gallery-kicker">GLIC METAL / 全アルゴリズム索引</p>
       <h1 data-i18n="gallery-title">Glitch Algorithm Gallery</h1>
