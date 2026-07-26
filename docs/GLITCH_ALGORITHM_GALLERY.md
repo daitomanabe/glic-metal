@@ -23,6 +23,33 @@ and 100% dry/wet mix. This preserves the real algorithm output while keeping
 the three gallery looks distinct when an original codec recipe quantizes
 different parameter values to the same internal state.
 
+## Review and adopt presets
+
+The public gallery includes a three-state review control on every rendered
+variant:
+
+- `採用 / ADOPT` — include the exact algorithm and parameters in the adopted
+  export;
+- `不採用 / REJECT` — retain an explicit rejection for review provenance;
+- `未判定 / PENDING` — leave the variant undecided.
+
+Decisions are saved automatically in browser `localStorage` under
+`glic-metal-gallery-review-v1`. Family, text, and review-state filters can be
+combined. Each algorithm also has bulk controls for its three variants.
+
+When review is complete:
+
+1. Use **採用JSONをコピー** or **採用JSONを保存** for the compact adopted set.
+2. Use **全判定をコピー** or **全判定を保存** when rejected and pending entries
+   must also be retained.
+3. Hand `glic-metal-adopted-presets.json` to the integrating agent. Each item
+   contains the stable algorithm ID, family, effect, codec, implementation
+   level, realtime claim, exact parameters, media path, and technical QA.
+
+The export schema is `glic-metal-gallery-review-v1`. Browser review state is a
+curation artifact and does not change the canonical runtime preset bank until
+the exported JSON is deliberately imported into a later adoption step.
+
 ## Generate the preset catalog
 
 ```bash

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from pathlib import Path
 import sys
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -86,6 +88,44 @@ def main() -> int:
     assert {
         row["effect"] for row in catalog["algorithms"] if row["family"] == "original"
     } == selected_original
+
+    algorithm = deepcopy(catalog["algorithms"][0])
+    algorithm["variants"] = algorithm.pop("presets")
+    for variant in algorithm["variants"]:
+        variant.update(
+            {
+                "status": "PASS",
+                "warnings": [],
+                "video": None,
+                "thumbnail": None,
+                "metrics": {},
+                "error": None,
+            }
+        )
+    manifest = {
+        "schema": "glic-glitch-algorithm-gallery-v1",
+        "generated_utc": "2026-07-26T00:00:00Z",
+        "source": {},
+        "glic_metal_revision": "test-revision",
+        "algorithm_count": 1,
+        "expected_video_count": 3,
+        "rendered_video_count": 0,
+        "status_counts": {"PASS": 3, "WARN": 0, "FAIL": 0, "MISSING": 0},
+        "family_counts": {"original": 1},
+        "algorithms": [algorithm],
+    }
+    with tempfile.TemporaryDirectory() as temporary:
+        site = Path(temporary)
+        gallery.render_site(manifest, site)
+        page = (site / "index.html").read_text()
+        assert page.count('data-review-key="') == 3
+        assert "glic-metal-gallery-review-v1" in page
+        assert "window.__GLIC_REVIEW_ITEMS" in page
+        assert 'id="copy-adopted"' in page
+        assert 'id="download-all"' in page
+        assert 'id="review-filter"' in page
+        assert "localStorage.setItem(storageKey" in page
+        assert "glic-metal-adopted-presets.json" in page
     print("PASS glitch gallery catalog: 147 algorithms, 441 videos")
     return 0
 

@@ -8,6 +8,10 @@ semantic versioning for tagged releases.
 
 ### Added
 
+- Three-state adopt, reject, and pending review controls for all 441 glitch
+  gallery variants, with browser-local persistence, combined filters,
+  three-variant bulk actions, and copy/download JSON exports that retain exact
+  parameters, implementation level, realtime claim, and technical QA.
 - A distributable `glic-metal-sdk-integration` Codex Skill with explicit
   Original, Spatial, VideoToolbox, and offline workflow routing; host
   acceptance gates; and a deterministic inspector for source checkouts,

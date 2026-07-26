@@ -1487,6 +1487,7 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
     )
 
     cards = []
+    review_items: list[dict[str, Any]] = []
     translations: dict[str, Any] = {
         "gallery-kicker": "GLIC METAL / COMPLETE ALGORITHM INDEX",
         "gallery-title": "Glitch Algorithm Gallery",
@@ -1501,6 +1502,29 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
         "filter-all": "ALL FAMILIES",
         "search-label": "SEARCH ALGORITHMS",
         "search-placeholder": "effect, codec, implementation…",
+        "review-filter-all": "ALL DECISIONS",
+        "review-filter-pending": "PENDING",
+        "review-filter-adopt": "ADOPTED",
+        "review-filter-reject": "REJECTED",
+        "review-title": "PRESET REVIEW",
+        "review-lead": (
+            "Classify each rendered preset as adopted or rejected. "
+            "Decisions are stored in this browser."
+        ),
+        "review-adopted": "ADOPTED",
+        "review-rejected": "REJECTED",
+        "review-pending": "PENDING",
+        "review-adopt": "ADOPT",
+        "review-reject": "REJECT",
+        "review-clear": "CLEAR",
+        "review-all-adopt": "ADOPT ALL 3",
+        "review-all-reject": "REJECT ALL 3",
+        "review-copy-adopted": "COPY ADOPTED JSON",
+        "review-copy-all": "COPY ALL DECISIONS",
+        "review-download-adopted": "DOWNLOAD ADOPTED JSON",
+        "review-download-all": "DOWNLOAD ALL DECISIONS",
+        "review-reset": "RESET REVIEW",
+        "review-message-ready": "Selections are saved automatically.",
         "realtime": "REALTIME",
         "offline": "OFFLINE",
         "implementation": "IMPLEMENTATION",
@@ -1537,6 +1561,7 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
         ).lower()
         for variant_index, variant in enumerate(algorithm["variants"]):
             preset_key = f"{algorithm_key}-preset-{variant_index}"
+            review_key = f"{algorithm['id']}::{variant['id']}"
             translations[f"{preset_key}-label"] = variant["label_en"]
             translations[f"{preset_key}-description"] = variant["description_en"]
             status = variant["status"]
@@ -1562,9 +1587,31 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
                 f"changed {metrics.get('changed_pixel_ratio', '—')} / "
                 f"motion {metrics.get('mean_frame_delta', '—')}"
             )
+            review_items.append(
+                {
+                    "key": review_key,
+                    "algorithm_id": algorithm["id"],
+                    "family": algorithm["family"],
+                    "effect": algorithm["effect"],
+                    "codec": algorithm.get("codec"),
+                    "display_name": algorithm["display_name"],
+                    "implementation_level": algorithm["implementation_level"],
+                    "realtime_certified": algorithm["realtime_certified"],
+                    "variant_id": variant["id"],
+                    "variant_label": variant["label_en"],
+                    "parameters": variant["parameters"],
+                    "video": variant.get("video"),
+                    "thumbnail": variant.get("thumbnail"),
+                    "technical_qa": {
+                        "status": status,
+                        "warnings": variant.get("warnings") or [],
+                        "metrics": metrics,
+                    },
+                }
+            )
             variants_html.append(
                 f"""
-                <article class="variant" data-status="{html.escape(status)}">
+                <article class="variant decision-pending" data-status="{html.escape(status)}" data-review-key="{html.escape(review_key)}" data-review-decision="pending">
                   <div class="media">{video_markup}<span class="play-hint" data-i18n="play-hint">再生: hover / tap</span></div>
                   <div class="variant-copy">
                     <div class="variant-head">
@@ -1578,6 +1625,11 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
                       <dt data-i18n="qa">TECHNICAL QA</dt>
                       <dd>{html.escape(qa_text)}</dd>
                     </dl>
+                    <div class="review-controls" role="group" aria-label="Review {html.escape(algorithm["display_name"])} {html.escape(variant["label_en"])}">
+                      <button type="button" class="review-button adopt" data-decision="adopt" aria-pressed="false" data-i18n="review-adopt">採用</button>
+                      <button type="button" class="review-button reject" data-decision="reject" aria-pressed="false" data-i18n="review-reject">不採用</button>
+                      <button type="button" class="review-button clear" data-decision="pending" data-i18n="review-clear">未判定</button>
+                    </div>
                   </div>
                 </article>
                 """
@@ -1596,13 +1648,20 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
         )
         cards.append(
             f"""
-            <section class="algorithm" data-family="{html.escape(algorithm["family"])}" data-search="{html.escape(searchable)}">
+            <section class="algorithm" data-algorithm-id="{html.escape(algorithm["id"])}" data-family="{html.escape(algorithm["family"])}" data-search="{html.escape(searchable)}">
               <header class="algorithm-head">
                 <div>
                   <p class="family" data-i18n="{algorithm_key}-family">{html.escape(algorithm["family_label_ja"])}</p>
                   <h2>{html.escape(algorithm["display_name"])}</h2>
                 </div>
-                <div class="badges">{codec_badge}<span class="badge" data-i18n="{realtime_key}">{'REALTIME' if realtime_key == 'realtime' else 'OFFLINE'}</span></div>
+                <div class="algorithm-tools">
+                  <div class="badges">{codec_badge}<span class="badge" data-i18n="{realtime_key}">{'REALTIME' if realtime_key == 'realtime' else 'OFFLINE'}</span></div>
+                  <div class="bulk-review" role="group" aria-label="Review all variants">
+                    <button type="button" data-bulk-decision="adopt" data-i18n="review-all-adopt">3案採用</button>
+                    <button type="button" data-bulk-decision="reject" data-i18n="review-all-reject">3案不採用</button>
+                    <button type="button" data-bulk-decision="pending" data-i18n="review-clear">クリア</button>
+                  </div>
+                </div>
               </header>
               <div class="implementation"><span data-i18n="implementation">IMPLEMENTATION</span> / {html.escape(algorithm["implementation_level"])} · <span data-i18n="variant-diversity">VARIANT DIVERSITY</span> / min Δ {diversity_value} ({html.escape(diversity["status"])})</div>
               <div class="variants">{''.join(variants_html)}</div>
@@ -1644,22 +1703,32 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
     .stats{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--line);margin-top:56px}}
     .stat{{padding:24px;border-right:1px solid var(--line)}} .stat:last-child{{border:0}} .stat strong{{display:block;font:500 clamp(30px,5vw,66px)/1 Helvetica,Arial,sans-serif}}
     .stat span{{font-size:10px;color:var(--muted);letter-spacing:.12em}}
-    .toolbar{{position:sticky;top:0;z-index:20;display:grid;grid-template-columns:1fr 2fr;gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:42px;box-shadow:0 20px 35px #000a}}
+    .toolbar{{position:sticky;top:0;z-index:20;display:grid;grid-template-columns:1fr 2fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);box-shadow:0 20px 35px #000a}}
     select,input{{width:100%;border:0;background:#080808;color:var(--text);padding:18px;font:12px Menlo,monospace;outline:none}}
+    button{{font:10px Menlo,monospace;letter-spacing:.05em;cursor:pointer}}
+    .review-panel{{position:sticky;top:54px;z-index:19;display:grid;grid-template-columns:minmax(240px,1.2fr) auto minmax(360px,1.4fr);gap:18px;align-items:center;background:#111;border:1px solid var(--line);border-top:0;padding:16px 18px;margin-bottom:42px;box-shadow:0 20px 35px #000a}}
+    .review-panel h2{{font:500 14px/1 Menlo,monospace;letter-spacing:.12em;margin:0 0 7px;color:var(--accent)}} .review-panel p{{margin:0;color:#8f8f88;font:11px/1.45 Helvetica,Arial,sans-serif}}
+    .review-summary{{display:flex;gap:8px}} .review-count{{min-width:78px;border:1px solid var(--line);padding:9px 10px;text-align:center}}
+    .review-count strong{{display:block;font:500 21px/1 Helvetica,Arial,sans-serif}} .review-count span{{font-size:8px;color:var(--muted);letter-spacing:.08em}}
+    .review-count.adopted strong{{color:var(--ok)}} .review-count.rejected strong{{color:#ff8170}} .review-count.pending strong{{color:var(--warn)}}
+    .review-actions{{display:flex;justify-content:flex-end;gap:6px;flex-wrap:wrap}} .review-actions button,.bulk-review button,.review-button{{border:1px solid #373737;background:#090909;color:#aaa;padding:8px 9px}}
+    .review-actions button:hover,.bulk-review button:hover,.review-button:hover{{border-color:#777;color:#fff}} #review-message{{flex-basis:100%;text-align:right;font-size:9px;min-height:13px;color:#777}}
     .algorithm{{border-top:1px solid var(--line);padding:30px 0 68px}} .algorithm[hidden]{{display:none}}
     .algorithm-head{{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:14px}}
     .algorithm h2{{margin:5px 0 0;font:500 clamp(28px,4vw,58px)/1 Helvetica,Arial,sans-serif;letter-spacing:-.035em;text-transform:capitalize}}
-    .badges{{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}} .badge,.status{{border:1px solid var(--line);padding:7px 9px;font-size:9px;letter-spacing:.08em;color:var(--muted)}}
+    .algorithm-tools{{display:flex;flex-direction:column;align-items:flex-end;gap:9px}} .badges,.bulk-review{{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}} .badge,.status{{border:1px solid var(--line);padding:7px 9px;font-size:9px;letter-spacing:.08em;color:var(--muted)}}
     .codec{{color:#fff;border-color:#595959}} .implementation{{font-size:9px;color:#666;overflow-wrap:anywhere;margin-bottom:20px}}
     .variants{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}}
-    .variant{{background:var(--panel);border:1px solid var(--line);min-width:0}} .media{{aspect-ratio:16/9;background:#101010;position:relative;overflow:hidden}}
+    .variant{{background:var(--panel);border:1px solid var(--line);min-width:0;transition:border-color .15s,opacity .15s}} .variant[hidden]{{display:none}} .variant.decision-adopt{{border-color:#4f9f5c;box-shadow:inset 0 0 0 1px #4f9f5c44}} .variant.decision-reject{{border-color:#8d4037;opacity:.68}} .media{{aspect-ratio:16/9;background:#101010;position:relative;overflow:hidden}}
     video{{width:100%;height:100%;object-fit:cover;display:block}} .play-hint{{position:absolute;bottom:8px;left:8px;background:#000b;padding:6px;font-size:8px;color:#aaa;pointer-events:none}}
     .media-error{{padding:20px;color:#ff8973;font-size:10px;overflow-wrap:anywhere}} .variant-copy{{padding:18px}}
     .variant-head{{display:flex;align-items:start;justify-content:space-between;gap:8px}} .variant h3{{font-size:11px;line-height:1.3;margin:0;letter-spacing:.08em}}
     .variant p{{min-height:44px;font:12px/1.5 Helvetica,Arial,sans-serif;color:#aaa}} .status-pass{{color:var(--ok)}} .status-warn{{color:var(--warn)}} .status-fail{{color:#ff6b6b}}
     dl{{margin:18px 0 0;border-top:1px solid var(--line);padding-top:12px}} dt{{font-size:8px;color:#666;margin-top:9px}} dd{{font-size:9px;color:#aaa;margin:4px 0;overflow-wrap:anywhere;line-height:1.5}}
+    .review-controls{{display:grid;grid-template-columns:1fr 1fr auto;gap:5px;margin-top:17px}} .review-button.adopt[aria-pressed="true"]{{background:#1a4a25;border-color:#78d689;color:#dfffe4}} .review-button.reject[aria-pressed="true"]{{background:#55231e;border-color:#e36d5d;color:#ffe1dc}} .review-button.clear{{padding-inline:10px}}
     .foot{{border-top:1px solid var(--line);padding-top:24px;color:#777;font-size:10px;line-height:1.6}}
-    @media(max-width:900px){{.variants{{grid-template-columns:1fr}}.toolbar{{grid-template-columns:1fr}}.algorithm-head{{align-items:start;flex-direction:column}}.badges{{justify-content:start}}}}
+    @media(max-width:1100px){{.review-panel{{grid-template-columns:1fr auto}}.review-actions{{grid-column:1/-1;justify-content:flex-start}}#review-message{{text-align:left}}}}
+    @media(max-width:900px){{.variants{{grid-template-columns:1fr}}.toolbar{{grid-template-columns:1fr}}.review-panel{{position:static;grid-template-columns:1fr}}.review-actions{{grid-column:auto}}.algorithm-head{{align-items:start;flex-direction:column}}.algorithm-tools{{align-items:flex-start}}.badges,.bulk-review{{justify-content:start}}}}
     @media(max-width:560px){{.shell{{padding-inline:14px}}.stats{{grid-template-columns:1fr}}.stat{{border-right:0;border-bottom:1px solid var(--line)}}.hero{{padding-top:72px}}}}
   </style>
 </head>
@@ -1682,7 +1751,32 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
     <div class="toolbar">
       <select id="family-filter" aria-label="Filter family">{''.join(family_options)}</select>
       <input id="search" type="search" data-i18n-placeholder="search-placeholder" placeholder="effect、codec、implementationを検索">
+      <select id="review-filter" aria-label="Filter review decision">
+        <option value="all" data-i18n="review-filter-all">全判定</option>
+        <option value="pending" data-i18n="review-filter-pending">未判定</option>
+        <option value="adopt" data-i18n="review-filter-adopt">採用</option>
+        <option value="reject" data-i18n="review-filter-reject">不採用</option>
+      </select>
     </div>
+    <aside class="review-panel" aria-labelledby="review-title">
+      <div>
+        <h2 id="review-title" data-i18n="review-title">PRESET REVIEW</h2>
+        <p data-i18n="review-lead">各動画を採用／不採用に分類します。判定はこのブラウザーへ自動保存されます。</p>
+      </div>
+      <div class="review-summary" aria-live="polite">
+        <div class="review-count adopted"><strong id="adopt-count">0</strong><span data-i18n="review-adopted">採用</span></div>
+        <div class="review-count rejected"><strong id="reject-count">0</strong><span data-i18n="review-rejected">不採用</span></div>
+        <div class="review-count pending"><strong id="pending-count">{manifest["expected_video_count"]}</strong><span data-i18n="review-pending">未判定</span></div>
+      </div>
+      <div class="review-actions">
+        <button type="button" id="copy-adopted" data-i18n="review-copy-adopted">採用JSONをコピー</button>
+        <button type="button" id="copy-all" data-i18n="review-copy-all">全判定をコピー</button>
+        <button type="button" id="download-adopted" data-i18n="review-download-adopted">採用JSONを保存</button>
+        <button type="button" id="download-all" data-i18n="review-download-all">全判定を保存</button>
+        <button type="button" id="reset-review" data-i18n="review-reset">判定をリセット</button>
+        <p id="review-message" data-i18n="review-message-ready">選択は自動保存されます。</p>
+      </div>
+    </aside>
     <div id="algorithms">{''.join(cards)}</div>
     <footer class="foot">
       <p data-i18n="source-note">入力は5秒・1920×1080のH.264動画。公開動画は480×270・24fps・H.264 yuv420p・無音、posterはWebPです。</p>
@@ -1690,21 +1784,143 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
     </footer>
   </main>
   <script>window.__I18N = {json.dumps(translations, ensure_ascii=False)};</script>
+  <script>
+    window.__GLIC_REVIEW_ITEMS = {json.dumps(review_items, ensure_ascii=False)};
+    window.__GLIC_GALLERY_REVISION = {json.dumps(manifest.get("glic_metal_revision"))};
+  </script>
   <script src="../scripts/i18n.js"></script>
   <script>
   (() => {{
     const filter = document.querySelector('#family-filter');
     const search = document.querySelector('#search');
+    const reviewFilter = document.querySelector('#review-filter');
     const cards = [...document.querySelectorAll('.algorithm')];
+    const variants = [...document.querySelectorAll('.variant')];
+    const reviewItems = window.__GLIC_REVIEW_ITEMS || [];
+    const storageKey = 'glic-metal-gallery-review-v1';
+    const validKeys = new Set(reviewItems.map(item => item.key));
+    let decisions = {{}};
+    try {{
+      const saved = JSON.parse(localStorage.getItem(storageKey) || '{{}}');
+      Object.entries(saved).forEach(([key, value]) => {{
+        if (validKeys.has(key) && (value === 'adopt' || value === 'reject')) decisions[key] = value;
+      }});
+    }} catch (_) {{}}
+    const decisionFor = key => decisions[key] || 'pending';
+    const counts = () => {{
+      const adopted = Object.values(decisions).filter(value => value === 'adopt').length;
+      const rejected = Object.values(decisions).filter(value => value === 'reject').length;
+      return {{adopted, rejected, pending: reviewItems.length - adopted - rejected}};
+    }};
+    const updateSummary = () => {{
+      const current = counts();
+      document.querySelector('#adopt-count').textContent = current.adopted;
+      document.querySelector('#reject-count').textContent = current.rejected;
+      document.querySelector('#pending-count').textContent = current.pending;
+    }};
+    const updateVariant = variant => {{
+      const decision = decisionFor(variant.dataset.reviewKey);
+      variant.dataset.reviewDecision = decision;
+      variant.classList.remove('decision-adopt', 'decision-reject', 'decision-pending');
+      variant.classList.add(`decision-${{decision}}`);
+      variant.querySelectorAll('[data-decision]').forEach(button => {{
+        if (button.dataset.decision !== 'pending') {{
+          button.setAttribute('aria-pressed', String(button.dataset.decision === decision));
+        }}
+      }});
+    }};
     const apply = () => {{
       const family = filter.value;
       const term = search.value.trim().toLowerCase();
+      const review = reviewFilter.value;
       cards.forEach(card => {{
-        card.hidden = !((family === 'all' || card.dataset.family === family) && (!term || card.dataset.search.includes(term)));
+        const matchesCard = (family === 'all' || card.dataset.family === family) && (!term || card.dataset.search.includes(term));
+        let visibleVariants = 0;
+        card.querySelectorAll('.variant').forEach(variant => {{
+          const matchesReview = review === 'all' || decisionFor(variant.dataset.reviewKey) === review;
+          variant.hidden = !matchesReview;
+          if (matchesReview) visibleVariants += 1;
+        }});
+        card.hidden = !(matchesCard && visibleVariants > 0);
       }});
+    }};
+    const persist = () => {{
+      localStorage.setItem(storageKey, JSON.stringify(decisions));
+      variants.forEach(updateVariant);
+      updateSummary();
+      apply();
+    }};
+    const setDecision = (key, decision) => {{
+      if (!validKeys.has(key)) return;
+      if (decision === 'pending' || decisions[key] === decision) delete decisions[key];
+      else decisions[key] = decision;
+      persist();
+    }};
+    const exportData = scope => {{
+      const allItems = reviewItems.map(item => ({{...item, decision: decisionFor(item.key)}}));
+      const current = counts();
+      return {{
+        schema: 'glic-metal-gallery-review-v1',
+        gallery_revision: window.__GLIC_GALLERY_REVISION,
+        exported_at: new Date().toISOString(),
+        scope,
+        counts: current,
+        items: scope === 'adopted' ? allItems.filter(item => item.decision === 'adopt') : allItems,
+      }};
+    }};
+    const setMessage = message => {{
+      document.querySelector('#review-message').textContent = message;
+    }};
+    const copyJSON = async scope => {{
+      const data = JSON.stringify(exportData(scope), null, 2);
+      try {{
+        await navigator.clipboard.writeText(data);
+        setMessage(scope === 'adopted' ? '採用JSONをコピーしました。' : '全判定JSONをコピーしました。');
+      }} catch (_) {{
+        setMessage('コピーできませんでした。ダウンロードを使用してください。');
+      }}
+    }};
+    const downloadJSON = scope => {{
+      const blob = new Blob([JSON.stringify(exportData(scope), null, 2) + '\\n'], {{type:'application/json'}});
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = scope === 'adopted' ? 'glic-metal-adopted-presets.json' : 'glic-metal-gallery-review.json';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setMessage(`${{link.download}} を保存しました。`);
     }};
     filter.addEventListener('change', apply);
     search.addEventListener('input', apply);
+    reviewFilter.addEventListener('change', apply);
+    variants.forEach(variant => {{
+      variant.querySelectorAll('[data-decision]').forEach(button => {{
+        button.addEventListener('click', () => setDecision(variant.dataset.reviewKey, button.dataset.decision));
+      }});
+    }});
+    document.querySelectorAll('[data-bulk-decision]').forEach(button => {{
+      button.addEventListener('click', () => {{
+        const card = button.closest('.algorithm');
+        card.querySelectorAll('.variant').forEach(variant => {{
+          const key = variant.dataset.reviewKey;
+          if (button.dataset.bulkDecision === 'pending') delete decisions[key];
+          else decisions[key] = button.dataset.bulkDecision;
+        }});
+        persist();
+      }});
+    }});
+    document.querySelector('#copy-adopted').addEventListener('click', () => copyJSON('adopted'));
+    document.querySelector('#copy-all').addEventListener('click', () => copyJSON('all'));
+    document.querySelector('#download-adopted').addEventListener('click', () => downloadJSON('adopted'));
+    document.querySelector('#download-all').addEventListener('click', () => downloadJSON('all'));
+    document.querySelector('#reset-review').addEventListener('click', () => {{
+      if (!window.confirm('このブラウザーに保存した全判定をリセットしますか？')) return;
+      decisions = {{}};
+      persist();
+      setMessage('全判定をリセットしました。');
+    }});
     const load = video => {{
       if (!video.src && video.dataset.src) {{ video.src = video.dataset.src; video.load(); }}
     }};
@@ -1717,6 +1933,9 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
       video.addEventListener('pointerleave', () => video.pause());
       video.addEventListener('click', () => video.paused ? video.play().catch(()=>{{}}) : video.pause());
     }});
+    variants.forEach(updateVariant);
+    updateSummary();
+    apply();
   }})();
   </script>
 </body>
