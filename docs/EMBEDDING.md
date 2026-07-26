@@ -20,6 +20,8 @@ The public surface is:
 - `presets/` — runtime preset data;
 - `selected-presets.json` — portable data copy of the adopted 19 presets.
 - `integration-manifest.json` — machine-readable integration contract.
+- `Skills/glic-metal-sdk-integration/` — packaged Codex workflow and SDK
+  inspector for downstream agents.
 - `docs/MULTICODEC_GLITCH.md` — native and offline codec capability contract.
 - `offline-codec-effects.json` — supported offline packet operations.
 - `docs/OFFLINE_PACKET_GLITCH.md` — damaged-bitstream isolation and QA contract.

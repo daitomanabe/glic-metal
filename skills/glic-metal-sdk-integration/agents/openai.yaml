@@ -1,0 +1,4 @@
+interface:
+  display_name: "GLIC Metal SDK Integration"
+  short_description: "Integrate and validate GLIC Metal SDK hosts"
+  default_prompt: "Use $glic-metal-sdk-integration to integrate the GLIC Metal SDK into this application and verify the result."

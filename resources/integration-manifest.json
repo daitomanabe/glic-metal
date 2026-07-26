@@ -13,7 +13,8 @@
       "resources": "GlicMetalResources.bundle",
       "documentation_directory": "Documentation",
       "offline_tools_directory": "Tools",
-      "python_requirements": "Tools/requirements.txt"
+      "python_requirements": "Tools/requirements.txt",
+      "agent_skill": "Skills/glic-metal-sdk-integration"
     },
     "cmake_package": {
       "target": "GlicMetal::GlicMetal",

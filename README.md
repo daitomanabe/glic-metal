@@ -13,6 +13,7 @@ Canonical repository: <https://github.com/daitomanabe/glic-metal>
 [Downstream quick start](docs/DOWNSTREAM_QUICKSTART.md) ·
 [Embedding guide](docs/EMBEDDING.md) ·
 [AI integration contract](docs/AI_INTEGRATION.md) ·
+[Codex SDK integration skill](skills/glic-metal-sdk-integration/SKILL.md) ·
 [Codec Glitch](docs/CODEC_GLITCH.md) ·
 [Glitch expansion catalog](docs/GLITCH_EXPANSION.md) ·
 [Original-preset fidelity](docs/ORIGINAL_PRESET_REALTIME.md) ·

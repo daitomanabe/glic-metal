@@ -17,6 +17,7 @@ glic-metal/
 ├── presets/                  144 SHA-256-pinned upstream presets
 ├── resources/                SDK guide, macOS metadata, integration contract, and codec catalogs
 ├── scripts/                  realtime/offline video processing, packet damage, search, and QA tools
+├── skills/                   distributable Codex integration workflow
 ├── src/                      C++20, Objective-C++, and Metal implementation
 ├── tests/                    API consumer, C++, Objective-C++, and Python tests
 ├── tools/                    image/codec filtering, search, and certification CLIs
@@ -65,12 +66,14 @@ GlicMetalSDK/
 │   ├── validate_videotoolbox_fast_path.py
 │   ├── evaluate_codec_glitch_videos.py
 │   └── requirements.txt
+├── Skills/
+│   └── glic-metal-sdk-integration/
 └── SHA256SUMS
 ```
 
-`Documentation/` and `Tools/` are copied from the same source revision as the
-library and catalogs. Generated SDKs, local test videos, search runs, `.DS_Store`
-files, and Python caches remain outside Git.
+`Documentation/`, `Tools/`, and `Skills/` are copied from the same source
+revision as the library and catalogs. Generated SDKs, local test videos, search
+runs, `.DS_Store` files, and Python caches remain outside Git.
 
 Run `python3 scripts/check_public_release.py --source .` after reorganizing the
 tree. It verifies required release files, tracked-path hygiene, absolute path

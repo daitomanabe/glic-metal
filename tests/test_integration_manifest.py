@@ -45,7 +45,14 @@ def main() -> int:
         "documentation_directory": "Documentation",
         "offline_tools_directory": "Tools",
         "python_requirements": "Tools/requirements.txt",
+        "agent_skill": "Skills/glic-metal-sdk-integration",
     }
+    agent_skill = ROOT / distribution["macos_sdk"]["agent_skill"]
+    assert (agent_skill / "SKILL.md").is_file()
+    assert (agent_skill / "agents/openai.yaml").is_file()
+    assert (
+        agent_skill / "scripts/inspect_glic_metal_sdk.py"
+    ).is_file()
     assert (
         distribution["cmake_package"]["offline_tools_variable"]
         == "GLIC_METAL_TOOLS_DIR"

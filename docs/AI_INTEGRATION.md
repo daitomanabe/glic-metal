@@ -6,6 +6,8 @@ This file is the first-read implementation contract for an AI coding agent
 integrating GLIC Metal into another application. Do not infer behavior from
 internal files when a public API or rule is specified here. The machine-readable
 companion is `resources/integration-manifest.json`.
+The generated SDK also carries the reusable Codex workflow at
+`Skills/glic-metal-sdk-integration/`.
 
 ## 日本語
 
@@ -19,15 +21,16 @@ VideoToolbox処理へ振り分ける。
 
 1. `docs/AI_INTEGRATION.md` — AI実装契約（このファイル）
 2. `resources/integration-manifest.json` — 機械可読な依存関係と制約
-3. `docs/DOWNSTREAM_QUICKSTART.md` — 最短の配布・組み込み手順
-4. `include/glic_metal/glitch_presets.h` — 採用プリセットAPI
-5. `include/glic_metal/glic_metal.h` — Original / Spatial画像API
-6. `include/glic_metal/codec_glitch.h` — Codec非同期API
-7. `docs/EMBEDDING.md` — 人間向けの詳細な組み込み手順
-8. `docs/VIDEOTOOLBOX_FAST_PATH.md` — NV12/Metal、pixel path、非同期順序、検証matrix
-9. `docs/MULTICODEC_GLITCH.md` — codec別backend、速度claim、offline契約
-10. `docs/GLITCH_EXPANSION.md` — 追加全系統、実装レベル、実動画評価
-11. `docs/OFFLINE_PACKET_GLITCH.md` — 破損bitstreamの隔離実行・評価契約
+3. `skills/glic-metal-sdk-integration/SKILL.md` — 再利用可能な実装・検証workflow
+4. `docs/DOWNSTREAM_QUICKSTART.md` — 最短の配布・組み込み手順
+5. `include/glic_metal/glitch_presets.h` — 採用プリセットAPI
+6. `include/glic_metal/glic_metal.h` — Original / Spatial画像API
+7. `include/glic_metal/codec_glitch.h` — Codec非同期API
+8. `docs/EMBEDDING.md` — 人間向けの詳細な組み込み手順
+9. `docs/VIDEOTOOLBOX_FAST_PATH.md` — NV12/Metal、pixel path、非同期順序、検証matrix
+10. `docs/MULTICODEC_GLITCH.md` — codec別backend、速度claim、offline契約
+11. `docs/GLITCH_EXPANSION.md` — 追加全系統、実装レベル、実動画評価
+12. `docs/OFFLINE_PACKET_GLITCH.md` — 破損bitstreamの隔離実行・評価契約
 
 `src/` 内のヘッダーは公開APIではない。他アプリからincludeしない。
 

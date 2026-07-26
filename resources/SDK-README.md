@@ -8,6 +8,8 @@ Contents:
 - `Documentation/` — self-contained integration and codec-lab documentation;
 - `Tools/` — realtime VideoToolbox video wrapper plus offline codec, packet,
   evaluation, and search entrypoints;
+- `Skills/glic-metal-sdk-integration/` — installable Codex skill for choosing,
+  integrating, inspecting, and validating the SDK;
 - `SHA256SUMS` — checksums for the packaged files.
 
 Add the XCFramework and resource bundle to the Xcode application target. Link
@@ -24,6 +26,10 @@ Codec controls without parsing JSON.
 `integration-manifest.json` in the same resource directory is the
 machine-readable contract for downstream coding agents. The adjacent
 `AI_INTEGRATION.md` is its normative implementation checklist.
+Agents with Codex Skills support can install or reference
+`Skills/glic-metal-sdk-integration` and invoke
+`$glic-metal-sdk-integration`. Its inspector accepts this SDK root, the source
+checkout, or a CMake install prefix.
 `offline-codec-effects.json` and `codec-lab-effects.json` describe the separate
 offline packet/syntax/analysis workflows and the realtime Crossbreed subset.
 `glitch-gallery-presets.json` provides three deterministic, effect-aware

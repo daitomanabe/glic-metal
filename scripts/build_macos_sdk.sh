@@ -41,6 +41,7 @@ sdk_dir="${temporary_root}/GlicMetalSDK"
 resource_bundle="${sdk_dir}/GlicMetalResources.bundle"
 tools_dir="${sdk_dir}/Tools"
 documentation_dir="${sdk_dir}/Documentation"
+skills_dir="${sdk_dir}/Skills"
 
 run cmake -S "$repo_root" -B "$build_dir" \
   -DCMAKE_BUILD_TYPE=Release \
@@ -89,7 +90,10 @@ run cmake -E copy_if_different "$repo_root/resources/SDK-README.md" \
 run cmake -E copy_if_different \
   "${install_dir}/share/doc/glic-metal/AI_INTEGRATION.md" \
   "${sdk_dir}/AI_INTEGRATION.md"
-run /bin/mkdir -p "$tools_dir" "$documentation_dir"
+run /bin/mkdir -p "$tools_dir" "$documentation_dir" "$skills_dir"
+run cmake -E copy_directory \
+  "${repo_root}/skills/glic-metal-sdk-integration" \
+  "${skills_dir}/glic-metal-sdk-integration"
 run cmake -E copy_if_different \
   "${install_dir}/bin/glic_codec_glitch_filter" \
   "${tools_dir}/glic_codec_glitch_filter"
@@ -170,7 +174,7 @@ run /usr/bin/plutil -insert CFBundleVersion -string 1 "$info_plist"
 (
   cd "$sdk_dir" || exit 1
   find GlicMetal.xcframework GlicMetalResources.bundle README.md \
-    AI_INTEGRATION.md Documentation Tools -type f -print0 |
+    AI_INTEGRATION.md Documentation Tools Skills -type f -print0 |
     sort -z | xargs -0 /usr/bin/shasum -a 256 > SHA256SUMS
 ) || fail "could not create SDK checksums"
 

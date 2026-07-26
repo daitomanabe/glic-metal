@@ -8,6 +8,11 @@ semantic versioning for tagged releases.
 
 ### Added
 
+- A distributable `glic-metal-sdk-integration` Codex Skill with explicit
+  Original, Spatial, VideoToolbox, and offline workflow routing; host
+  acceptance gates; and a deterministic inspector for source checkouts,
+  generated SDKs, and CMake install prefixes. Generated macOS SDKs now include
+  the Skill under `Skills/` and cover it with `SHA256SUMS`.
 - A bilingual VideoToolbox Fast Path integration contract covering Phase 0–6,
   honest zero-copy boundaries, the three public pixel paths, runtime evidence,
   asynchronous ordering, SDK setup, and the reproducible 216-run matrix.

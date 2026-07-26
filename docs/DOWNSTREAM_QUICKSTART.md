@@ -19,12 +19,15 @@ scripts/build_macos_sdk.sh build/GlicMetalSDK
 - `GlicMetalResources.bundle` — Metal library、preset、machine-readable catalog
 - `Documentation/` — 人間・AI向けの自己完結した仕様書
 - `Tools/` — VideoToolbox実動画wrapper、offline codec処理、評価CLI
+- `Skills/glic-metal-sdk-integration/` — Codex向け組み込み・検証workflow
 - `SHA256SUMS` — 配布物の整合性
 
 Xcode targetへXCFrameworkとresource bundleを追加し、`README.md`に列挙されたApple
 frameworkをlinkします。最初に`AI_INTEGRATION.md`、次に
 `Documentation/EMBEDDING.md`を読みます。Codecを使う場合は
 `Documentation/VIDEOTOOLBOX_FAST_PATH.md`のpixel pathとruntime flagも確認します。
+Codexでは`Skills/glic-metal-sdk-integration`をSkillとして参照し、同梱inspectorで
+SDK、resource、public headerが同じ版であることを最初に検証します。
 
 ### 2. CMake packageを使う
 
@@ -123,6 +126,8 @@ Read `AI_INTEGRATION.md` first, then `Documentation/EMBEDDING.md`. Include only
 the public `<glic_metal/*.h>` headers and enumerate adopted preset names through
 the public C API. Read `Documentation/VIDEOTOOLBOX_FAST_PATH.md` before
 integrating the codec lane.
+Codex agents can use `Skills/glic-metal-sdk-integration` from the same SDK and
+run its inspector before editing the host.
 
 For CMake consumers:
 
