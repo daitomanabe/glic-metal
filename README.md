@@ -13,6 +13,7 @@ Canonical repository: <https://github.com/daitomanabe/glic-metal>
 [Downstream quick start](docs/DOWNSTREAM_QUICKSTART.md) ·
 [Embedding guide](docs/EMBEDDING.md) ·
 [AI integration contract](docs/AI_INTEGRATION.md) ·
+[Cross-machine Codex handoff](docs/CODEX_HANDOFF.md) ·
 [Codex SDK integration skill](skills/glic-metal-sdk-integration/SKILL.md) ·
 [Codec Glitch](docs/CODEC_GLITCH.md) ·
 [Glitch expansion catalog](docs/GLITCH_EXPANSION.md) ·
@@ -146,6 +147,12 @@ cmake --build .
 ```
 
 他アプリ向けリアルタイムAPIは [include/glic_metal/glic_metal.h](include/glic_metal/glic_metal.h) にあります。AIエージェントは [AI向け組み込み仕様](docs/AI_INTEGRATION.md) に従ってください。CPU backendは3チャンネルを永続workerで並列処理し、解像度変更時以外はworkspaceを再利用します。Metal backendはCPU配列を扱う同期APIに加え、`MTLTexture`を直接渡すゼロコピーAPIと、呼び出し側の`MTLCommandBuffer`へ処理を追加する非同期APIを提供します。
+
+別のApple Silicon Macへワークスペース全体を移してCodexで再開する場合は、
+[Codex workspace handoff](docs/CODEX_HANDOFF.md) と
+`scripts/build_workspace_handoff.py`を使用してください。Gitに含まれないテスト動画、
+完成ギャラリー、探索結果、codec toolchain cache、配布SDKを分割archiveとchecksum付きで
+収集します。
 
 互換性レベル、上流GLICの20fps UI設定との違い、対応37 presetの境界は [docs/ORIGINAL_PRESET_REALTIME.md](docs/ORIGINAL_PRESET_REALTIME.md) にあります。2026-07-20のM4 Max隔離認証（commit `6e1d1f8`）では、`original_metal_visual` は960×540、warm-up 10 + 計測120フレームで、通常画像・uniform-noiseの双方とも37/37件が平均/p95 30fps gateを通過しました。CPU数値参照とは34/37件が規定範囲内、残り3件もエッジ方向・エッジ量・粗い構造による原作スタイル形態gateを通過しています。全144名を処理する `compat_realtime` は引き続き明示的に別の視覚近似です。
 
@@ -761,6 +768,12 @@ cmake --build .
 ```
 
 The public realtime API is declared in [include/glic_metal/glic_metal.h](include/glic_metal/glic_metal.h). Coding agents should follow the [AI integration contract](docs/AI_INTEGRATION.md). The CPU backend reuses resolution-sized workspaces after preparation. The Metal backend provides a synchronous CPU-buffer API, an opaque zero-copy `MTLTexture` API, and a non-blocking API that appends work to the caller's `MTLCommandBuffer`.
+
+Use the [cross-machine Codex handoff](docs/CODEX_HANDOFF.md) and
+`scripts/build_workspace_handoff.py` when moving the complete workspace to
+another Apple Silicon Mac. It packages ignored test media, gallery/search
+evidence, codec toolchain caches, the distributable SDK, Git bundles, and
+checksums separately from machine-specific build directories.
 
 See [docs/ORIGINAL_PRESET_REALTIME.md](docs/ORIGINAL_PRESET_REALTIME.md) for compatibility levels and why upstream's 20 fps setting is a UI rate rather than codec throughput. In the previous isolated M4 Max certification (`6e1d1f8`, 2026-07-20), `original_metal_visual` passed the mean+p95 30 fps gate for all 37 supported presets on both the normal and uniform-noise inputs. Numeric CPU-reference comparison passed 34/37; the remaining three passed the separate blurred-structure and edge-morphology gate. The all-144 Metal path remains the separately labelled `compat_realtime` visual approximation.
 

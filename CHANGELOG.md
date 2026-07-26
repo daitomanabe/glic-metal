@@ -8,6 +8,10 @@ semantic versioning for tagged releases.
 
 ### Added
 
+- A verified cross-machine workspace handoff builder that packages full Git and
+  submodule bundles, a distributable SDK, sanitized Codex context, local test
+  media, gallery/search evidence, pinned codec caches, a machine-readable
+  manifest, and top-level SHA-256 checksums.
 - Canonical gallery curation resources imported from the review export: the
   gallery opens on the 53 adopted variants by default, while the 41 rejected
   and 347 undecided variants remain available through the decision filter.

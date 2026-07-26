@@ -498,6 +498,10 @@ if(BUILD_TESTING)
         NAME glic_gallery_curation
         COMMAND "${Python3_EXECUTABLE}"
                 "${PROJECT_SOURCE_DIR}/tests/test_gallery_curation.py")
+    add_test(
+        NAME glic_workspace_handoff
+        COMMAND "${Python3_EXECUTABLE}"
+                "${PROJECT_SOURCE_DIR}/tests/test_workspace_handoff.py")
 
     add_test(NAME glic_installed_consumer
              COMMAND "${CMAKE_COMMAND}"

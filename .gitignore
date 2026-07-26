@@ -75,3 +75,5 @@ output/*
 
 # The algorithm video gallery is generated and published separately.
 output/glitch-algorithm-gallery/
+
+agent-conversation-summary.md
