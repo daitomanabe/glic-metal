@@ -1474,7 +1474,7 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
         "title_en": "GLIC Metal Glitch Algorithm Gallery",
         "description_en": (
             f"A technical gallery comparing {manifest['algorithm_count']} "
-            "glitch algorithms with three parameter presets each."
+            "glitch algorithms with three parameter presets each"
         ),
         "slug": "glic-metal-gallery",
         "visibility": "public",
@@ -1487,7 +1487,7 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
     )
 
     cards = []
-    translations: dict[str, str] = {
+    translations: dict[str, Any] = {
         "gallery-kicker": "GLIC METAL / COMPLETE ALGORITHM INDEX",
         "gallery-title": "Glitch Algorithm Gallery",
         "back-projects": "← PROJECTS",
@@ -1512,6 +1512,11 @@ def render_site(manifest: dict[str, Any], site: Path) -> None:
             "480×270, 24 fps, H.264 yuv420p, muted, WebP poster."
         ),
         "play-hint": "Hover or tap to play",
+        "__TEXT__": {
+            "effect、codec、implementationを検索": (
+                "Search effect, codec, or implementation"
+            )
+        },
     }
     for family, (label_en, label_ja) in FAMILY_INFO.items():
         translations[f"family-{family}"] = label_en
