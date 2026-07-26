@@ -39,6 +39,7 @@ def mutate_mpegts_continuity(
         raise RuntimeError("MPEG-TS stream has no eligible elementary PID")
     dominant_pid = payload_pids.most_common(1)[0][0]
     probability = 0.015 + amount * 0.075
+    eligible_indices: list[int] = []
     for packet_index, packet in enumerate(packets):
         pid = ((packet[1] & 0x1F) << 8) | packet[2]
         adaptation_control = (packet[3] >> 4) & 0x03
@@ -52,6 +53,16 @@ def mutate_mpegts_continuity(
             continue
         candidate += 1
         pids.add(pid)
+        eligible_indices.append(packet_index)
+    late_indices = eligible_indices[
+        max(0, len(eligible_indices) * 2 // 3) :
+    ]
+    if not late_indices:
+        raise RuntimeError(
+            "MPEG-TS stream has no eligible late continuity counters"
+        )
+    for packet_index in late_indices:
+        packet = packets[packet_index]
         if rng.random() > probability:
             continue
         original = packet[3] & 0x0F
@@ -59,7 +70,10 @@ def mutate_mpegts_continuity(
         packet[3] = (packet[3] & 0xF0) | ((original + jump) & 0x0F)
         changed += 1
     if changed == 0:
-        raise RuntimeError("no MPEG-TS continuity counters were changed")
+        packet = packets[late_indices[seed % len(late_indices)]]
+        original = packet[3] & 0x0F
+        packet[3] = (packet[3] & 0xF0) | ((original + 2) & 0x0F)
+        changed = 1
     return b"".join(packets), {
         "packet_bytes": TS_PACKET_BYTES,
         "packet_count": len(packets),

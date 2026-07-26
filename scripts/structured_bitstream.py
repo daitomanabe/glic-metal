@@ -218,6 +218,8 @@ def mutate_av1_field_syntax(
     matched_units = 0
     tile_ordinal = 0
     dropped_units: set[int] = set()
+    reference_candidates: list[tuple[int, Av1Obu, TraceField]] = []
+    tile_candidates: list[tuple[int, int]] = []
 
     for unit_index, (obu, traced) in enumerate(zip(obus, aligned)):
         if traced is None:
@@ -230,18 +232,11 @@ def mutate_av1_field_syntax(
             ]
             if fields:
                 matched_units += 1
-            for field_index, item in enumerate(fields):
-                if rng.random() > 0.18 + amount * 0.68:
-                    continue
-                replacement = (
-                    item.value
-                    + 1
-                    + ((seed + unit_index + field_index) % 7)
-                ) % 8
-                write_unsigned_bits(
-                    obu.raw, item.position, len(item.bits), replacement
-                )
-                changed_fields += 1
+            reference_candidates.extend(
+                (unit_index, obu, item)
+                for item in fields
+                if item.name in {"ref_frame_idx[5]", "ref_frame_idx[6]"}
+            )
         elif effect == "av1_film_grain_seed_surgery":
             fields = [
                 item
@@ -269,12 +264,53 @@ def mutate_av1_field_syntax(
             if start >= len(obu.raw):
                 continue
             matched_units += 1
-            period = max(2, round(6 - amount * 4))
-            if current_tile == 0 or current_tile % period != seed % period:
-                continue
-            dropped_units.add(unit_index)
+            if current_tile > 0:
+                tile_candidates.append((unit_index, current_tile))
         else:
             raise ValueError(f"unsupported AV1 syntax effect: {effect}")
+
+    if effect == "av1_reference_slot_surgery" and reference_candidates:
+        # Rewriting a large fraction of all seven AV1 reference slots usually
+        # destroys the dependency graph at the first inter frame. Keep this
+        # operation field-native but sparse and late in the stream so a real
+        # damaged reconstruction remains salvageable for inspection.
+        unit_order = sorted({item[0] for item in reference_candidates})
+        cutoff = unit_order[max(0, len(unit_order) * 2 // 3)]
+        eligible = [
+            candidate
+            for candidate in reference_candidates
+            if candidate[0] >= cutoff
+        ]
+        if not eligible:
+            eligible = reference_candidates[-2:]
+        desired = min(len(eligible), 1 + round(amount * 2))
+        start = seed % len(eligible)
+        stride = max(1, len(eligible) // max(1, desired))
+        selected: list[tuple[int, Av1Obu, TraceField]] = []
+        cursor = start
+        while len(selected) < desired:
+            candidate = eligible[cursor % len(eligible)]
+            if candidate not in selected:
+                selected.append(candidate)
+            cursor += stride
+        for order, (_, obu, item) in enumerate(selected):
+            replacement = (item.value + 1 + ((seed + order) % 2)) % 8
+            write_unsigned_bits(
+                obu.raw, item.position, len(item.bits), replacement
+            )
+            changed_fields += 1
+    if effect == "av1_tile_group_surgery" and tile_candidates:
+        # Preserve an initial decodable run and drop only late tile groups.
+        # This retains the real OBU removal while producing a useful damaged
+        # preview instead of losing the stream at its first inter frame.
+        late = tile_candidates[max(0, len(tile_candidates) * 2 // 3) :]
+        desired = min(len(late), 1 + round(amount * 2))
+        start = seed % len(late)
+        stride = max(1, len(late) // max(1, desired))
+        cursor = start
+        while len(dropped_units) < desired:
+            dropped_units.add(late[cursor % len(late)][0])
+            cursor += stride
 
     if matched_units == 0:
         raise RuntimeError(f"{effect} found no matching AV1 syntax")

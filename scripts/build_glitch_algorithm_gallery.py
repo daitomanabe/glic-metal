@@ -1069,16 +1069,56 @@ def render_task(
         "status": "FAIL",
     }
     try:
-        command = processor_command(
-            task,
-            source,
-            donor,
-            raw,
-            report,
-            stage_dir,
-            dependencies,
-        )
-        run_command(command, task_dir / "processor.log", timeout)
+        attempts = [task.preset]
+        if task.algorithm["family"] in {
+            "offline_packet",
+            "structured",
+            "transport",
+        }:
+            for retry in range(1, 5):
+                retry_preset = json.loads(json.dumps(task.preset))
+                retry_parameters = retry_preset["parameters"]
+                retry_parameters["amount"] = clamp(
+                    float(task.preset["parameters"]["amount"])
+                    * (0.78 ** retry)
+                )
+                retry_parameters["seed"] = stable_int(
+                    f"{task.key}:decode-safe-retry:{retry}"
+                )
+                retry_preset["rationale"] = (
+                    f"{task.preset['rationale']}_decode_safe_retry_{retry}"
+                )
+                attempts.append(retry_preset)
+        processor_errors: list[str] = []
+        effective_preset = task.preset
+        for attempt_index, attempt_preset in enumerate(attempts):
+            raw.unlink(missing_ok=True)
+            report.unlink(missing_ok=True)
+            if stage_dir.exists():
+                shutil.rmtree(stage_dir)
+            attempt_task = RenderTask(task.algorithm, attempt_preset)
+            command = processor_command(
+                attempt_task,
+                source,
+                donor,
+                raw,
+                report,
+                stage_dir,
+                dependencies,
+            )
+            log_name = (
+                "processor.log"
+                if attempt_index == 0
+                else f"processor-retry-{attempt_index}.log"
+            )
+            try:
+                run_command(command, task_dir / log_name, timeout)
+                effective_preset = attempt_preset
+                break
+            except Exception as exc:
+                processor_errors.append(str(exc))
+        else:
+            raise RuntimeError("; ".join(processor_errors))
         if not raw.is_file():
             raise RuntimeError("processor produced no preview video")
         web_transcode(
@@ -1101,6 +1141,10 @@ def render_task(
             {
                 "status": metrics["status"],
                 "warnings": metrics["warnings"],
+                "attempt_count": attempts.index(effective_preset) + 1,
+                "requested_parameters": task.preset["parameters"],
+                "effective_parameters": effective_preset["parameters"],
+                "effective_rationale": effective_preset["rationale"],
                 "video": f"media/{video.name}",
                 "thumbnail": f"thumbs/{thumbnail.name}",
                 "video_bytes": video.stat().st_size,
@@ -1154,6 +1198,13 @@ def public_manifest(
             variants.append(
                 {
                     **preset,
+                    "parameters": state.get(
+                        "effective_parameters", preset["parameters"]
+                    ),
+                    "requested_parameters": state.get(
+                        "requested_parameters", preset["parameters"]
+                    ),
+                    "render_attempt_count": state.get("attempt_count", 0),
                     "status": state.get("status", "MISSING"),
                     "warnings": state.get("warnings", []),
                     "video": state.get("video"),
