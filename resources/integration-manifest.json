@@ -32,10 +32,16 @@
   "selected_preset_bank": {
     "resource": "selected-presets.json",
     "runtime_source": "compiled_c_api",
-    "count": 19,
-    "category_counts": {"original": 14, "spatial": 4, "codec": 1},
+    "schema": "glic-metal-selected-presets-v2",
+    "curation_source": "glic-metal-gallery-review-v1",
+    "realtime_only": true,
+    "count": 28,
+    "category_counts": {"original": 14, "spatial": 8, "codec": 6},
+    "gallery_adopted_count": 53,
+    "offline_adopted_count": 25,
     "enumerate": "glic_glitch_preset_count + glic_glitch_preset_get",
-    "lookup": "glic_glitch_preset_find"
+    "lookup": "glic_glitch_preset_find",
+    "codec_apply": "glic_glitch_preset_apply_codec_config"
   },
   "lanes": {
     "original": {
@@ -63,7 +69,8 @@
       "input": "CVPixelBufferRef_420v_or_32BGRA",
       "output_format": "CVPixelBufferRef_32BGRA",
       "context": "glic_codec_glitch_context",
-      "apply": "glic_glitch_preset_apply_codec",
+      "apply": "glic_glitch_preset_apply_codec_config",
+      "controls_only_compatibility_apply": "glic_glitch_preset_apply_codec",
       "prepare": "glic_codec_glitch_prepare",
       "process": "glic_codec_glitch_submit_pixel_buffer",
       "output": "glic_codec_glitch_copy_latest_pixel_buffer",

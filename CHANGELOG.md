@@ -8,6 +8,12 @@ semantic versioning for tagged releases.
 
 ### Added
 
+- Canonical gallery curation resources imported from the review export: the
+  gallery opens on the 53 adopted variants by default, while the 41 rejected
+  and 347 undecided variants remain available through the decision filter.
+- A curated realtime SDK preset bank with the 28 adopted,
+  realtime-certified variants (14 Original, 8 Spatial, and 6 Codec), including
+  codec-aware configuration helpers for H.264, HEVC, and ProRes 422 presets.
 - Three-state adopt, reject, and pending review controls for all 441 glitch
   gallery variants, with browser-local persistence, combined filters,
   three-variant bulk actions, and copy/download JSON exports that retain exact

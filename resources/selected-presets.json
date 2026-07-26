@@ -1,23 +1,366 @@
 {
+  "schema": "glic-metal-selected-presets-v2",
+  "source": {
+    "schema": "glic-metal-gallery-review-v1",
+    "gallery_revision": "d9588854e0138ebb1c2bc4d2b39581cbbe34169b",
+    "adopted_count": 53,
+    "offline_adopted_count": 25
+  },
+  "realtime_only": true,
+  "count": 28,
+  "category_counts": {
+    "original": 14,
+    "spatial": 8,
+    "codec": 6
+  },
   "mixed_glitch_patterns": [
-    {"name":"original__vv01","category":"original","effect":"vv01","controls":{"preset":"vv01"}},
-    {"name":"original__bl33dyl1n3z","category":"original","effect":"bl33dyl1n3z","controls":{"preset":"bl33dyl1n3z"}},
-    {"name":"original__burn","category":"original","effect":"burn","controls":{"preset":"burn"}},
-    {"name":"original__colour_waves_sharp","category":"original","effect":"colour_waves_sharp","controls":{"preset":"colour_waves_sharp"}},
-    {"name":"original__bl33dyl1n3z-2","category":"original","effect":"bl33dyl1n3z-2","controls":{"preset":"bl33dyl1n3z-2"}},
-    {"name":"original__wtf","category":"original","effect":"wtf","controls":{"preset":"wtf"}},
-    {"name":"original__lightblur","category":"original","effect":"lightblur","controls":{"preset":"lightblur"}},
-    {"name":"original__constrctivist_minimal","category":"original","effect":"constrctivist_minimal","controls":{"preset":"constrctivist_minimal"}},
-    {"name":"original__web_p_like","category":"original","effect":"web_p_like","controls":{"preset":"web_p_like"}},
-    {"name":"original__webp","category":"original","effect":"webp","controls":{"preset":"webp"}},
-    {"name":"original__abstract_expressionism","category":"original","effect":"abstract_expressionism","controls":{"preset":"abstract_expressionism"}},
-    {"name":"original__colour_glow","category":"original","effect":"colour_glow","controls":{"preset":"colour_glow"}},
-    {"name":"spatial__poster_solar","category":"spatial","effect":"poster_solar","controls":{"amount":0.49,"scale":0.36,"rate":0.15,"seed":1296652297}},
-    {"name":"spatial__bitplane_dither","category":"spatial","effect":"bitplane_dither","controls":{"amount":0.79,"scale":0.28,"rate":0.92,"seed":1296652295}},
-    {"name":"spatial__scanline_weave","category":"spatial","effect":"scanline_weave","controls":{"amount":0.62,"scale":0.38,"rate":0.72,"seed":1296652301}},
-    {"name":"codec__bitrate_meltdown","category":"codec","effect":"bitrate_crush","controls":{"amount":0.96,"rate":0.78,"feedback":0.55,"seed":1204376450}},
-    {"name":"original__beautifulwave","category":"original","effect":"beautifulwave","controls":{"preset":"beautifulwave"}},
-    {"name":"spatial__diagonal_slip","category":"spatial","effect":"diagonal_slip","controls":{"amount":0.7,"scale":0.72,"rate":0.58,"seed":1296652300}},
-    {"name":"original__bi0g4n1c","category":"original","effect":"bi0g4n1c","controls":{"preset":"bi0g4n1c"}}
+    {
+      "name": "original__vv01",
+      "category": "original",
+      "effect": "vv01",
+      "controls": {
+        "preset": "vv01",
+        "strength": 1.592
+      },
+      "gallery_key": "original:vv01::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "original__bl33dyl1n3z",
+      "category": "original",
+      "effect": "bl33dyl1n3z",
+      "controls": {
+        "preset": "bl33dyl1n3z",
+        "strength": 1.568
+      },
+      "gallery_key": "original:bl33dyl1n3z::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "original__burn",
+      "category": "original",
+      "effect": "burn",
+      "controls": {
+        "preset": "burn",
+        "strength": 1.604
+      },
+      "gallery_key": "original:burn::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "original__colour_waves_sharp",
+      "category": "original",
+      "effect": "colour_waves_sharp",
+      "controls": {
+        "preset": "colour_waves_sharp",
+        "strength": 1.568
+      },
+      "gallery_key": "original:colour_waves_sharp::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "original__bl33dyl1n3z-2",
+      "category": "original",
+      "effect": "bl33dyl1n3z-2",
+      "controls": {
+        "preset": "bl33dyl1n3z-2",
+        "strength": 1.568
+      },
+      "gallery_key": "original:bl33dyl1n3z-2::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "original__wtf",
+      "category": "original",
+      "effect": "wtf",
+      "controls": {
+        "preset": "wtf",
+        "strength": 1.568
+      },
+      "gallery_key": "original:wtf::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "original__lightblur",
+      "category": "original",
+      "effect": "lightblur",
+      "controls": {
+        "preset": "lightblur",
+        "strength": 1.568
+      },
+      "gallery_key": "original:lightblur::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "original__constrctivist_minimal",
+      "category": "original",
+      "effect": "constrctivist_minimal",
+      "controls": {
+        "preset": "constrctivist_minimal",
+        "strength": 1.592
+      },
+      "gallery_key": "original:constrctivist_minimal::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "original__web_p_like",
+      "category": "original",
+      "effect": "web_p_like",
+      "controls": {
+        "preset": "web_p_like",
+        "strength": 1.556
+      },
+      "gallery_key": "original:web_p_like::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "original__webp",
+      "category": "original",
+      "effect": "webp",
+      "controls": {
+        "preset": "webp",
+        "strength": 1.586
+      },
+      "gallery_key": "original:webp::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "original__abstract_expressionism",
+      "category": "original",
+      "effect": "abstract_expressionism",
+      "controls": {
+        "preset": "abstract_expressionism",
+        "strength": 1.568
+      },
+      "gallery_key": "original:abstract_expressionism::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "original__colour_glow",
+      "category": "original",
+      "effect": "colour_glow",
+      "controls": {
+        "preset": "colour_glow",
+        "strength": 1.592
+      },
+      "gallery_key": "original:colour_glow::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "original__beautifulwave",
+      "category": "original",
+      "effect": "beautifulwave",
+      "controls": {
+        "preset": "beautifulwave",
+        "strength": 1.586
+      },
+      "gallery_key": "original:beautifulwave::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "original__bi0g4n1c",
+      "category": "original",
+      "effect": "bi0g4n1c",
+      "controls": {
+        "preset": "bi0g4n1c",
+        "strength": 1.586
+      },
+      "gallery_key": "original:bi0g4n1c::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "spatial__legacy_block",
+      "category": "spatial",
+      "effect": "legacy_block",
+      "controls": {
+        "amount": 0.846,
+        "scale": 0.794,
+        "rate": 0.854,
+        "seed": 1176689320
+      },
+      "gallery_key": "spatial:legacy_block::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "spatial__line_tear",
+      "category": "spatial",
+      "effect": "line_tear",
+      "controls": {
+        "amount": 0.828,
+        "scale": 0.812,
+        "rate": 0.872,
+        "seed": 3299554532
+      },
+      "gallery_key": "spatial:line_tear::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "spatial__channel_shear",
+      "category": "spatial",
+      "effect": "channel_shear",
+      "controls": {
+        "amount": 0.816,
+        "scale": 0.824,
+        "rate": 0.884,
+        "seed": 1380763770
+      },
+      "gallery_key": "spatial:channel_shear::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "spatial__analog_sync",
+      "category": "spatial",
+      "effect": "analog_sync",
+      "controls": {
+        "amount": 0.846,
+        "scale": 0.794,
+        "rate": 0.854,
+        "seed": 3448570687
+      },
+      "gallery_key": "spatial:analog_sync::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "spatial__bitplane_dither",
+      "category": "spatial",
+      "effect": "bitplane_dither",
+      "controls": {
+        "amount": 0.906,
+        "scale": 0.794,
+        "rate": 0.934,
+        "seed": 2963419007
+      },
+      "gallery_key": "spatial:bitplane_dither::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "spatial__wave_warp",
+      "category": "spatial",
+      "effect": "wave_warp",
+      "controls": {
+        "amount": 0.858,
+        "scale": 0.782,
+        "rate": 0.842,
+        "seed": 641631760
+      },
+      "gallery_key": "spatial:wave_warp::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "spatial__vertical_tear",
+      "category": "spatial",
+      "effect": "vertical_tear",
+      "controls": {
+        "amount": 0.852,
+        "scale": 0.788,
+        "rate": 0.848,
+        "seed": 2875169786
+      },
+      "gallery_key": "spatial:vertical_tear::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "spatial__diagonal_slip",
+      "category": "spatial",
+      "effect": "diagonal_slip",
+      "controls": {
+        "amount": 0.816,
+        "scale": 0.824,
+        "rate": 0.884,
+        "seed": 484557829
+      },
+      "gallery_key": "spatial:diagonal_slip::saturation",
+      "realtime_certified": true
+    },
+    {
+      "name": "codec__prores_422__slice_dropout",
+      "category": "codec",
+      "effect": "slice_dropout",
+      "controls": {
+        "amount": 0.476,
+        "rate": 0.884,
+        "feedback": 0.468,
+        "cascade_generations": 3,
+        "seed": 3079861228
+      },
+      "gallery_key": "codec_realtime:prores_422:slice_dropout::saturation",
+      "realtime_certified": true,
+      "codec": "prores_422"
+    },
+    {
+      "name": "codec__hevc__reference_timewarp",
+      "category": "codec",
+      "effect": "reference_timewarp",
+      "controls": {
+        "amount": 0.836,
+        "rate": 0.744,
+        "feedback": 0.788,
+        "cascade_generations": 3,
+        "seed": 4206374071
+      },
+      "gallery_key": "codec_realtime:hevc:reference_timewarp::saturation",
+      "realtime_certified": true,
+      "codec": "hevc"
+    },
+    {
+      "name": "codec__hevc__intra_cannibalism",
+      "category": "codec",
+      "effect": "intra_cannibalism",
+      "controls": {
+        "amount": 0.858,
+        "rate": 0.842,
+        "feedback": 0.729,
+        "cascade_generations": 3,
+        "seed": 3636952466
+      },
+      "gallery_key": "codec_realtime:hevc:intra_cannibalism::saturation",
+      "realtime_certified": true,
+      "codec": "hevc"
+    },
+    {
+      "name": "codec__hevc__codec_pingpong",
+      "category": "codec",
+      "effect": "codec_pingpong",
+      "controls": {
+        "amount": 0.828,
+        "rate": 0.872,
+        "feedback": 0.714,
+        "cascade_generations": 3,
+        "seed": 3263433661
+      },
+      "gallery_key": "codec_realtime:hevc:codec_pingpong::saturation",
+      "realtime_certified": true,
+      "codec": "hevc"
+    },
+    {
+      "name": "codec__h264__bframe_braid",
+      "category": "codec",
+      "effect": "bframe_braid",
+      "controls": {
+        "amount": 0.858,
+        "rate": 0.842,
+        "feedback": 0.729,
+        "cascade_generations": 3,
+        "seed": 2271319804
+      },
+      "gallery_key": "codec_realtime:h264:bframe_braid::saturation",
+      "realtime_certified": true,
+      "codec": "h264"
+    },
+    {
+      "name": "codec__hevc__encoder_hot_swap",
+      "category": "codec",
+      "effect": "encoder_hot_swap",
+      "controls": {
+        "amount": 0.858,
+        "rate": 0.842,
+        "feedback": 0.729,
+        "cascade_generations": 3,
+        "seed": 2532644373
+      },
+      "gallery_key": "codec_realtime:hevc:encoder_hot_swap::saturation",
+      "realtime_certified": true,
+      "codec": "hevc"
+    }
   ]
 }

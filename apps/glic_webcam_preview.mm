@@ -72,11 +72,26 @@ struct FrameSlot {
 };
 
 struct CodecPresetChoice {
+  glic::CodecGlitchCodec codec;
   glic::CodecGlitchEffect effect;
   std::string name;
   std::string title;
   glic::CodecGlitchControls controls;
 };
+
+std::optional<glic::CodecGlitchCodec>
+codecChoice(glic_codec_glitch_codec codec) {
+  switch (codec) {
+  case GLIC_CODEC_GLITCH_CODEC_H264:
+    return glic::CodecGlitchCodec::H264;
+  case GLIC_CODEC_GLITCH_CODEC_HEVC:
+    return glic::CodecGlitchCodec::HEVC;
+  case GLIC_CODEC_GLITCH_CODEC_PRORES_422:
+    return glic::CodecGlitchCodec::ProRes422;
+  default:
+    return std::nullopt;
+  }
+}
 
 std::vector<CodecPresetChoice> makeCodecPresetChoices() {
   std::vector<CodecPresetChoice> choices;
@@ -87,6 +102,13 @@ std::vector<CodecPresetChoice> makeCodecPresetChoices() {
             GLIC_GLITCH_PRESET_OK ||
         descriptor.category != GLIC_GLITCH_PRESET_CODEC)
       continue;
+    glic_codec_glitch_codec selectedCodec = -1;
+    if (glic_glitch_preset_get_codec(descriptor.name, &selectedCodec) !=
+        GLIC_GLITCH_PRESET_OK)
+      continue;
+    const auto codec = codecChoice(selectedCodec);
+    if (!codec)
+      continue;
     glic::CodecGlitchControls controls;
     controls.effect =
         static_cast<glic::CodecGlitchEffect>(descriptor.codec_effect);
@@ -94,8 +116,8 @@ std::vector<CodecPresetChoice> makeCodecPresetChoices() {
     controls.rate = descriptor.rate;
     controls.feedback = descriptor.feedback;
     controls.seed = descriptor.seed;
-    choices.push_back({controls.effect, descriptor.name, descriptor.name,
-                       controls});
+    choices.push_back(
+        {*codec, controls.effect, descriptor.name, descriptor.name, controls});
   }
   return choices;
 }
@@ -317,9 +339,9 @@ int runSelfTest() {
 
   const auto codecPresets = makeCodecPresetChoices();
   const auto spatialPresets = makeSpatialPresetChoices();
-  if (codecPresets.size() != 1u || spatialPresets.size() != 4u) {
+  if (codecPresets.size() != 6u || spatialPresets.size() != 8u) {
     std::fprintf(stderr,
-                 "FAIL expected selected 4 spatial/1 codec presets, got "
+                 "FAIL expected selected 8 spatial/6 codec presets, got "
                  "%zu/%zu\n",
                  spatialPresets.size(),
                  codecPresets.size());
@@ -403,14 +425,6 @@ int runSelfTest() {
   codecConfiguration.maximumInFlightFrames = 24;
   std::atomic<uint64_t> codecOutputCount{0};
   std::atomic<bool> codecOutputInvalid{false};
-  auto codecLane = glic::createCodecGlitchEngine(codecConfiguration, error);
-  if (!codecLane) {
-    std::fprintf(stderr, "FAIL codec engine initialization: %s\n",
-                 error.c_str());
-    CFRelease(codecInput);
-    return 11;
-  }
-
   glic::CodecGlitchOutputCallback selfTestCallback =
       [&](const glic::CodecGlitchFrame &frame) {
         CVPixelBufferRef pixelBuffer = frame.pixelBuffer();
@@ -426,11 +440,14 @@ int runSelfTest() {
 
   uint64_t codecFrameIndex = 0;
   for (const auto &preset : codecPresets) {
-    if (!codecLane->reset(error)) {
-      std::fprintf(stderr, "FAIL codec reset %s: %s\n", preset.title.c_str(),
-                   error.c_str());
+    codecConfiguration.codec = preset.codec;
+    auto codecLane =
+        glic::createCodecGlitchEngine(codecConfiguration, error);
+    if (!codecLane) {
+      std::fprintf(stderr, "FAIL codec engine %s: %s\n",
+                   preset.title.c_str(), error.c_str());
       CFRelease(codecInput);
-      return 12;
+      return 11;
     }
     codecLane->setOutputCallback(selfTestCallback);
     codecLane->setControls(preset.controls);
@@ -451,29 +468,24 @@ int runSelfTest() {
       CFRelease(codecInput);
       return 14;
     }
+    const auto codecStats = codecLane->stats();
     const uint64_t emitted = codecOutputCount.load() - outputBefore;
-    if (emitted == 0 || codecOutputInvalid.load(std::memory_order_acquire)) {
-      std::fprintf(stderr, "FAIL codec output %s emitted=%llu valid=%s\n",
+    if (emitted == 0 || codecOutputInvalid.load(std::memory_order_acquire) ||
+        !codecStats.hardwareEncoder || !codecStats.hardwareDecoder) {
+      std::fprintf(stderr,
+                   "FAIL codec output %s emitted=%llu valid=%s hw=%s/%s\n",
                    preset.title.c_str(),
                    static_cast<unsigned long long>(emitted),
-                   codecOutputInvalid.load() ? "false" : "true");
+                   codecOutputInvalid.load() ? "false" : "true",
+                   codecStats.hardwareEncoder ? "true" : "false",
+                   codecStats.hardwareDecoder ? "true" : "false");
       CFRelease(codecInput);
       return 15;
     }
+    codecLane->setOutputCallback({});
     std::printf("codec_preset=%s emitted=%llu\n",
                 glic::codecGlitchEffectName(preset.effect),
                 static_cast<unsigned long long>(emitted));
-  }
-  const auto codecStats = codecLane->stats();
-  codecLane->setOutputCallback({});
-  if (!codecLane->flush(std::chrono::seconds(5), error) ||
-      !codecStats.hardwareEncoder || !codecStats.hardwareDecoder) {
-    std::fprintf(stderr,
-                 "FAIL codec hardware/drain encoder=%s decoder=%s: %s\n",
-                 codecStats.hardwareEncoder ? "true" : "false",
-                 codecStats.hardwareDecoder ? "true" : "false", error.c_str());
-    CFRelease(codecInput);
-    return 16;
   }
   CFRelease(codecInput);
   std::printf(
@@ -758,7 +770,7 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   _lanePopup.target = self;
   _lanePopup.action = @selector(selectLane:);
   _lanePopup.toolTip =
-      @"Choose an adopted Original, Spatial Metal, or H.264 Codec preset";
+      @"Choose an adopted Original, Spatial Metal, or native Codec preset";
 
   _presetPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
   _presetPopup.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1459,24 +1471,17 @@ NSString *authorizationStatusName(AVAuthorizationStatus status) {
   _activePresetIndex = -1;
   _spatialLane.reset();
   _activeSpatialPresetIndex = -1;
-  if (_codecLane) {
-    _codecLane->setOutputCallback({});
-    std::string drainError;
-    const bool drained =
-        _codecLane->flush(std::chrono::milliseconds(750), drainError);
-    if (!drained || !_codecLane->reset(error))
-      _codecLane.reset();
-  }
-  if (!_codecLane) {
-    glic::CodecGlitchConfiguration configuration;
-    configuration.width = kProcessingWidth;
-    configuration.height = kProcessingHeight;
-    configuration.framesPerSecond = 30;
-    configuration.maximumInFlightFrames = 4;
-    _codecLane = glic::createCodecGlitchEngine(configuration, error);
-    if (!_codecLane)
-      return false;
-  }
+  [self deactivateCodecLane];
+  glic::CodecGlitchConfiguration configuration;
+  configuration.codec =
+      _codecPresets[static_cast<std::size_t>(pending)].codec;
+  configuration.width = kProcessingWidth;
+  configuration.height = kProcessingHeight;
+  configuration.framesPerSecond = 30;
+  configuration.maximumInFlightFrames = 4;
+  _codecLane = glic::createCodecGlitchEngine(configuration, error);
+  if (!_codecLane)
+    return false;
 
   auto controls = _codecPresets[static_cast<std::size_t>(pending)].controls;
   controls.amount = requestedAmount;

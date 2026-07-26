@@ -23,16 +23,22 @@ def main() -> int:
 
     assert manifest["schema"] == "glic-metal-integration-v1"
     bank = manifest["selected_preset_bank"]
-    assert bank["count"] == len(selected) == 19
+    assert bank["count"] == len(selected) == 28
     counts = {
         category: sum(item["category"] == category for item in selected)
         for category in ("original", "spatial", "codec")
     }
     assert bank["category_counts"] == counts == {
         "original": 14,
-        "spatial": 4,
-        "codec": 1,
+        "spatial": 8,
+        "codec": 6,
     }
+    assert selected[0]["gallery_key"] == "original:vv01::saturation"
+    assert all(item["realtime_certified"] for item in selected)
+    assert all(
+        item["category"] != "codec" or item["codec"] in {"h264", "hevc", "prores_422"}
+        for item in selected
+    )
 
     for header in manifest["public_headers"]:
         assert (ROOT / "include" / header).is_file(), header
@@ -71,7 +77,14 @@ def main() -> int:
     assert lanes["spatial"]["execution"] == "synchronous"
     assert lanes["original"]["apply"] == "glic_glitch_preset_apply_metal"
     assert lanes["spatial"]["apply"] == "glic_glitch_preset_apply_metal"
-    assert lanes["codec"]["apply"] == "glic_glitch_preset_apply_codec"
+    assert (
+        lanes["codec"]["apply"]
+        == "glic_glitch_preset_apply_codec_config"
+    )
+    assert (
+        lanes["codec"]["controls_only_compatibility_apply"]
+        == "glic_glitch_preset_apply_codec"
+    )
     expected_codec_effects = [
         "qp_pump", "bitrate_crush", "slice_dropout", "slice_transplant",
         "pframe_loss", "idr_starvation", "payload_xor",

@@ -13,8 +13,9 @@ The generated SDK also carries the reusable Codex workflow at
 
 ### 目的
 
-別アプリへ、採用済み19プリセットを同じ名前・同じ値で組み込む。ホストアプリは
-メニューに19件を表示し、選択されたカテゴリーに応じて同期画像処理または非同期
+別アプリへ、ギャラリーで採用され、かつリアルタイム認証済みの28プリセットを
+同じ名前・同じ値で組み込む。ホストアプリはメニューに28件を表示し、
+選択されたカテゴリーに応じて同期画像処理または非同期
 VideoToolbox処理へ振り分ける。
 
 ### 最初に読むファイル
@@ -62,12 +63,14 @@ VideoToolbox処理へ振り分ける。
 | Category | Count | Execution | Input | Context |
 |---|---:|---|---|---|
 | `original` | 14 | 同期 | BGRA8/RGBA8 CPU buffer | `glic_metal_context` |
-| `spatial` | 4 | 同期 | CPU bufferまたはBGRA8Unorm texture | `glic_metal_context` |
-| `codec` | 1 | 非同期 | `CVPixelBufferRef` 420vまたは32BGRA | `glic_codec_glitch_context` |
+| `spatial` | 8 | 同期 | CPU bufferまたはBGRA8Unorm texture | `glic_metal_context` |
+| `codec` | 6 | 非同期 | `CVPixelBufferRef` 420vまたは32BGRA | `glic_codec_glitch_context` |
 
-19件の順序と値は `glic_glitch_preset_count()` と
+28件の順序と値は `glic_glitch_preset_count()` と
 `glic_glitch_preset_get()` が返す。全144件を返す
 `glic_metal_enumerate_presets()` は採用メニューには使用しない。
+ギャラリーで採用された53件のうち25件はoffline実装であり、ギャラリーには
+残すがリアルタイムSDKメニューへは混在させない。
 
 ### 必須のルーティング
 
@@ -99,7 +102,8 @@ case GLIC_GLITCH_PRESET_SPATIAL:
   break;
 
 case GLIC_GLITCH_PRESET_CODEC:
-  if (glic_glitch_preset_apply_codec(saved_name, &codec_controls) !=
+  if (glic_glitch_preset_apply_codec_config(
+          saved_name, &codec_config, &codec_controls) !=
           GLIC_GLITCH_PRESET_OK ||
       glic_codec_glitch_set_controls(codec_context, &codec_controls) !=
           GLIC_CODEC_GLITCH_OK) {
@@ -177,7 +181,7 @@ if (status == GLIC_CODEC_GLITCH_OK) {
 事前検証では、そのJSONに`codec_input_pixel_format=nv12_420v`、
 `codec_direct_420v_input=true`、`codec_pixel_path=nv12_metal`があることを確認する。
 
-採用済み19 presetのメニューとは別に、実験用Codec Glitchを全て表示する場合は
+採用済み28 presetのメニューとは別に、実験用Codec Glitchを全て表示する場合は
 `resources/integration-manifest.json`の`lanes.codec.effect_names`を参照する。
 現在は36 effectで、public enumと`glic_codec_glitch_effect_name()`が実行時の
 正規名です。`glic_codec_glitch_effect_implementation_level()`をUI/ログへ保持し、
@@ -225,7 +229,7 @@ macOSでは次をlinkする:
 
 ### Offline Packet Lab
 
-圧縮packet自体を変化させる8 effectは採用済み19 presetおよびリアルタイムCodec
+圧縮packet自体を変化させる8 effectは採用済み28 presetおよびリアルタイムCodec
 Glitch 36 effectとは別です。`scripts/process_offline_packet_glitch.py`を
 subprocessとして起動し、`resources/offline-codec-effects.json`で対応codecを検証します。
 出力JSONの`execution_class`は`offline`、`realtime_certified`は常にfalseです。
@@ -280,7 +284,7 @@ binary SHAが一致しない実行ファイルを拒否します。既存HEVC re
 
 ### 完了条件
 
-- メニューが19件で、14 / 4 / 1に分類される。
+- メニューが28件で、14 / 8 / 6に分類される。
 - 全項目がstable nameから検索できる。
 - Original、Spatial、Codecから最低1件ずつ実フレームを処理できる。
 - プリセット変更をframe callback外で行う。
@@ -299,7 +303,8 @@ ctest --test-dir build --output-on-failure
 
 ### Agent implementation rules
 
-Integrate the adopted 19-preset bank through the public C ABI. Treat
+Integrate the 28 gallery-adopted, realtime-certified presets through the public
+C ABI. Treat
 `resources/integration-manifest.json` as the machine-readable contract and
 `glic_glitch_preset_*` as the authoritative runtime catalog. The JSON preset
 bank is an inspection/exchange copy; parsing it is optional.
@@ -354,14 +359,16 @@ report `codec_input_pixel_format=nv12_420v`,
 `codec_direct_420v_input=true`, and `codec_pixel_path=nv12_metal` when used as
 the downstream preflight.
 
-The adopted 19-preset menu is separate from the complete experimental Codec
+The adopted 28-preset realtime menu is separate from the complete experimental Codec
 Glitch effect list. If the host exposes every effect, read the 36 canonical
 names from `lanes.codec.effect_names` in the bundled integration manifest;
 the public enum and `glic_codec_glitch_effect_name()` are authoritative at
 runtime. Preserve the value from
 `glic_codec_glitch_effect_implementation_level()` in UI and logs. An agent
 adopting future effects must read the manifest and public
-header from the same SDK version instead of inventing names.
+header from the same SDK version instead of inventing names. The gallery keeps
+53 adopted variants; 25 offline-only selections remain visible there but are
+intentionally excluded from the realtime production bank.
 
 Do not import headers from `src/`, duplicate preset constants, modify H.264 VCL
 payloads, or claim pixel-exact equivalence with the Processing implementation.

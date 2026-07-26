@@ -73,9 +73,27 @@ glic_glitch_preset_find(const char *name,
 glic_glitch_preset_status
 glic_glitch_preset_apply_metal(const char *name, glic_metal_config *config);
 
-/* Initializes controls and applies an adopted codec preset. */
+/*
+ * Initializes controls and applies an adopted codec preset. This compatibility
+ * entrypoint does not change the host's codec configuration; new integrations
+ * should use glic_glitch_preset_apply_codec_config() so the curated H.264,
+ * HEVC, or ProRes 422 selection is applied too.
+ */
 glic_glitch_preset_status glic_glitch_preset_apply_codec(
     const char *name, glic_codec_glitch_controls *controls);
+
+/* Returns the native codec required by one adopted codec preset. */
+glic_glitch_preset_status glic_glitch_preset_get_codec(
+    const char *name, glic_codec_glitch_codec *codec);
+
+/*
+ * Applies the curated native codec to an initialized host-owned config and
+ * initializes the exact effect controls. Width, height, fps, pixel path,
+ * resource paths, hardware requirements, and queue limits remain unchanged.
+ */
+glic_glitch_preset_status glic_glitch_preset_apply_codec_config(
+    const char *name, glic_codec_glitch_config *config,
+    glic_codec_glitch_controls *controls);
 
 #if defined(__cplusplus)
 } /* extern "C" */

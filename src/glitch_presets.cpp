@@ -13,66 +13,47 @@ struct PresetRecord {
   const char *originalPresetName;
   glic_metal_effect_family spatialEffect;
   glic_codec_glitch_effect codecEffect;
+  glic_codec_glitch_codec codecFormat;
   float amount;
   float scale;
   float rate;
   float feedback;
+  float strength;
+  int32_t cascadeGenerations;
   uint64_t seed;
 };
 
 constexpr glic_metal_effect_family kNoSpatialEffect = -1;
 constexpr glic_codec_glitch_effect kNoCodecEffect = -1;
+constexpr glic_codec_glitch_codec kNoCodecFormat = -1;
 
-constexpr PresetRecord original(const char *name, const char *preset) {
+constexpr PresetRecord original(const char *name, const char *preset,
+                                float strength) {
   return {name, GLIC_GLITCH_PRESET_ORIGINAL, preset, preset, kNoSpatialEffect,
-          kNoCodecEffect, 0.0f, 0.0f, 0.0f, 0.0f, 0};
+          kNoCodecEffect, kNoCodecFormat, strength, 0.0f, 0.0f, 0.0f,
+          strength, 0, 0};
 }
 
 constexpr PresetRecord spatial(const char *name, const char *effectName,
                                glic_metal_effect_family effect, float amount,
                                float scale, float rate, uint64_t seed) {
   return {name, GLIC_GLITCH_PRESET_SPATIAL, effectName, nullptr, effect,
-          kNoCodecEffect, amount, scale, rate, 0.0f, seed};
+          kNoCodecEffect, kNoCodecFormat, amount, scale, rate, 0.0f, 1.0f, 0,
+          seed};
 }
 
 constexpr PresetRecord codec(const char *name, const char *effectName,
-                             glic_codec_glitch_effect effect, float amount,
-                             float rate, float feedback, uint64_t seed) {
+                             glic_codec_glitch_effect effect,
+                             glic_codec_glitch_codec codecFormat, float amount,
+                             float rate,
+                             float feedback, int32_t cascadeGenerations,
+                             uint64_t seed) {
   return {name, GLIC_GLITCH_PRESET_CODEC, effectName, nullptr,
-          kNoSpatialEffect, effect, amount, 0.0f, rate, feedback, seed};
+          kNoSpatialEffect, effect, codecFormat, amount, 0.0f, rate, feedback,
+          1.0f, cascadeGenerations, seed};
 }
 
-constexpr std::array<PresetRecord, 19> kPresets{{
-    original("original__vv01", "vv01"),
-    original("original__bl33dyl1n3z", "bl33dyl1n3z"),
-    original("original__burn", "burn"),
-    original("original__colour_waves_sharp", "colour_waves_sharp"),
-    original("original__bl33dyl1n3z-2", "bl33dyl1n3z-2"),
-    original("original__wtf", "wtf"),
-    original("original__lightblur", "lightblur"),
-    original("original__constrctivist_minimal", "constrctivist_minimal"),
-    original("original__web_p_like", "web_p_like"),
-    original("original__webp", "webp"),
-    original("original__abstract_expressionism", "abstract_expressionism"),
-    original("original__colour_glow", "colour_glow"),
-    spatial("spatial__poster_solar", "poster_solar",
-            GLIC_METAL_EFFECT_POSTER_SOLAR, 0.49f, 0.36f, 0.15f,
-            UINT64_C(1296652297)),
-    spatial("spatial__bitplane_dither", "bitplane_dither",
-            GLIC_METAL_EFFECT_BITPLANE_DITHER, 0.79f, 0.28f, 0.92f,
-            UINT64_C(1296652295)),
-    spatial("spatial__scanline_weave", "scanline_weave",
-            GLIC_METAL_EFFECT_SCANLINE_WEAVE, 0.62f, 0.38f, 0.72f,
-            UINT64_C(1296652301)),
-    codec("codec__bitrate_meltdown", "bitrate_crush",
-          GLIC_CODEC_GLITCH_BITRATE_CRUSH, 0.96f, 0.78f, 0.55f,
-          UINT64_C(1204376450)),
-    original("original__beautifulwave", "beautifulwave"),
-    spatial("spatial__diagonal_slip", "diagonal_slip",
-            GLIC_METAL_EFFECT_DIAGONAL_SLIP, 0.70f, 0.72f, 0.58f,
-            UINT64_C(1296652300)),
-    original("original__bi0g4n1c", "bi0g4n1c"),
-}};
+#include "generated_realtime_preset_bank.inc"
 
 const PresetRecord *findRecord(const char *name) {
   if (name == nullptr || name[0] == '\0')
@@ -197,6 +178,7 @@ glic_glitch_preset_apply_metal(const char *name, glic_metal_config *config) {
   if (record->category == GLIC_GLITCH_PRESET_ORIGINAL) {
     config->mode = GLIC_METAL_MODE_ORIGINAL;
     config->preset_name = record->originalPresetName;
+    config->effect_strength = record->strength;
     return GLIC_GLITCH_PRESET_OK;
   }
 
@@ -207,7 +189,7 @@ glic_glitch_preset_apply_metal(const char *name, glic_metal_config *config) {
   config->effect_scale = record->scale;
   config->effect_rate = record->rate;
   config->seed = static_cast<uint32_t>(record->seed);
-  config->effect_strength = 1.0f;
+  config->effect_strength = record->strength;
   return GLIC_GLITCH_PRESET_OK;
 }
 
@@ -226,8 +208,39 @@ glic_glitch_preset_status glic_glitch_preset_apply_codec(
   controls->amount = record->amount;
   controls->rate = record->rate;
   controls->feedback = record->feedback;
+  controls->cascade_generations = record->cascadeGenerations;
   controls->seed = record->seed;
   return GLIC_GLITCH_PRESET_OK;
+}
+
+glic_glitch_preset_status
+glic_glitch_preset_get_codec(const char *name,
+                             glic_codec_glitch_codec *codecFormat) {
+  if (codecFormat == nullptr || name == nullptr)
+    return GLIC_GLITCH_PRESET_INVALID_ARGUMENT;
+  const PresetRecord *record = findRecord(name);
+  if (record == nullptr)
+    return GLIC_GLITCH_PRESET_NOT_FOUND;
+  if (record->category != GLIC_GLITCH_PRESET_CODEC)
+    return GLIC_GLITCH_PRESET_WRONG_CATEGORY;
+  *codecFormat = record->codecFormat;
+  return GLIC_GLITCH_PRESET_OK;
+}
+
+glic_glitch_preset_status glic_glitch_preset_apply_codec_config(
+    const char *name, glic_codec_glitch_config *config,
+    glic_codec_glitch_controls *controls) {
+  if (config == nullptr || controls == nullptr ||
+      config->struct_size < sizeof(glic_codec_glitch_config) ||
+      config->abi_version != GLIC_CODEC_GLITCH_ABI_VERSION)
+    return GLIC_GLITCH_PRESET_INVALID_ARGUMENT;
+  const PresetRecord *record = findRecord(name);
+  if (record == nullptr)
+    return GLIC_GLITCH_PRESET_NOT_FOUND;
+  if (record->category != GLIC_GLITCH_PRESET_CODEC)
+    return GLIC_GLITCH_PRESET_WRONG_CATEGORY;
+  config->codec = record->codecFormat;
+  return glic_glitch_preset_apply_codec(name, controls);
 }
 
 } // extern "C"

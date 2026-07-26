@@ -48,8 +48,8 @@ scripts/build_macos_sdk.sh "$(mktemp -d)/GlicMetalSDK"
 
 ## Verify the production menu
 
-- Enumerate 19 items from the C API.
-- Confirm category counts are 14 Original, 4 Spatial, and 1 Codec.
+- Enumerate 28 items from the C API.
+- Confirm category counts are 14 Original, 8 Spatial, and 6 Codec.
 - Find every stored full name through `glic_glitch_preset_find()`.
 - Reject an unknown name without replacing the active preset.
 - Confirm an explicit experimental browser cannot overwrite the production
@@ -137,4 +137,3 @@ Report:
 6. Resolution, fps, p95 latency, hardware state, and fast-path flags.
 7. Reliability counters and ownership checks.
 8. Offline implementation levels and output-kind limitations.
-

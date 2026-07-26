@@ -18,11 +18,13 @@ CoreGraphics.framework, CoreMedia.framework, CoreVideo.framework, and
 VideoToolbox.framework. Swift can
 `import GlicMetal`; Objective-C/C hosts can include
 `<glic_metal/glic_metal.h>` or `<glic_metal/glic_metal_metal.h>` from the host.
-The adopted 19-preset production bank is available through
+The adopted 28-preset realtime production bank is available through
 `<glic_metal/glitch_presets.h>` and as
 `GlicMetalResources.bundle/Contents/Resources/selected-presets.json`. Use the
 C API to enumerate stable names and apply exact Original, Spatial Metal, or
-Codec controls without parsing JSON.
+Codec format plus controls without parsing JSON. The source gallery review
+adopts 53 variants; 25 offline-only selections are deliberately excluded from
+the realtime SDK bank.
 `integration-manifest.json` in the same resource directory is the
 machine-readable contract for downstream coding agents. The adjacent
 `AI_INTEGRATION.md` is its normative implementation checklist.

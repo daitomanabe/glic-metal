@@ -4,7 +4,7 @@
 gallery used at `https://projects.daito.ws/glic-metal-gallery/`.
 
 The catalog definition is deliberately narrower than “every possible codec and
-parameter permutation” and broader than the adopted 19-preset bank:
+parameter permutation” and broader than the adopted 28-preset realtime SDK bank:
 
 - every executable named effect is included once;
 - the 14 adopted original-style GLIC recipes are included as named programs;
@@ -33,9 +33,12 @@ variant:
 - `不採用 / REJECT` — retain an explicit rejection for review provenance;
 - `未判定 / PENDING` — leave the variant undecided.
 
-Decisions are saved automatically in browser `localStorage` under
-`glic-metal-gallery-review-v1`. Family, text, and review-state filters can be
-combined. Each algorithm also has bulk controls for its three variants.
+The canonical review adopts 53 variants. Those adopted variants are the
+default gallery view; choosing `全て表示 / SHOW ALL` reveals all rejected and
+pending candidates. Decisions are saved automatically in browser
+`localStorage` under the versioned `glic-metal-gallery-review-v2` envelope.
+Family, text, and review-state filters can be combined. Each algorithm also
+has bulk controls for its three variants.
 
 When review is complete:
 
@@ -46,9 +49,20 @@ When review is complete:
    contains the stable algorithm ID, family, effect, codec, implementation
    level, realtime claim, exact parameters, media path, and technical QA.
 
-The export schema is `glic-metal-gallery-review-v1`. Browser review state is a
-curation artifact and does not change the canonical runtime preset bank until
-the exported JSON is deliberately imported into a later adoption step.
+The export schema is `glic-metal-gallery-review-v1`. The committed canonical
+files are `resources/glic-metal-gallery-review.json` and
+`resources/glic-metal-adopted-presets.json`. Importing them through
+`scripts/import_gallery_curation.py` generates the 28-entry realtime SDK bank
+from the adopted entries carrying `realtime_certified=true`; the 25
+offline-only adopted entries remain gallery selections.
+
+```bash
+python3 scripts/import_gallery_curation.py \
+  /path/to/glic-metal-gallery-review.json \
+  --adopted-json /path/to/glic-metal-adopted-presets.json \
+  --write
+python3 scripts/import_gallery_curation.py --check
+```
 
 ## Generate the preset catalog
 

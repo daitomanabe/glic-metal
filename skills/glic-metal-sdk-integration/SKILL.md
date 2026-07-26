@@ -41,14 +41,15 @@ versions.
 Default to the adopted production menu unless the user requests an experimental
 browser:
 
-- Production menu: 19 stable presets, enumerated with
+- Production menu: 28 gallery-adopted, realtime-certified presets, enumerated with
   `glic_glitch_preset_count()` and `glic_glitch_preset_get()`.
 - Compatibility browser: 144 image presets from
   `glic_metal_enumerate_presets()`.
 - Experimental Codec browser: 36 canonical effects from the bundled manifest
   and public codec API.
-- Gallery catalog: 147 algorithms with three example variants; treat it as
-  discovery data, not realtime certification.
+- Gallery catalog: 147 algorithms with three example variants. Its curated
+  review contains 53 adopted variants, but only the 28 entries carrying
+  `realtime_certified=true` enter the production SDK menu.
 
 Persist full stable preset names. Do not duplicate preset values in host code.
 Unknown names and category mismatches must fail closed while preserving the
@@ -122,7 +123,7 @@ Read [references/verification.md](references/verification.md) and complete the
 applicable gates. At minimum:
 
 - build and launch the actual host;
-- enumerate exactly 19 production presets with category counts 14 / 4 / 1;
+- enumerate exactly 28 production presets with category counts 14 / 8 / 6;
 - process a real frame from every integrated lane;
 - exercise switching, backpressure, empty polling, shutdown, and resource
   failure;
@@ -146,4 +147,3 @@ Return:
 - build, real-frame, and performance evidence;
 - implementation-level labels and known fallbacks;
 - any unimplemented or intentionally offline behavior.
-

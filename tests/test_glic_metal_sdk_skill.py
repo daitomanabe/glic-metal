@@ -41,11 +41,11 @@ def main() -> int:
     assert source_report["ok"] is True
     assert source_report["layout"] == "source"
     assert source_report["library"]["cmake_target"] == "GlicMetal::GlicMetal"
-    assert source_report["selected_preset_bank"]["count"] == 19
+    assert source_report["selected_preset_bank"]["count"] == 28
     assert source_report["selected_preset_bank"]["category_counts"] == {
         "original": 14,
-        "spatial": 4,
-        "codec": 1,
+        "spatial": 8,
+        "codec": 6,
     }
     assert all(source_report["headers"].values())
 

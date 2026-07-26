@@ -18,7 +18,7 @@ The public surface is:
 - `GlicMetal::GlicMetal` — CMake target;
 - `glic_realtime.metallib` — Metal kernels to copy into the host bundle;
 - `presets/` — runtime preset data;
-- `selected-presets.json` — portable data copy of the adopted 19 presets.
+- `selected-presets.json` — portable data copy of the adopted 28 realtime presets.
 - `integration-manifest.json` — machine-readable integration contract.
 - `Skills/glic-metal-sdk-integration/` — packaged Codex workflow and SDK
   inspector for downstream agents.
@@ -34,12 +34,13 @@ Internal headers under `src/` are not part of the stable API.
 
 ## Use the adopted preset bank
 
-The shipped bank contains the exact 19 presets selected for production: 14
-original-style presets, four allocation-free spatial Metal presets, and one
-codec-control preset. The host may prepare that codec lane as H.264, HEVC, or
-ProRes 422. Stable names such as `original__vv01`,
-`spatial__poster_solar`, and `codec__bitrate_meltdown` can be stored by a host
-application. The compiled C API is the authoritative runtime catalog and
+The shipped bank contains the exact 28 gallery-adopted presets certified for
+realtime use: 14 original-style presets, eight allocation-free spatial Metal
+presets, and six codec-control presets. Codec preset names encode and apply the
+required H.264, HEVC, or ProRes 422 format. Stable names such as
+`original__vv01`, `spatial__legacy_block`, and
+`codec__hevc__reference_timewarp` can be stored by a host application. The
+compiled C API is the authoritative runtime catalog and
 preserves the order in `selected-presets.json`; the JSON is an optional
 inspection/exchange copy.
 
@@ -60,12 +61,16 @@ image_config.width = 960;
 image_config.height = 540;
 image_config.preset_directory = preset_directory;
 image_config.metal_library_path = metallib_path;
-glic_glitch_preset_apply_metal("spatial__poster_solar", &image_config);
+glic_glitch_preset_apply_metal("spatial__legacy_block", &image_config);
 
+glic_codec_glitch_config codec_config;
+glic_codec_glitch_config_init(&codec_config);
 glic_codec_glitch_controls codec_controls;
-if (glic_glitch_preset_apply_codec("codec__bitrate_meltdown",
-                                   &codec_controls) ==
+if (glic_glitch_preset_apply_codec_config(
+        "codec__hevc__reference_timewarp", &codec_config,
+        &codec_controls) ==
     GLIC_GLITCH_PRESET_OK) {
+  /* codec_config.codec is now HEVC; prepare this config outside callbacks. */
   glic_codec_glitch_set_controls(codec_context, &codec_controls);
 }
 ```
@@ -74,14 +79,16 @@ if (glic_glitch_preset_apply_codec("codec__bitrate_meltdown",
 paths, Metal device, and library path untouched. Original presets select
 `GLIC_METAL_MODE_ORIGINAL`; spatial presets select
 `GLIC_METAL_MODE_COMPAT_REALTIME` and apply their exact family, amount, scale,
-rate, and seed. `glic_glitch_preset_apply_codec()` initializes the controls and
-applies the exact codec effect, amount, rate, feedback, and seed. Category
-mismatches fail closed.
+rate, and seed. `glic_glitch_preset_apply_codec_config()` also applies the
+curated native codec while preserving all other host configuration, then
+initializes the exact effect, amount, rate, feedback, generations, and seed.
+Category mismatches fail closed.
 
 Build the production menu only with `glic_glitch_preset_count()` and
 `glic_glitch_preset_get()`. `glic_metal_enumerate_presets()` intentionally
 returns the complete 144-preset compatibility corpus and must not be used for
-the adopted 19-item menu.
+the adopted 28-item realtime menu. The gallery retains 53 adopted variants;
+25 offline-only selections are intentionally not exposed by this C API.
 
 Keep two engine objects when the host supports all three categories:
 
@@ -90,7 +97,7 @@ Keep two engine objects when the host supports all three categories:
 
 On selection, inspect `descriptor.category`. Route Original and Spatial names
 to `glic_glitch_preset_apply_metal()` followed by `glic_metal_prepare()`.
-Route Codec names to `glic_glitch_preset_apply_codec()` followed by
+Route Codec names to `glic_glitch_preset_apply_codec_config()` followed by
 `glic_codec_glitch_set_controls()`. Prepare or switch outside the frame
 callback. Use a host-side generation ID to discard late asynchronous Codec
 output after switching lanes.
@@ -98,7 +105,7 @@ output after switching lanes.
 ## Choose a processing path
 
 This table describes the full library capability surface. The adopted
-production bank is the 14 / 4 / 1 subset described above.
+production bank is the 14 / 8 / 6 subset described above.
 
 | Mode | Presets | Input | Main use |
 |---|---:|---|---|
@@ -505,7 +512,7 @@ copies their values during preparation.
 ## Preset menus and switching
 
 For the production menu, use `glic_glitch_preset_count()` and
-`glic_glitch_preset_get()` to expose exactly the adopted 19 presets in their
+`glic_glitch_preset_get()` to expose exactly the adopted 28 realtime presets in their
 reviewed order. Store the full stable name and route by `descriptor.category`.
 Switch Original/Spatial by applying the name and calling
 `glic_metal_prepare()` off the render queue. Switch Codec by applying the name

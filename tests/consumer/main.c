@@ -13,8 +13,8 @@
 int main(void) {
   glic_glitch_preset_descriptor selected;
   glic_glitch_preset_descriptor_init(&selected);
-  if (glic_glitch_preset_count() != 19 ||
-      glic_glitch_preset_find("spatial__poster_solar", &selected) !=
+  if (glic_glitch_preset_count() != 28 ||
+      glic_glitch_preset_find("spatial__legacy_block", &selected) !=
           GLIC_GLITCH_PRESET_OK ||
       selected.category != GLIC_GLITCH_PRESET_SPATIAL)
     return 1;

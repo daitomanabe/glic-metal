@@ -494,6 +494,10 @@ if(BUILD_TESTING)
     target_link_libraries(glic_glitch_presets_tests PRIVATE
                           GlicMetal::GlicMetal)
     add_test(NAME glic_selected_preset_bank COMMAND glic_glitch_presets_tests)
+    add_test(
+        NAME glic_gallery_curation
+        COMMAND "${Python3_EXECUTABLE}"
+                "${PROJECT_SOURCE_DIR}/tests/test_gallery_curation.py")
 
     add_test(NAME glic_installed_consumer
              COMMAND "${CMAKE_COMMAND}"

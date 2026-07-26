@@ -68,8 +68,8 @@ Use the adopted bank by default:
 | Category | Count | Apply function |
 |---|---:|---|
 | Original | 14 | `glic_glitch_preset_apply_metal()` |
-| Spatial | 4 | `glic_glitch_preset_apply_metal()` |
-| Codec | 1 | `glic_glitch_preset_apply_codec()` |
+| Spatial | 8 | `glic_glitch_preset_apply_metal()` |
+| Codec | 6 | `glic_glitch_preset_apply_codec_config()` |
 
 Enumerate it with `glic_glitch_preset_count()` and
 `glic_glitch_preset_get()`. Look up persisted names with
@@ -78,6 +78,10 @@ Enumerate it with `glic_glitch_preset_count()` and
 Use `glic_metal_enumerate_presets()` only for an explicitly requested
 144-preset compatibility browser. Read the 36 Codec effect names from the
 same-version manifest or public enum; never infer future names.
+
+The gallery review currently adopts 53 rendered variants. Twenty-five are
+honestly retained as offline-only gallery selections; the production menu is
+the 28-item intersection with `realtime_certified=true`.
 
 ## Offline workflow routing
 
@@ -119,4 +123,3 @@ Link `libc++.tbd` and:
 - CoreMedia
 - CoreVideo
 - VideoToolbox
-
