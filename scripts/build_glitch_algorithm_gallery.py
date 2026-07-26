@@ -808,8 +808,18 @@ def processor_command(
             if family == "codec_lab" and effect == "av2_optical_flow_wound"
             else MAX_FRAMES
         )
+        processor_timeout = (
+            1200
+            if family == "codec_lab" and effect == "av2_optical_flow_wound"
+            else 300
+        )
         command.extend(
-            ["--max-frames", str(maximum_frames), "--timeout", "300"]
+            [
+                "--max-frames",
+                str(maximum_frames),
+                "--timeout",
+                str(processor_timeout),
+            ]
         )
     if family in {
         "codec_lab",
