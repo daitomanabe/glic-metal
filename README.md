@@ -212,6 +212,29 @@ python3 scripts/process_video.py input.mov output-original.mp4 \
 
 入力・出力動画をローカルに保持する場合は、Git対象外の `test-videos/` を使用できます。
 
+### グリッチ・アルゴリズム・ギャラリー
+
+[公開ギャラリー](https://projects.daito.ws/glic-metal-gallery/)では、147アルゴリズムを
+各3パラメータ、合計441本の実動画で比較できます。初期表示はレビュー済みの
+採用53本だけです。判定フィルタを「全て表示」にすると、不採用41本と未判定347本を
+含む全候補を確認できます。現在の動画QAはPASS 440本、WARN 1本、FAIL 0本です。
+
+採用53本のうち、960×540・20fps以上のリアルタイム経路としてSDKへ収録するのは
+認証済み28本（Original 14、Spatial 8、Codec 6）です。残る採用25本はoffline
+codec／packet／transport／metadata系のため、ギャラリーには残しますが
+リアルタイムSDKのデフォルトpresetには含めません。
+
+レビュー結果の正本は
+[`resources/glic-metal-gallery-review.json`](resources/glic-metal-gallery-review.json)、
+SDKのデフォルトbankは
+[`src/generated_realtime_preset_bank.inc`](src/generated_realtime_preset_bank.inc)
+です。ギャラリーを再生成する前に、両者の整合性をfail-closedで検証できます。
+
+```bash
+python3 scripts/import_gallery_curation.py --check
+python3 scripts/build_glitch_algorithm_gallery.py --build-site-only
+```
+
 ### Codec Glitch（H.264 / HEVC / ProRes + offline 8 codec）
 
 `codec_glitch`は、VideoToolbox hardware encoder/decoderとMetal互換
@@ -876,6 +899,32 @@ Pass the exact `--canonical 'v2|...' --seed ...` values from a ranked row's
 converting the recipe back through a preset name.
 
 Use the Git-ignored `test-videos/` directory for local input and preview files.
+
+### Glitch algorithm gallery
+
+The [public gallery](https://projects.daito.ws/glic-metal-gallery/) compares
+147 algorithms at three parameter settings each, for 441 rendered videos. It
+opens with only the 53 reviewed and adopted variants visible. Choose
+**SHOW ALL** in the decision filter to inspect the 41 rejected and 347 pending
+variants as well. The current video-QA result is 440 PASS, one WARN, and zero
+FAIL.
+
+Of the 53 adopted variants, the SDK ships only the 28 certified for the
+960×540, 20 fps-or-better realtime path: 14 Original, eight Spatial, and six
+Codec presets. The other 25 adopted variants use offline codec, packet,
+transport, or metadata processing. They remain visible in the gallery but are
+not exposed as realtime SDK defaults.
+
+[`resources/glic-metal-gallery-review.json`](resources/glic-metal-gallery-review.json) is
+the canonical review record, while
+[`src/generated_realtime_preset_bank.inc`](src/generated_realtime_preset_bank.inc)
+is the SDK default bank. Validate their fail-closed relationship before
+rebuilding the gallery:
+
+```bash
+python3 scripts/import_gallery_curation.py --check
+python3 scripts/build_glitch_algorithm_gallery.py --build-site-only
+```
 
 ### Codec Glitch (H.264 / HEVC / ProRes + eight offline codecs)
 
