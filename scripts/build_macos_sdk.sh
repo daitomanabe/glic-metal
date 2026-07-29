@@ -166,6 +166,8 @@ run /bin/mkdir -p "$tools_dir" "$documentation_dir" "$skills_dir"
 run cmake -E copy_directory \
   "${repo_root}/skills/glic-metal-sdk-integration" \
   "${skills_dir}/glic-metal-sdk-integration"
+run /usr/bin/find "$skills_dir" -type d -name __pycache__ -prune \
+  -exec /bin/rm -rf {} +
 run cmake -E copy_if_different \
   "${install_dir}/bin/glic_codec_glitch_filter" \
   "${tools_dir}/glic_codec_glitch_filter"
