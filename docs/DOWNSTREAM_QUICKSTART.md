@@ -7,6 +7,12 @@
 GLIC Metalを別アプリへ組み込む最短手順です。リアルタイム処理とoffline file処理は
 安全境界が異なるため、同じ呼び出し経路へ混在させません。
 
+通常のXcode／Swiftアプリは、開発用ソースを直接参照せず
+`https://github.com/daitomanabe/glic-metal-sdk`をPackage Dependencyへ追加し、
+product `GlicMetal`を選択します。C ABIは`GlicMetal`、同じversionのpresetと
+metallib pathは`GlicMetalResources` moduleから取得します。Release assetと
+Swift Packageは必ず同じtagへ固定してください。
+
 ### 1. macOS SDKを作る
 
 ```bash
@@ -114,6 +120,12 @@ Theora / Dirac処理はホストのcapture/render callbackから
 全追加系統と実動画評価は`Documentation/GLITCH_EXPANSION.md`にあります。
 
 ## English
+
+For ordinary Xcode and Swift applications, add
+`https://github.com/daitomanabe/glic-metal-sdk` as a version-pinned Package
+Dependency and select the `GlicMetal` product. Import `GlicMetal` for the C ABI
+and `GlicMetalResources` for paths to the matching presets, metallib, and
+manifests.
 
 Use the generated SDK as the shortest downstream integration path:
 

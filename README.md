@@ -2,15 +2,18 @@
 
 [日本語](#日本語) | [English](#english)
 
-**Status: pre-release.** The source, tests, and macOS application are under
-active development; no stable binary release has been tagged yet.
+**Status: 0.x pre-release.** The source, tests, and macOS application remain
+under active development. Versioned SDK distributions start at `v0.1.0`.
 
-Canonical repository: <https://github.com/daitomanabe/glic-metal>
+Canonical source repository: <https://github.com/daitomanabe/glic-metal>
+
+Versioned SDK distribution: <https://github.com/daitomanabe/glic-metal-sdk>
 
 [Live algorithm gallery](https://projects.daito.ws/glic-metal-gallery/) ·
 [Build guide](docs/BUILDING.md) ·
 [Gallery generation and QA](docs/GLITCH_ALGORITHM_GALLERY.md) ·
 [Downstream quick start](docs/DOWNSTREAM_QUICKSTART.md) ·
+[SDK distribution](https://github.com/daitomanabe/glic-metal-sdk) ·
 [Embedding guide](docs/EMBEDDING.md) ·
 [AI integration contract](docs/AI_INTEGRATION.md) ·
 [Cross-machine Codex handoff](docs/CODEX_HANDOFF.md) ·
@@ -147,6 +150,12 @@ cmake --build .
 ```
 
 他アプリ向けリアルタイムAPIは [include/glic_metal/glic_metal.h](include/glic_metal/glic_metal.h) にあります。AIエージェントは [AI向け組み込み仕様](docs/AI_INTEGRATION.md) に従ってください。CPU backendは3チャンネルを永続workerで並列処理し、解像度変更時以外はworkspaceを再利用します。Metal backendはCPU配列を扱う同期APIに加え、`MTLTexture`を直接渡すゼロコピーAPIと、呼び出し側の`MTLCommandBuffer`へ処理を追加する非同期APIを提供します。
+
+外部アプリは開発用ソース一式を複製せず、
+[`glic-metal-sdk`](https://github.com/daitomanabe/glic-metal-sdk)のversion固定
+Swift PackageまたはRelease assetを使用してください。`glic-metal`を実装・テスト・
+SDK生成の正本、`glic-metal-sdk`を検証済みbinary／resource／組み込み資料の
+配布先として一方向に同期します。
 
 別のApple Silicon Macへワークスペース全体を移してCodexで再開する場合は、
 [Codex workspace handoff](docs/CODEX_HANDOFF.md) と
@@ -791,6 +800,13 @@ cmake --build .
 ```
 
 The public realtime API is declared in [include/glic_metal/glic_metal.h](include/glic_metal/glic_metal.h). Coding agents should follow the [AI integration contract](docs/AI_INTEGRATION.md). The CPU backend reuses resolution-sized workspaces after preparation. The Metal backend provides a synchronous CPU-buffer API, an opaque zero-copy `MTLTexture` API, and a non-blocking API that appends work to the caller's `MTLCommandBuffer`.
+
+Downstream applications should consume a pinned Swift Package or Release asset
+from [`glic-metal-sdk`](https://github.com/daitomanabe/glic-metal-sdk) instead
+of copying this development tree. This repository remains the implementation,
+test, and SDK-generation source of truth; the SDK repository is a generated
+distribution surface for verified binaries, resources, and integration
+contracts.
 
 Use the [cross-machine Codex handoff](docs/CODEX_HANDOFF.md) and
 `scripts/build_workspace_handoff.py` when moving the complete workspace to

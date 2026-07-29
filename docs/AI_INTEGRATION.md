@@ -8,6 +8,10 @@ internal files when a public API or rule is specified here. The machine-readable
 companion is `resources/integration-manifest.json`.
 The generated SDK also carries the reusable Codex workflow at
 `Skills/glic-metal-sdk-integration/`.
+`https://github.com/daitomanabe/glic-metal` is the source of truth.
+Versioned downstream distributions are generated into
+`https://github.com/daitomanabe/glic-metal-sdk`; never combine a binary,
+resource bundle, manifest, or document from different source revisions.
 
 ## 日本語
 

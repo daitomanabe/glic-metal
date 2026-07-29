@@ -45,3 +45,36 @@ Before making the repository public, inspect the staged tree, confirm the
 gallery decision, create a tagged release from a clean commit, and publish
 checksums for downloadable application bundles. Never upload `test-videos/`,
 `search-runs/`, local build directories, or camera captures.
+
+## SDK distribution release
+
+`glic-metal` remains the source of truth. The separate
+`daitomanabe/glic-metal-sdk` repository contains only generated, versioned
+distribution files. Do not edit its copied contracts, resources, or binaries
+independently.
+
+From a clean tagged source commit:
+
+```bash
+release_root="$(mktemp -d)"
+GLIC_SDK_VERSION=0.1.0 \
+GLIC_SDK_DEPLOYMENT_TARGET=13.0 \
+GLIC_SDK_ARCHITECTURES=arm64 \
+GLIC_SDK_REQUIRE_CLEAN=1 \
+GLIC_SDK_BUILD_DIR="${release_root}/build" \
+scripts/build_macos_sdk.sh "${release_root}/GlicMetalSDK"
+
+python3 skills/glic-metal-sdk-integration/scripts/inspect_glic_metal_sdk.py \
+  "${release_root}/GlicMetalSDK" --lane all --strict
+(cd "${release_root}/GlicMetalSDK" && shasum -a 256 -c SHA256SUMS)
+
+python3 scripts/prepare_sdk_repository.py \
+  --sdk-root "${release_root}/GlicMetalSDK" \
+  --output /path/to/glic-metal-sdk \
+  --version 0.1.0
+```
+
+The SDK repository tag and source repository tag must use the same semantic
+version. Verify `RELEASE-MANIFEST.json.source_revision`, the SwiftPM checksum,
+the complete SDK checksum, a fresh remote Swift package consumer, and the
+28-preset 14/8/6 production menu before publishing the release.

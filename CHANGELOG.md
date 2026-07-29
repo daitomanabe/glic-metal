@@ -6,8 +6,14 @@ semantic versioning for tagged releases.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-29
+
 ### Added
 
+- A separate generated `glic-metal-sdk` distribution repository contract with
+  version-pinned SwiftPM binary delivery, matched runtime resources, source
+  revision provenance, deterministic release assets, and strict packaging
+  validation.
 - A verified cross-machine workspace handoff builder that packages full Git and
   submodule bundles, a distributable SDK, sanitized Codex context, local test
   media, gallery/search evidence, pinned codec caches, a machine-readable
