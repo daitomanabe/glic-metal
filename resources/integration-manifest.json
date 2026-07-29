@@ -8,13 +8,22 @@
     "abi_versions": {"image": 1, "codec": 1, "selected_presets": 1}
   },
   "distribution": {
+    "source_repository": "https://github.com/daitomanabe/glic-metal",
+    "sdk_repository": "https://github.com/daitomanabe/glic-metal-sdk",
     "macos_sdk": {
       "library": "GlicMetal.xcframework",
       "resources": "GlicMetalResources.bundle",
       "documentation_directory": "Documentation",
       "offline_tools_directory": "Tools",
       "python_requirements": "Tools/requirements.txt",
-      "agent_skill": "Skills/glic-metal-sdk-integration"
+      "agent_skill": "Skills/glic-metal-sdk-integration",
+      "release_manifest": "RELEASE-MANIFEST.json"
+    },
+    "swift_package": {
+      "url": "https://github.com/daitomanabe/glic-metal-sdk",
+      "product": "GlicMetal",
+      "minimum_macos": "13.0",
+      "resource_helper_module": "GlicMetalResources"
     },
     "cmake_package": {
       "target": "GlicMetal::GlicMetal",

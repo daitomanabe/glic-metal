@@ -9,10 +9,13 @@ Use this map after inspecting the SDK. The bundled
 |---|---|---|---|---|
 | Source checkout | `docs/AI_INTEGRATION.md` | CMake build target | `presets/`, generated metallib, `resources/` | `scripts/` |
 | Generated SDK | `AI_INTEGRATION.md` | `GlicMetal.xcframework` | `GlicMetalResources.bundle` | `Tools/` |
+| Swift Package | package `AI_INTEGRATION.md` | versioned binary target | `GlicMetalResources` module | complete Release asset |
 | CMake install | `share/doc/glic-metal/AI_INTEGRATION.md` | `GlicMetal::GlicMetal` | `share/glic-metal/` | `${GLIC_METAL_TOOLS_DIR}` |
 
-Prefer the generated SDK for Xcode and Swift hosts. Prefer the exported CMake
-target for CMake, JUCE, and openFrameworks projects.
+Prefer the version-pinned `glic-metal-sdk` Swift Package or generated SDK for
+Xcode and Swift hosts. Prefer the exported CMake target for CMake, JUCE, and
+openFrameworks projects. The source and SDK repository tags must match, and
+the SDK `RELEASE-MANIFEST.json` must identify the exact source commit.
 
 ## Realtime lane selection
 

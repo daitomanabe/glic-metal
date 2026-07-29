@@ -45,6 +45,12 @@ def main() -> int:
     for path in manifest["documentation"].values():
         assert (ROOT / path).is_file(), path
     distribution = manifest["distribution"]
+    assert distribution["source_repository"] == (
+        "https://github.com/daitomanabe/glic-metal"
+    )
+    assert distribution["sdk_repository"] == (
+        "https://github.com/daitomanabe/glic-metal-sdk"
+    )
     assert distribution["macos_sdk"] == {
         "library": "GlicMetal.xcframework",
         "resources": "GlicMetalResources.bundle",
@@ -52,6 +58,13 @@ def main() -> int:
         "offline_tools_directory": "Tools",
         "python_requirements": "Tools/requirements.txt",
         "agent_skill": "Skills/glic-metal-sdk-integration",
+        "release_manifest": "RELEASE-MANIFEST.json",
+    }
+    assert distribution["swift_package"] == {
+        "url": "https://github.com/daitomanabe/glic-metal-sdk",
+        "product": "GlicMetal",
+        "minimum_macos": "13.0",
+        "resource_helper_module": "GlicMetalResources",
     }
     agent_skill = ROOT / distribution["macos_sdk"]["agent_skill"]
     assert (agent_skill / "SKILL.md").is_file()

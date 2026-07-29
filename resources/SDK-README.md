@@ -10,6 +10,8 @@ Contents:
   evaluation, and search entrypoints;
 - `Skills/glic-metal-sdk-integration/` — installable Codex skill for choosing,
   integrating, inspecting, and validating the SDK;
+- `RELEASE-MANIFEST.json` — SDK version, exact source commit, ABI versions,
+  architecture, deployment target, and production preset counts;
 - `SHA256SUMS` — checksums for the packaged files.
 
 Add the XCFramework and resource bundle to the Xcode application target. Link
@@ -18,6 +20,9 @@ CoreGraphics.framework, CoreMedia.framework, CoreVideo.framework, and
 VideoToolbox.framework. Swift can
 `import GlicMetal`; Objective-C/C hosts can include
 `<glic_metal/glic_metal.h>` or `<glic_metal/glic_metal_metal.h>` from the host.
+Versioned Swift Package and Release distributions are published from
+`https://github.com/daitomanabe/glic-metal-sdk`; the implementation source of
+truth remains `https://github.com/daitomanabe/glic-metal`.
 The adopted 28-preset realtime production bank is available through
 `<glic_metal/glitch_presets.h>` and as
 `GlicMetalResources.bundle/Contents/Resources/selected-presets.json`. Use the

@@ -10,6 +10,12 @@ output_dir="${1:-${repo_root}/build/GlicMetalSDK}"
 build_dir="${GLIC_SDK_BUILD_DIR:-${repo_root}/build-sdk}"
 architectures="${GLIC_SDK_ARCHITECTURES:-$(uname -m)}"
 developer_dir="${GLIC_XCODE_DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+sdk_version="${GLIC_SDK_VERSION:-0.1.0-dev}"
+deployment_target="${GLIC_SDK_DEPLOYMENT_TARGET:-13.0}"
+source_repository="${GLIC_SDK_SOURCE_REPOSITORY:-https://github.com/daitomanabe/glic-metal}"
+source_revision="${GLIC_SDK_SOURCE_REVISION:-$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)}"
+build_number="${GLIC_SDK_BUILD_NUMBER:-$(git -C "$repo_root" rev-list --count HEAD 2>/dev/null || echo 1)}"
+require_clean="${GLIC_SDK_REQUIRE_CLEAN:-0}"
 
 fail() {
   /bin/echo "error: $1" >&2
@@ -27,6 +33,18 @@ run() {
   fail "full Xcode was not found at ${developer_dir}"
 [ ! -e "$output_dir" ] ||
   fail "output already exists; choose a new path: ${output_dir}"
+[ -n "$source_revision" ] || fail "could not determine the source Git revision"
+
+source_dirty=0
+git -C "$repo_root" diff --quiet --ignore-submodules -- || source_dirty=1
+git -C "$repo_root" diff --cached --quiet --ignore-submodules -- ||
+  source_dirty=1
+if [ -n "$(git -C "$repo_root" ls-files --others --exclude-standard)" ]; then
+  source_dirty=1
+fi
+if [ "$require_clean" = "1" ] && [ "$source_dirty" != "0" ]; then
+  fail "GLIC_SDK_REQUIRE_CLEAN=1 but the source worktree is dirty"
+fi
 
 temporary_root="$(mktemp -d)" || fail "could not create temporary directory"
 cleanup() {
@@ -46,6 +64,7 @@ skills_dir="${sdk_dir}/Skills"
 run cmake -S "$repo_root" -B "$build_dir" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_OSX_ARCHITECTURES="$architectures" \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET="$deployment_target" \
   -DGLIC_BUILD_STANDALONE=OFF \
   -DGLIC_INSTALL=ON
 run cmake --build "$build_dir" --target glic_core glic_codec_glitch_filter \
@@ -90,6 +109,59 @@ run cmake -E copy_if_different "$repo_root/resources/SDK-README.md" \
 run cmake -E copy_if_different \
   "${install_dir}/share/doc/glic-metal/AI_INTEGRATION.md" \
   "${sdk_dir}/AI_INTEGRATION.md"
+
+release_manifest="${sdk_dir}/RELEASE-MANIFEST.json"
+SDK_VERSION="$sdk_version" \
+SOURCE_REPOSITORY="$source_repository" \
+SOURCE_REVISION="$source_revision" \
+SOURCE_DIRTY="$source_dirty" \
+BUILD_NUMBER="$build_number" \
+ARCHITECTURES="$architectures" \
+DEPLOYMENT_TARGET="$deployment_target" \
+python3 - "$release_manifest" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+
+manifest = {
+    "schema": "glic-metal-sdk-release-v1",
+    "sdk_version": os.environ["SDK_VERSION"],
+    "source_repository": os.environ["SOURCE_REPOSITORY"],
+    "source_revision": os.environ["SOURCE_REVISION"],
+    "source_dirty": os.environ["SOURCE_DIRTY"] != "0",
+    "build_number": int(os.environ["BUILD_NUMBER"]),
+    "platform": "macOS",
+    "architectures": [
+        value
+        for value in os.environ["ARCHITECTURES"].replace(",", ";").split(";")
+        if value
+    ],
+    "minimum_macos": os.environ["DEPLOYMENT_TARGET"],
+    "abi_versions": {
+        "image": 1,
+        "codec": 1,
+        "selected_presets": 1,
+    },
+    "production_presets": {
+        "count": 28,
+        "category_counts": {
+            "original": 14,
+            "spatial": 8,
+            "codec": 6,
+        },
+    },
+}
+Path(sys.argv[1]).write_text(
+    json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+[ "$?" -eq 0 ] || fail "could not create SDK release manifest"
+run cmake -E copy_if_different \
+  "$release_manifest" \
+  "${resource_bundle}/Contents/Resources/RELEASE-MANIFEST.json"
+
 run /bin/mkdir -p "$tools_dir" "$documentation_dir" "$skills_dir"
 run cmake -E copy_directory \
   "${repo_root}/skills/glic-metal-sdk-integration" \
@@ -167,14 +239,17 @@ run /usr/bin/plutil -insert CFBundleIdentifier -string \
 run /usr/bin/plutil -insert CFBundleName -string GlicMetalResources \
   "$info_plist"
 run /usr/bin/plutil -insert CFBundlePackageType -string BNDL "$info_plist"
-run /usr/bin/plutil -insert CFBundleShortVersionString -string 1.0.0 \
+run /usr/bin/plutil -insert CFBundleShortVersionString -string \
+  "${sdk_version%%-*}" \
   "$info_plist"
-run /usr/bin/plutil -insert CFBundleVersion -string 1 "$info_plist"
+run /usr/bin/plutil -insert CFBundleVersion -string "$build_number" \
+  "$info_plist"
 
 (
   cd "$sdk_dir" || exit 1
   find GlicMetal.xcframework GlicMetalResources.bundle README.md \
-    AI_INTEGRATION.md Documentation Tools Skills -type f -print0 |
+    AI_INTEGRATION.md RELEASE-MANIFEST.json Documentation Tools Skills \
+    -type f -print0 |
     sort -z | xargs -0 /usr/bin/shasum -a 256 > SHA256SUMS
 ) || fail "could not create SDK checksums"
 

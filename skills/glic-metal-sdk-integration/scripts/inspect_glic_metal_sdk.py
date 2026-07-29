@@ -161,6 +161,7 @@ def inspect(root: Path, lane: str) -> dict[str, Any]:
 
     elif layout == "generated_sdk":
         resources = layout_root / "GlicMetalResources.bundle/Contents/Resources"
+        release_manifest_path = layout_root / "RELEASE-MANIFEST.json"
         check_path(
             result, "GlicMetal.xcframework", layout_root / "GlicMetal.xcframework"
         )
@@ -169,6 +170,45 @@ def inspect(root: Path, lane: str) -> dict[str, Any]:
         )
         check_path(result, "Documentation", layout_root / "Documentation")
         check_path(result, "SHA256SUMS", layout_root / "SHA256SUMS")
+        if check_path(result, "release manifest", release_manifest_path):
+            try:
+                release_manifest = json.loads(
+                    release_manifest_path.read_text(encoding="utf-8")
+                )
+                result["release"] = release_manifest
+                if release_manifest.get("schema") != "glic-metal-sdk-release-v1":
+                    result["errors"].append(
+                        "release manifest has an unsupported schema"
+                    )
+                revision = str(release_manifest.get("source_revision", ""))
+                if len(revision) != 40 or any(
+                    character not in "0123456789abcdef" for character in revision
+                ):
+                    result["errors"].append(
+                        "release manifest source_revision must be a full Git SHA"
+                    )
+                if release_manifest.get("source_dirty") is not False:
+                    result["errors"].append(
+                        "release manifest reports a dirty source worktree"
+                    )
+                bundled_release_manifest = (
+                    resources / "RELEASE-MANIFEST.json"
+                )
+                if not check_path(
+                    result,
+                    "bundled release manifest",
+                    bundled_release_manifest,
+                ):
+                    pass
+                elif (
+                    bundled_release_manifest.read_bytes()
+                    != release_manifest_path.read_bytes()
+                ):
+                    result["errors"].append(
+                        "root and bundled release manifests differ"
+                    )
+            except json.JSONDecodeError:
+                result["errors"].append("release manifest is not valid JSON")
         check_path(
             result,
             "agent skill",

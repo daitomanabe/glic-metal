@@ -423,6 +423,9 @@ if(BUILD_TESTING)
         add_test(NAME glic_sdk_integration_skill
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_glic_metal_sdk_skill.py")
+        add_test(NAME glic_sdk_repository_packager
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${PROJECT_SOURCE_DIR}/tests/test_prepare_sdk_repository.py")
         add_test(NAME glic_original_metal_reference_analysis
                  COMMAND "${Python3_EXECUTABLE}"
                          "${PROJECT_SOURCE_DIR}/tests/test_compare_original_metal_reference.py")

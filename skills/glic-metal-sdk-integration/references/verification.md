@@ -16,6 +16,10 @@ For a generated SDK, also verify:
 (cd <GlicMetalSDK> && shasum -a 256 -c SHA256SUMS)
 ```
 
+Require `RELEASE-MANIFEST.json` at the SDK root and in the resource bundle.
+The two copies must match, name a full source Git SHA, and report
+`source_dirty=false`.
+
 Do not integrate when the contract, headers, resources, or tools are from
 different versions.
 

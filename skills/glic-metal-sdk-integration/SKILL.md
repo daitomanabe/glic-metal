@@ -13,6 +13,10 @@ and offline damaged-bitstream workflows as separate lanes.
 
 1. Locate the source checkout, generated `GlicMetalSDK`, or installed CMake
    prefix.
+   Prefer a version-pinned release from
+   `https://github.com/daitomanabe/glic-metal-sdk` for downstream Xcode and
+   SwiftPM applications. Treat `https://github.com/daitomanabe/glic-metal` as
+   the implementation and SDK-generation source of truth.
 2. Run the bundled inspector before editing the host:
 
    ```bash
@@ -35,6 +39,8 @@ and offline damaged-bitstream workflows as separate lanes.
 
 Never combine headers, catalogs, tools, or documentation from different SDK
 versions.
+For a generated release, require `RELEASE-MANIFEST.json` to name the exact
+source commit and report `source_dirty=false`.
 
 ## Choose the product surface explicitly
 
