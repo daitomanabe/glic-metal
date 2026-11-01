@@ -6,6 +6,12 @@ semantic versioning for tagged releases.
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/run_gallery_recipe.py`, which applies any glitch gallery variant to a
+  local video by recipe key or JSON, including the delivery `wet_mix` blend.
+- A recipe key plus copy and download controls on every gallery card.
+
 ## [0.1.0] - 2026-07-29
 
 ### Added

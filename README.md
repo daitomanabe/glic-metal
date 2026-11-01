@@ -244,6 +244,23 @@ python3 scripts/import_gallery_curation.py --check
 python3 scripts/build_glitch_algorithm_gallery.py --build-site-only
 ```
 
+各カードには、レシピキーと「レシピをコピー」「レシピを保存」のボタンがあります。
+手元の動画に適用するときは、キーまたはレシピのJSONを渡します。
+
+```bash
+python3 scripts/run_gallery_recipe.py input.mov output.mp4 --key 'original:vv01::saturation'
+pbpaste | python3 scripts/run_gallery_recipe.py input.mov output.mp4 --recipe -
+python3 scripts/run_gallery_recipe.py --list --family spatial
+```
+
+ギャラリーを制作した処理をそのまま使い、`wet_mix` による元動画との合成まで行います。
+出力は既定で480×270・24fpsです。`--width`、`--height`、`--fps` で変更できます。
+offline系統は既定でギャラリーと同じフレーム数までを処理し、`--max-frames` で延ばせます。
+
+`.glic` は静止画1枚を符号化したファイルで、ギャラリーの動画には使われていません。
+ほかの映像へ適用するときは、`.glic` ではなくレシピを使います。GLIC系統は入力の差に
+敏感なため、別の動画では質感は同じでも、同じ絵にはなりません。
+
 ### Codec Glitch（H.264 / HEVC / ProRes + offline 8 codec）
 
 `codec_glitch`は、VideoToolbox hardware encoder/decoderとMetal互換
@@ -941,6 +958,26 @@ rebuilding the gallery:
 python3 scripts/import_gallery_curation.py --check
 python3 scripts/build_glitch_algorithm_gallery.py --build-site-only
 ```
+
+Every card shows its recipe key and offers **COPY RECIPE** and
+**DOWNLOAD RECIPE**. To apply a variant to a local video, pass the key or the
+recipe JSON:
+
+```bash
+python3 scripts/run_gallery_recipe.py input.mov output.mp4 --key 'original:vv01::saturation'
+pbpaste | python3 scripts/run_gallery_recipe.py input.mov output.mp4 --recipe -
+python3 scripts/run_gallery_recipe.py --list --family spatial
+```
+
+The script runs the same processors that rendered the gallery and applies the
+`wet_mix` blend with the source. Output defaults to 480×270 at 24 fps; change
+it with `--width`, `--height`, and `--fps`. Offline families stop at the gallery
+frame limit unless you raise it with `--max-frames`.
+
+A `.glic` file is one encoded still image, and the gallery videos do not use
+them. Use a recipe, not a `.glic` file, to apply a look to other footage. The
+GLIC family is sensitive to its input, so another video keeps the character of
+a variant without reproducing the same picture.
 
 ### Codec Glitch (H.264 / HEVC / ProRes + eight offline codecs)
 

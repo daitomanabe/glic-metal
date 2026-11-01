@@ -64,6 +64,51 @@ python3 scripts/import_gallery_curation.py \
 python3 scripts/import_gallery_curation.py --check
 ```
 
+## Run a recipe on your own video
+
+Every card shows its recipe key, such as `original:vv01::saturation`, and offers
+**レシピをコピー / COPY RECIPE** and **レシピを保存 / DOWNLOAD RECIPE**. The
+`glic-metal-gallery-recipe-v1` JSON records the key, algorithm, variant, exact
+parameters, and gallery revision.
+
+```bash
+python3 scripts/run_gallery_recipe.py input.mov output.mp4 --key 'original:vv01::saturation'
+pbpaste | python3 scripts/run_gallery_recipe.py input.mov output.mp4 --recipe -
+python3 scripts/run_gallery_recipe.py input.mov output.mp4 --recipe recipe.json \
+  --width 960 --height 540 --fps 30
+python3 scripts/run_gallery_recipe.py --list --family spatial
+```
+
+`scripts/run_gallery_recipe.py` builds the same processor command as the gallery
+and then applies the delivery `wet_mix` blend, which the processors do not
+perform themselves. The family, effect, and codec always come from
+`resources/glitch-gallery-presets.json`; a recipe contributes only its
+parameters and is rejected when its schema, variant, or parameter names do not
+match. `--print-command` shows the processor command without running it.
+
+- Output defaults to the gallery contract of 480×270 at 24 fps. The look depends
+  on resolution, so a larger size keeps the recipe but changes the result.
+- Offline families stop at the gallery frame limit unless `--max-frames` raises
+  it. AV2 and VVC keep their reduced reference frame rates.
+- Donor families derive their second video from the input with the gallery
+  filter unless `--donor` provides one.
+- Failed runs keep their temporary directory and print its path; `--work-dir`
+  keeps intermediates from every run.
+- The script needs the CMake `build/` tree, NumPy and OpenCV from
+  `requirements-qa.txt`, and the pinned `.cache/` tools for families that use
+  them.
+
+Prefer a recipe to a `.glic` file. A `.glic` file is one encoded still image, and
+the gallery videos do not pass through that container, so it cannot carry a look
+to other footage. Results are also sensitive to the input: re-encoding a source
+at near-lossless quality kept the character of `original:vv01::saturation` but
+moved its blocks entirely. Reproducing a card exactly requires the gallery's
+normalized source.
+
+For application integration, use the SDK preset names of the 28
+realtime-certified variants, such as `original__vv01`. See
+[`AI_INTEGRATION.md`](AI_INTEGRATION.md).
+
 ## Generate the preset catalog
 
 ```bash
