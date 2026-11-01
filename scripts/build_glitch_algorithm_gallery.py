@@ -40,6 +40,8 @@ HEIGHT = 270
 FPS = 24
 MAX_FRAMES = 120
 VARIANT_NAMES = ("structure", "rhythm", "saturation")
+RECIPE_SCHEMA = "glic-metal-gallery-recipe-v1"
+DONOR_FILTER = "hflip,hue=h=145:s=1.35,reverse"
 
 SPATIAL_EFFECTS = (
     "legacy_block",
@@ -564,7 +566,7 @@ def prepare_source(input_path: Path, output_root: Path, ffmpeg: str) -> tuple[Pa
             "-i",
             str(normalized),
             "-vf",
-            "hflip,hue=h=145:s=1.35,reverse",
+            DONOR_FILTER,
             "-af",
             "areverse",
             "-c:v",
@@ -642,6 +644,25 @@ def resolve_dependencies(catalog: dict[str, Any]) -> dict[str, str]:
     return dependencies
 
 
+def processing_fps(algorithm: dict[str, Any], fps: int = FPS) -> int:
+    # AVM v1.0.0 exposes only its non-realtime Good Quality profile. Sampling
+    # the complete five-second source at 2 fps keeps every gallery entry on the
+    # official AV2 encode/decode path without turning 15 previews into a
+    # multi-hour render. Delivery is normalized back to 24 fps below.
+    reference_fps = {"av2": 2, "vvc": 12}
+    uses_reference_rate = (
+        algorithm["family"] == "generation"
+        or (
+            algorithm["family"] == "codec_lab"
+            and algorithm["effect"] == "av2_optical_flow_wound"
+        )
+    )
+    codec = algorithm.get("codec")
+    if uses_reference_rate and codec in reference_fps:
+        return reference_fps[codec]
+    return fps
+
+
 def processor_command(
     task: RenderTask,
     source: Path,
@@ -650,6 +671,12 @@ def processor_command(
     report: Path,
     stage_dir: Path,
     dependencies: dict[str, str],
+    *,
+    width: int = WIDTH,
+    height: int = HEIGHT,
+    fps: int = FPS,
+    frame_limit: int | None = None,
+    processor_timeout: int | None = None,
 ) -> list[str]:
     algorithm = task.algorithm
     parameters = task.preset["parameters"]
@@ -657,27 +684,13 @@ def processor_command(
     effect = algorithm["effect"]
     codec = algorithm.get("codec")
     python = sys.executable
-    # AVM v1.0.0 exposes only its non-realtime Good Quality profile. Sampling
-    # the complete five-second source at 2 fps keeps every gallery entry on the
-    # official AV2 encode/decode path without turning 15 previews into a
-    # multi-hour render. Delivery is normalized back to 24 fps below.
-    reference_fps = {"av2": 2, "vvc": 12}
-    uses_reference_rate = (
-        family == "generation"
-        or (family == "codec_lab" and effect == "av2_optical_flow_wound")
-    )
-    processing_fps = (
-        reference_fps[codec]
-        if uses_reference_rate and codec in reference_fps
-        else FPS
-    )
     common_dimensions = [
         "--width",
-        str(WIDTH),
+        str(width),
         "--height",
-        str(HEIGHT),
+        str(height),
         "--fps",
-        str(processing_fps),
+        str(processing_fps(algorithm, fps)),
     ]
 
     if family in {"original", "spatial", "codec_realtime"}:
@@ -811,12 +824,12 @@ def processor_command(
         "transport",
         "metadata",
     }:
-        maximum_frames = (
+        maximum_frames = frame_limit or (
             10
             if family == "codec_lab" and effect == "av2_optical_flow_wound"
             else MAX_FRAMES
         )
-        processor_timeout = (
+        stage_timeout = processor_timeout or (
             1200
             if family == "codec_lab" and effect == "av2_optical_flow_wound"
             else 300
@@ -826,7 +839,7 @@ def processor_command(
                 "--max-frames",
                 str(maximum_frames),
                 "--timeout",
-                str(processor_timeout),
+                str(stage_timeout),
             ]
         )
     if family in {
@@ -865,7 +878,7 @@ def processor_command(
             ]
         )
         if codec in {"av1", "av2", "vp9", "vvc", "theora", "dirac"}:
-            maximum_frames = (
+            maximum_frames = frame_limit or (
                 10
                 if codec == "av2"
                 else 60
@@ -900,6 +913,34 @@ def probe_video(path: Path, ffprobe: str) -> dict[str, Any]:
     return json.loads(completed.stdout)
 
 
+def wet_mix_filter(
+    wet_mix: float,
+    *,
+    width: int = WIDTH,
+    height: int = HEIGHT,
+    fps: int = FPS,
+    hold_seconds: int | None = None,
+) -> str:
+    wet = clamp(float(wet_mix))
+    dry = round(1.0 - wet, 3)
+    hold = (
+        ""
+        if hold_seconds is None
+        else f"tpad=stop_mode=clone:stop_duration={hold_seconds},"
+        f"trim=duration={hold_seconds},"
+    )
+    normalize = (
+        f"scale={width}:{height}:flags=lanczos,fps={fps},{hold}"
+        "setpts=PTS-STARTPTS"
+    )
+    return (
+        f"[0:v]{normalize}[src];"
+        f"[1:v]{normalize}[effect];"
+        f"[src][effect]blend=all_expr='A*{dry}+B*{wet}':shortest=1,"
+        "format=yuv420p[out]"
+    )
+
+
 def web_transcode(
     source: Path,
     raw: Path,
@@ -911,18 +952,7 @@ def web_transcode(
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.stem + ".tmp.mp4")
     temporary.unlink(missing_ok=True)
-    wet = clamp(float(wet_mix))
-    dry = round(1.0 - wet, 3)
-    filters = (
-        f"[0:v]scale={WIDTH}:{HEIGHT}:flags=lanczos,fps={FPS},"
-        "tpad=stop_mode=clone:stop_duration=5,trim=duration=5,"
-        "setpts=PTS-STARTPTS[src];"
-        f"[1:v]scale={WIDTH}:{HEIGHT}:flags=lanczos,fps={FPS},"
-        "tpad=stop_mode=clone:stop_duration=5,trim=duration=5,"
-        "setpts=PTS-STARTPTS[effect];"
-        f"[src][effect]blend=all_expr='A*{dry}+B*{wet}':shortest=1,"
-        "format=yuv420p[out]"
-    )
+    filters = wet_mix_filter(wet_mix, hold_seconds=5)
     run_command(
         [
             ffmpeg,

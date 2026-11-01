@@ -502,6 +502,10 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}"
                 "${PROJECT_SOURCE_DIR}/tests/test_gallery_curation.py")
     add_test(
+        NAME glic_gallery_recipe
+        COMMAND "${Python3_EXECUTABLE}"
+                "${PROJECT_SOURCE_DIR}/tests/test_gallery_recipe.py")
+    add_test(
         NAME glic_workspace_handoff
         COMMAND "${Python3_EXECUTABLE}"
                 "${PROJECT_SOURCE_DIR}/tests/test_workspace_handoff.py")
