@@ -139,6 +139,12 @@ def main() -> int:
         assert "window.__GLIC_CURATED_DECISIONS" in page
         assert 'id="copy-adopted"' in page
         assert 'id="download-all"' in page
+        assert page.count('class="review-button" data-recipe-action="copy"') == 3
+        assert (
+            page.count('class="review-button" data-recipe-action="download"')
+            == 3
+        )
+        assert f'schema: "{gallery.RECIPE_SCHEMA}"' in page
         assert 'id="review-filter"' in page
         assert '<option value="adopt" selected' in page
         assert "glic-metal-gallery-review-v2" in page

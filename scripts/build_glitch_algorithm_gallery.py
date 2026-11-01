@@ -1603,6 +1603,12 @@ def render_site(
         "variant-diversity": "VARIANT DIVERSITY",
         "parameters": "PARAMETERS",
         "qa": "TECHNICAL QA",
+        "recipe-key": "RECIPE KEY",
+        "recipe-copy": "COPY RECIPE",
+        "recipe-download": "DOWNLOAD RECIPE",
+        "recipe-copied": "COPIED",
+        "recipe-saved": "SAVED",
+        "recipe-copy-failed": "COPY FAILED",
         "source-note": (
             "Source: one 5-second 1920×1080 H.264 clip. Gallery delivery: "
             "480×270, 24 fps, H.264 yuv420p, muted, WebP poster."
@@ -1696,7 +1702,13 @@ def render_site(
                       <dd>{html.escape(format_parameters(variant["parameters"]))}</dd>
                       <dt data-i18n="qa">TECHNICAL QA</dt>
                       <dd>{html.escape(qa_text)}</dd>
+                      <dt data-i18n="recipe-key">RECIPE KEY</dt>
+                      <dd>{html.escape(review_key)}</dd>
                     </dl>
+                    <div class="recipe-actions" role="group" aria-label="Recipe {html.escape(algorithm["display_name"])} {html.escape(variant["label_en"])}">
+                      <button type="button" class="review-button" data-recipe-action="copy" data-i18n="recipe-copy">レシピをコピー</button>
+                      <button type="button" class="review-button" data-recipe-action="download" data-i18n="recipe-download">レシピを保存</button>
+                    </div>
                     <div class="review-controls" role="group" aria-label="Review {html.escape(algorithm["display_name"])} {html.escape(variant["label_en"])}">
                       <button type="button" class="review-button adopt" data-decision="adopt" aria-pressed="false" data-i18n="review-adopt">採用</button>
                       <button type="button" class="review-button reject" data-decision="reject" aria-pressed="false" data-i18n="review-reject">不採用</button>
@@ -1822,7 +1834,8 @@ def render_site(
     .variant-head{{display:flex;align-items:start;justify-content:space-between;gap:8px}} .variant h3{{font-size:11px;line-height:1.3;margin:0;letter-spacing:.08em}}
     .variant p{{min-height:44px;font:12px/1.5 Helvetica,Arial,sans-serif;color:#aaa}} .status-pass{{color:var(--ok)}} .status-warn{{color:var(--warn)}} .status-fail{{color:#ff6b6b}}
     dl{{margin:18px 0 0;border-top:1px solid var(--line);padding-top:12px}} dt{{font-size:8px;color:#666;margin-top:9px}} dd{{font-size:9px;color:#aaa;margin:4px 0;overflow-wrap:anywhere;line-height:1.5}}
-    .review-controls{{display:grid;grid-template-columns:1fr 1fr auto;gap:5px;margin-top:17px}} .review-button.adopt[aria-pressed="true"]{{background:#1a4a25;border-color:#78d689;color:#dfffe4}} .review-button.reject[aria-pressed="true"]{{background:#55231e;border-color:#e36d5d;color:#ffe1dc}} .review-button.clear{{padding-inline:10px}}
+    .recipe-actions{{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:17px}}
+    .review-controls{{display:grid;grid-template-columns:1fr 1fr auto;gap:5px;margin-top:5px}} .review-button.adopt[aria-pressed="true"]{{background:#1a4a25;border-color:#78d689;color:#dfffe4}} .review-button.reject[aria-pressed="true"]{{background:#55231e;border-color:#e36d5d;color:#ffe1dc}} .review-button.clear{{padding-inline:10px}}
     .foot{{border-top:1px solid var(--line);padding-top:24px;color:#777;font-size:10px;line-height:1.6}}
     @media(max-width:1100px){{.review-panel{{grid-template-columns:1fr auto}}.review-actions{{grid-column:1/-1;justify-content:flex-start}}#review-message{{text-align:left}}}}
     @media(max-width:900px){{.variants{{grid-template-columns:1fr}}.toolbar{{grid-template-columns:1fr}}.review-panel{{position:static;grid-template-columns:1fr}}.review-actions{{grid-column:auto}}.algorithm-head{{align-items:start;flex-direction:column}}.algorithm-tools{{align-items:flex-start}}.badges,.bulk-review{{justify-content:start}}}}
@@ -1994,17 +2007,63 @@ def render_site(
         setMessage('コピーできませんでした。ダウンロードを使用してください。');
       }}
     }};
-    const downloadJSON = scope => {{
-      const blob = new Blob([JSON.stringify(exportData(scope), null, 2) + '\\n'], {{type:'application/json'}});
+    const saveJSON = (data, filename) => {{
+      const blob = new Blob([JSON.stringify(data, null, 2) + '\\n'], {{type:'application/json'}});
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = scope === 'adopted' ? 'glic-metal-adopted-presets.json' : 'glic-metal-gallery-review.json';
+      link.download = filename;
       document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-      setMessage(`${{link.download}} を保存しました。`);
+    }};
+    const downloadJSON = scope => {{
+      const filename = scope === 'adopted' ? 'glic-metal-adopted-presets.json' : 'glic-metal-gallery-review.json';
+      saveJSON(exportData(scope), filename);
+      setMessage(`${{filename}} を保存しました。`);
+    }};
+    const reviewItemsByKey = new Map(reviewItems.map(item => [item.key, item]));
+    const recipeFor = key => {{
+      const item = reviewItemsByKey.get(key);
+      return {{
+        schema: {json.dumps(RECIPE_SCHEMA)},
+        key: item.key,
+        algorithm_id: item.algorithm_id,
+        variant_id: item.variant_id,
+        family: item.family,
+        effect: item.effect,
+        codec: item.codec,
+        implementation_level: item.implementation_level,
+        realtime_certified: item.realtime_certified,
+        parameters: item.parameters,
+        gallery_revision: window.__GLIC_GALLERY_REVISION,
+      }};
+    }};
+    const flashButton = (button, textJa, i18nKey) => {{
+      const label = button.textContent;
+      const labelKey = button.dataset.i18n;
+      // i18n.js reapplies data-i18n on every DOM change, which would undo this text.
+      delete button.dataset.i18n;
+      button.textContent = document.documentElement.lang === 'en' ? window.__I18N[i18nKey] : textJa;
+      button.disabled = true;
+      setTimeout(() => {{
+        button.dataset.i18n = labelKey;
+        button.textContent = label;
+        button.disabled = false;
+      }}, 1400);
+    }};
+    const copyRecipe = async (key, button) => {{
+      try {{
+        await navigator.clipboard.writeText(JSON.stringify(recipeFor(key), null, 2));
+        flashButton(button, 'コピーしました', 'recipe-copied');
+      }} catch (_) {{
+        flashButton(button, 'コピーできませんでした', 'recipe-copy-failed');
+      }}
+    }};
+    const downloadRecipe = (key, button) => {{
+      saveJSON(recipeFor(key), `glic-recipe-${{key.replace(/[^a-z0-9]+/gi, '-')}}.json`);
+      flashButton(button, '保存しました', 'recipe-saved');
     }};
     filter.addEventListener('change', apply);
     search.addEventListener('input', apply);
@@ -2013,6 +2072,8 @@ def render_site(
       variant.querySelectorAll('[data-decision]').forEach(button => {{
         button.addEventListener('click', () => setDecision(variant.dataset.reviewKey, button.dataset.decision));
       }});
+      variant.querySelector('[data-recipe-action="copy"]').addEventListener('click', event => copyRecipe(variant.dataset.reviewKey, event.currentTarget));
+      variant.querySelector('[data-recipe-action="download"]').addEventListener('click', event => downloadRecipe(variant.dataset.reviewKey, event.currentTarget));
     }});
     document.querySelectorAll('[data-bulk-decision]').forEach(button => {{
       button.addEventListener('click', () => {{
